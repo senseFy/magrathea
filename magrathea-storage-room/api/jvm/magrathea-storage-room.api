@@ -1,0 +1,51 @@
+public final class saien/magrathea/storage/room/JvmMagratheaRoom {
+	public static final field INSTANCE Lsaien/magrathea/storage/room/JvmMagratheaRoom;
+	public final fun open (Ljava/lang/String;Lsaien/magrathea/storage/room/StoredRecordCorruptionReporter;)Lsaien/magrathea/storage/room/MagratheaRoomStoreHandle;
+}
+
+public final class saien/magrathea/storage/room/MagratheaRoomStoreHandle {
+	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getCheckpointStore ()Lsaien/magrathea/core/CheckpointStore;
+	public final fun getSessionStore ()Lsaien/magrathea/core/SessionStore;
+}
+
+public final class saien/magrathea/storage/room/StoredRecordCorruption {
+	public fun <init> (Lsaien/magrathea/storage/room/StoredRecordKind;Ljava/lang/String;Lsaien/magrathea/storage/room/StoredRecordCorruptionReason;)V
+	public final fun component1 ()Lsaien/magrathea/storage/room/StoredRecordKind;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Lsaien/magrathea/storage/room/StoredRecordCorruptionReason;
+	public final fun copy (Lsaien/magrathea/storage/room/StoredRecordKind;Ljava/lang/String;Lsaien/magrathea/storage/room/StoredRecordCorruptionReason;)Lsaien/magrathea/storage/room/StoredRecordCorruption;
+	public static synthetic fun copy$default (Lsaien/magrathea/storage/room/StoredRecordCorruption;Lsaien/magrathea/storage/room/StoredRecordKind;Ljava/lang/String;Lsaien/magrathea/storage/room/StoredRecordCorruptionReason;ILjava/lang/Object;)Lsaien/magrathea/storage/room/StoredRecordCorruption;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getKind ()Lsaien/magrathea/storage/room/StoredRecordKind;
+	public final fun getReason ()Lsaien/magrathea/storage/room/StoredRecordCorruptionReason;
+	public final fun getSessionId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/storage/room/StoredRecordCorruptionException : java/lang/IllegalStateException {
+	public fun <init> (Lsaien/magrathea/storage/room/StoredRecordCorruption;)V
+	public final fun getCorruption ()Lsaien/magrathea/storage/room/StoredRecordCorruption;
+}
+
+public final class saien/magrathea/storage/room/StoredRecordCorruptionReason : java/lang/Enum {
+	public static final field INDEX_MISMATCH Lsaien/magrathea/storage/room/StoredRecordCorruptionReason;
+	public static final field INVALID_PAYLOAD Lsaien/magrathea/storage/room/StoredRecordCorruptionReason;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/storage/room/StoredRecordCorruptionReason;
+	public static fun values ()[Lsaien/magrathea/storage/room/StoredRecordCorruptionReason;
+}
+
+public abstract interface class saien/magrathea/storage/room/StoredRecordCorruptionReporter {
+	public abstract fun report (Lsaien/magrathea/storage/room/StoredRecordCorruption;)V
+}
+
+public final class saien/magrathea/storage/room/StoredRecordKind : java/lang/Enum {
+	public static final field CHECKPOINT Lsaien/magrathea/storage/room/StoredRecordKind;
+	public static final field SESSION Lsaien/magrathea/storage/room/StoredRecordKind;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/storage/room/StoredRecordKind;
+	public static fun values ()[Lsaien/magrathea/storage/room/StoredRecordKind;
+}
+

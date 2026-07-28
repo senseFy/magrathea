@@ -1,0 +1,37 @@
+[
+  {"type": "text_start", "signature": "text-sig"},
+  {"type": "text_delta", "delta": "hello", "signature": "text-sig"},
+  {"type": "text_end", "text": "hello", "signature": "text-sig"},
+  {"type": "reasoning_start", "signature": "reason-sig", "redacted": true},
+  {"type": "reasoning_delta", "delta": "inspect", "signature": "reason-sig"},
+  {"type": "reasoning_end", "text": "inspect", "signature": "reason-sig", "redacted": true},
+  {
+    "type": "tool_call_start",
+    "toolCall": {
+      "toolCallId": "call-1",
+      "toolName": "search",
+      "arguments": {"query": "kmp"},
+      "partial": true,
+      "thoughtSignature": "thought-sig",
+      "providerCallId": "provider-call-1"
+    }
+  },
+  {"type": "tool_call_delta", "toolCallId": "call-1", "delta": "{\"query\":\"kmp\"}"},
+  {
+    "type": "tool_call_end",
+    "toolCall": {
+      "toolCallId": "call-1",
+      "toolName": "search",
+      "arguments": {"query": "kmp"},
+      "thoughtSignature": "thought-sig",
+      "providerCallId": "provider-call-1"
+    }
+  },
+  {"type": "usage_delta", "usage": {"inputTokens": 5, "outputTokens": 3, "reasoningTokens": 1}},
+  {
+    "type": "completed",
+    "finishReason": "STOP",
+    "stopReason": "TOOL_CALLS",
+    "usage": {"inputTokens": 5, "outputTokens": 3, "reasoningTokens": 1}
+  }
+]

@@ -1,0 +1,31 @@
+{
+  "name": "@saien/magrathea-web-client",
+  "version": "${version}",
+  "description": "Gateway-only Magrathea chatbot client for browsers",
+  "keywords": [
+    "agent",
+    "chatbot",
+    "kotlin",
+    "multiplatform"
+  ],
+  "homepage": "https://github.com/senseFy/magrathea#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/senseFy/magrathea.git",
+    "directory": "magrathea-web-client"
+  },
+  "bugs": {
+    "url": "https://github.com/senseFy/magrathea/issues"
+  },
+  "main": "magrathea-web-client.js",
+  "browser": "magrathea-web-client.js",
+  "types": "magrathea-web-client.d.ts",
+  "license": "MIT",
+  "files": [
+    "*.js",
+    "*.js.map",
+    "*.d.ts",
+    "LICENSE",
+    "README.md"
+  ]
+}

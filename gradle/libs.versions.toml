@@ -1,0 +1,45 @@
+[versions]
+agp = "9.1.1"
+kotlin = "2.4.0"
+dokka = "2.2.0"
+ktor = "3.5.1"
+junit = "4.13.2"
+kotlinxCoroutines = "1.11.0"
+kotlinxCoroutinesTest = "1.11.0"
+kotlinxSerializationJson = "1.11.0"
+mcpKotlinSdk = "0.14.0"
+okhttp = "4.12.0"
+room = "2.8.4"
+sqlite = "2.7.0"
+
+[libraries]
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinxCoroutinesTest" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
+mcp-kotlin-sdk-client = { module = "io.modelcontextprotocol:kotlin-sdk-client", version.ref = "mcpKotlinSdk" }
+mcp-kotlin-sdk-server = { module = "io.modelcontextprotocol:kotlin-sdk-server", version.ref = "mcpKotlinSdk" }
+mcp-kotlin-sdk-testing = { module = "io.modelcontextprotocol:kotlin-sdk-testing", version.ref = "mcpKotlinSdk" }
+ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
+ktor-client-js = { module = "io.ktor:ktor-client-js", version.ref = "ktor" }
+ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
+ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
+ktor-server-core = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
+ktor-server-netty = { module = "io.ktor:ktor-server-netty", version.ref = "ktor" }
+ktor-server-test-host = { module = "io.ktor:ktor-server-test-host", version.ref = "ktor" }
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
+androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
+androidx-sqlite-bundled = { module = "androidx.sqlite:sqlite-bundled", version.ref = "sqlite" }
+
+[plugins]
+cyclonedxBom = { id = "org.cyclonedx.bom", version = "3.2.4" }
+binaryCompatibilityValidator = { id = "org.jetbrains.kotlinx.binary-compatibility-validator", version = "0.18.1" }
+dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }
+kotlinJvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+jetbrainsKotlinSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version = "2.3.9" }
+kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+androidKotlinMultiplatformLibrary = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
+androidxRoom = { id = "androidx.room", version.ref = "room" }

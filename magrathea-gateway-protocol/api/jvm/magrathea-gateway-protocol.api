@@ -1,0 +1,845 @@
+public final class saien/magrathea/gateway/protocol/GatewayAttachmentReference {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayAttachmentReference$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()J
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;)Lsaien/magrathea/gateway/protocol/GatewayAttachmentReference;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayAttachmentReference;Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayAttachmentReference;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getId ()Ljava/lang/String;
+	public final fun getMediaType ()Ljava/lang/String;
+	public final fun getSha256 ()Ljava/lang/String;
+	public final fun getSizeBytes ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayAttachmentReference$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayAttachmentReference$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayAttachmentReference;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayAttachmentReference;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayAttachmentReference$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayCreateStreamRequest {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayCreateStreamRequest$Companion;
+	public fun <init> (ILjava/lang/String;Ljava/lang/String;ILsaien/magrathea/gateway/protocol/GatewayModelReference;Ljava/util/List;Ljava/util/List;Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;Ljava/util/List;)V
+	public synthetic fun <init> (ILjava/lang/String;Ljava/lang/String;ILsaien/magrathea/gateway/protocol/GatewayModelReference;Ljava/util/List;Ljava/util/List;Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()I
+	public final fun component5 ()Lsaien/magrathea/gateway/protocol/GatewayModelReference;
+	public final fun component6 ()Ljava/util/List;
+	public final fun component7 ()Ljava/util/List;
+	public final fun component8 ()Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;
+	public final fun component9 ()Ljava/util/List;
+	public final fun copy (ILjava/lang/String;Ljava/lang/String;ILsaien/magrathea/gateway/protocol/GatewayModelReference;Ljava/util/List;Ljava/util/List;Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;Ljava/util/List;)Lsaien/magrathea/gateway/protocol/GatewayCreateStreamRequest;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayCreateStreamRequest;ILjava/lang/String;Ljava/lang/String;ILsaien/magrathea/gateway/protocol/GatewayModelReference;Ljava/util/List;Ljava/util/List;Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;Ljava/util/List;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayCreateStreamRequest;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttachments ()Ljava/util/List;
+	public final fun getMessages ()Ljava/util/List;
+	public final fun getModel ()Lsaien/magrathea/gateway/protocol/GatewayModelReference;
+	public final fun getOptions ()Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;
+	public final fun getProtocolVersion ()I
+	public final fun getRequestId ()Ljava/lang/String;
+	public final fun getSessionId ()Ljava/lang/String;
+	public final fun getTools ()Ljava/util/List;
+	public final fun getTurn ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+	public final fun validate (Lsaien/magrathea/gateway/protocol/GatewayProtocolLimits;)V
+	public static synthetic fun validate$default (Lsaien/magrathea/gateway/protocol/GatewayCreateStreamRequest;Lsaien/magrathea/gateway/protocol/GatewayProtocolLimits;ILjava/lang/Object;)V
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayCreateStreamRequest$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayCreateStreamRequest$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayCreateStreamRequest;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayCreateStreamRequest;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayCreateStreamRequest$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class saien/magrathea/gateway/protocol/GatewayEvent {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayEvent$Companion;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$Cancelled : saien/magrathea/gateway/protocol/GatewayEvent {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayEvent$Cancelled$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lsaien/magrathea/gateway/protocol/GatewayEvent$Cancelled;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayEvent$Cancelled;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayEvent$Cancelled;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayEvent$Cancelled$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayEvent$Cancelled$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayEvent$Cancelled;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayEvent$Cancelled;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$Cancelled$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$Completed : saien/magrathea/gateway/protocol/GatewayEvent {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayEvent$Completed$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Lsaien/magrathea/core/StopReason;Lsaien/magrathea/gateway/protocol/GatewayUsage;Lkotlinx/serialization/json/JsonObject;)V
+	public synthetic fun <init> (Ljava/lang/String;Lsaien/magrathea/core/StopReason;Lsaien/magrathea/gateway/protocol/GatewayUsage;Lkotlinx/serialization/json/JsonObject;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Lsaien/magrathea/core/StopReason;
+	public final fun component3 ()Lsaien/magrathea/gateway/protocol/GatewayUsage;
+	public final fun component4 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Ljava/lang/String;Lsaien/magrathea/core/StopReason;Lsaien/magrathea/gateway/protocol/GatewayUsage;Lkotlinx/serialization/json/JsonObject;)Lsaien/magrathea/gateway/protocol/GatewayEvent$Completed;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayEvent$Completed;Ljava/lang/String;Lsaien/magrathea/core/StopReason;Lsaien/magrathea/gateway/protocol/GatewayUsage;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayEvent$Completed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFinishReason ()Ljava/lang/String;
+	public final fun getProviderMetadata ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getStopReason ()Lsaien/magrathea/core/StopReason;
+	public final fun getUsage ()Lsaien/magrathea/gateway/protocol/GatewayUsage;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayEvent$Completed$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayEvent$Completed$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayEvent$Completed;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayEvent$Completed;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$Completed$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$Failed : saien/magrathea/gateway/protocol/GatewayEvent {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayEvent$Failed$Companion;
+	public fun <init> (Lsaien/magrathea/gateway/protocol/GatewayFailureCode;ZLjava/lang/Long;)V
+	public synthetic fun <init> (Lsaien/magrathea/gateway/protocol/GatewayFailureCode;ZLjava/lang/Long;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
+	public final fun component2 ()Z
+	public final fun component3 ()Ljava/lang/Long;
+	public final fun copy (Lsaien/magrathea/gateway/protocol/GatewayFailureCode;ZLjava/lang/Long;)Lsaien/magrathea/gateway/protocol/GatewayEvent$Failed;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayEvent$Failed;Lsaien/magrathea/gateway/protocol/GatewayFailureCode;ZLjava/lang/Long;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayEvent$Failed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCode ()Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
+	public final fun getRetryAfterMillis ()Ljava/lang/Long;
+	public final fun getRetryable ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayEvent$Failed$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayEvent$Failed$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayEvent$Failed;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayEvent$Failed;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$Failed$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$ReasoningDelta : saien/magrathea/gateway/protocol/GatewayEvent {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningDelta$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningDelta;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningDelta;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningDelta;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDelta ()Ljava/lang/String;
+	public final fun getSignature ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayEvent$ReasoningDelta$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningDelta$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningDelta;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningDelta;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$ReasoningDelta$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$ReasoningEnd : saien/magrathea/gateway/protocol/GatewayEvent {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningEnd$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Z)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Z
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Z)Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningEnd;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningEnd;Ljava/lang/String;Ljava/lang/String;ZILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningEnd;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRedacted ()Z
+	public final fun getSignature ()Ljava/lang/String;
+	public final fun getText ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayEvent$ReasoningEnd$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningEnd$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningEnd;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningEnd;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$ReasoningEnd$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$ReasoningStart : saien/magrathea/gateway/protocol/GatewayEvent {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningStart$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Z)V
+	public synthetic fun <init> (Ljava/lang/String;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Z
+	public final fun copy (Ljava/lang/String;Z)Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningStart;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningStart;Ljava/lang/String;ZILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningStart;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRedacted ()Z
+	public final fun getSignature ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayEvent$ReasoningStart$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningStart$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningStart;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayEvent$ReasoningStart;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$ReasoningStart$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$StreamOpened : saien/magrathea/gateway/protocol/GatewayEvent {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayEvent$StreamOpened$Companion;
+	public fun <init> ()V
+	public fun <init> (J)V
+	public synthetic fun <init> (JILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun copy (J)Lsaien/magrathea/gateway/protocol/GatewayEvent$StreamOpened;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayEvent$StreamOpened;JILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayEvent$StreamOpened;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReplayFromSequence ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayEvent$StreamOpened$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayEvent$StreamOpened$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayEvent$StreamOpened;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayEvent$StreamOpened;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$StreamOpened$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$TextDelta : saien/magrathea/gateway/protocol/GatewayEvent {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayEvent$TextDelta$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/gateway/protocol/GatewayEvent$TextDelta;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayEvent$TextDelta;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayEvent$TextDelta;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDelta ()Ljava/lang/String;
+	public final fun getSignature ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayEvent$TextDelta$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayEvent$TextDelta$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayEvent$TextDelta;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayEvent$TextDelta;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$TextDelta$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$TextEnd : saien/magrathea/gateway/protocol/GatewayEvent {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayEvent$TextEnd$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/gateway/protocol/GatewayEvent$TextEnd;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayEvent$TextEnd;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayEvent$TextEnd;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSignature ()Ljava/lang/String;
+	public final fun getText ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayEvent$TextEnd$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayEvent$TextEnd$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayEvent$TextEnd;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayEvent$TextEnd;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$TextEnd$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$TextStart : saien/magrathea/gateway/protocol/GatewayEvent {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayEvent$TextStart$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lsaien/magrathea/gateway/protocol/GatewayEvent$TextStart;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayEvent$TextStart;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayEvent$TextStart;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSignature ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayEvent$TextStart$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayEvent$TextStart$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayEvent$TextStart;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayEvent$TextStart;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$TextStart$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$ToolCallDelta : saien/magrathea/gateway/protocol/GatewayEvent {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallDelta$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallDelta;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallDelta;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallDelta;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDelta ()Ljava/lang/String;
+	public final fun getToolCallId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayEvent$ToolCallDelta$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallDelta$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallDelta;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallDelta;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$ToolCallDelta$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$ToolCallEnd : saien/magrathea/gateway/protocol/GatewayEvent {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallEnd$Companion;
+	public fun <init> (Lsaien/magrathea/gateway/protocol/GatewayToolCall;)V
+	public final fun component1 ()Lsaien/magrathea/gateway/protocol/GatewayToolCall;
+	public final fun copy (Lsaien/magrathea/gateway/protocol/GatewayToolCall;)Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallEnd;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallEnd;Lsaien/magrathea/gateway/protocol/GatewayToolCall;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallEnd;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getToolCall ()Lsaien/magrathea/gateway/protocol/GatewayToolCall;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayEvent$ToolCallEnd$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallEnd$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallEnd;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallEnd;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$ToolCallEnd$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$ToolCallStart : saien/magrathea/gateway/protocol/GatewayEvent {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallStart$Companion;
+	public fun <init> (Lsaien/magrathea/gateway/protocol/GatewayToolCall;)V
+	public final fun component1 ()Lsaien/magrathea/gateway/protocol/GatewayToolCall;
+	public final fun copy (Lsaien/magrathea/gateway/protocol/GatewayToolCall;)Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallStart;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallStart;Lsaien/magrathea/gateway/protocol/GatewayToolCall;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallStart;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getToolCall ()Lsaien/magrathea/gateway/protocol/GatewayToolCall;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayEvent$ToolCallStart$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallStart$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallStart;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayEvent$ToolCallStart;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$ToolCallStart$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$UsageDelta : saien/magrathea/gateway/protocol/GatewayEvent {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayEvent$UsageDelta$Companion;
+	public fun <init> (Lsaien/magrathea/gateway/protocol/GatewayUsage;)V
+	public final fun component1 ()Lsaien/magrathea/gateway/protocol/GatewayUsage;
+	public final fun copy (Lsaien/magrathea/gateway/protocol/GatewayUsage;)Lsaien/magrathea/gateway/protocol/GatewayEvent$UsageDelta;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayEvent$UsageDelta;Lsaien/magrathea/gateway/protocol/GatewayUsage;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayEvent$UsageDelta;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getUsage ()Lsaien/magrathea/gateway/protocol/GatewayUsage;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayEvent$UsageDelta$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayEvent$UsageDelta$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayEvent$UsageDelta;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayEvent$UsageDelta;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayEvent$UsageDelta$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayFailureCode : java/lang/Enum {
+	public static final field CONTEXT_LIMIT Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayFailureCode$Companion;
+	public static final field INTERNAL_FAILURE Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
+	public static final field PROTOCOL_FAILURE Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
+	public static final field QUOTA_EXCEEDED Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
+	public static final field REPLAY_WINDOW_EXHAUSTED Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
+	public static final field UPSTREAM_FAILURE Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
+	public static fun values ()[Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayFailureCode$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayGenerationOptions {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/Double;Ljava/lang/Integer;)V
+	public synthetic fun <init> (Ljava/lang/Double;Ljava/lang/Integer;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/Double;
+	public final fun component2 ()Ljava/lang/Integer;
+	public final fun copy (Ljava/lang/Double;Ljava/lang/Integer;)Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;Ljava/lang/Double;Ljava/lang/Integer;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMaxTokens ()Ljava/lang/Integer;
+	public final fun getTemperature ()Ljava/lang/Double;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+	public final fun validate ()V
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayGenerationOptions$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayGenerationOptions$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayModelReference {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayModelReference$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/gateway/protocol/GatewayModelReference;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayModelReference;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayModelReference;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getModel ()Ljava/lang/String;
+	public final fun getProvider ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+	public final fun validate (Lsaien/magrathea/gateway/protocol/GatewayProtocolLimits;)V
+	public static synthetic fun validate$default (Lsaien/magrathea/gateway/protocol/GatewayModelReference;Lsaien/magrathea/gateway/protocol/GatewayProtocolLimits;ILjava/lang/Object;)V
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayModelReference$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayModelReference$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayModelReference;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayModelReference;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayModelReference$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayProblem {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayProblem$Companion;
+	public fun <init> (ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Long;)V
+	public synthetic fun <init> (ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Long;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/Long;
+	public final fun copy (ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Long;)Lsaien/magrathea/gateway/protocol/GatewayProblem;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayProblem;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Long;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayProblem;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCode ()Ljava/lang/String;
+	public final fun getMessage ()Ljava/lang/String;
+	public final fun getProtocolVersion ()I
+	public final fun getRequestId ()Ljava/lang/String;
+	public final fun getRetryAfterMillis ()Ljava/lang/Long;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayProblem$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayProblem$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayProblem;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayProblem;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayProblem$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayProtocolCodec {
+	public fun <init> ()V
+	public fun <init> (Lkotlinx/serialization/json/Json;Lsaien/magrathea/gateway/protocol/GatewayProtocolLimits;)V
+	public synthetic fun <init> (Lkotlinx/serialization/json/Json;Lsaien/magrathea/gateway/protocol/GatewayProtocolLimits;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun decodeCreateRequest (Ljava/lang/String;)Lsaien/magrathea/gateway/protocol/GatewayCreateStreamRequest;
+	public final fun decodeDescriptor (Ljava/lang/String;)Lsaien/magrathea/gateway/protocol/GatewayStreamDescriptor;
+	public final fun decodeEnvelope (Ljava/lang/String;)Lsaien/magrathea/gateway/protocol/GatewayStreamEnvelope;
+	public final fun decodeProblem (Ljava/lang/String;)Lsaien/magrathea/gateway/protocol/GatewayProblem;
+	public final fun encodeCreateRequest (Lsaien/magrathea/gateway/protocol/GatewayCreateStreamRequest;)Ljava/lang/String;
+	public final fun encodeDescriptor (Lsaien/magrathea/gateway/protocol/GatewayStreamDescriptor;)Ljava/lang/String;
+	public final fun encodeEnvelope (Lsaien/magrathea/gateway/protocol/GatewayStreamEnvelope;)Ljava/lang/String;
+	public final fun encodeProblem (Lsaien/magrathea/gateway/protocol/GatewayProblem;)Ljava/lang/String;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayProtocolException : java/lang/IllegalArgumentException {
+	public fun <init> (Ljava/lang/String;Ljava/lang/Throwable;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayProtocolKt {
+	public static final field GATEWAY_ATTACHMENT_URI_PREFIX Ljava/lang/String;
+	public static final field GATEWAY_CSRF_HEADER Ljava/lang/String;
+	public static final field GATEWAY_IDEMPOTENCY_HEADER Ljava/lang/String;
+	public static final field GATEWAY_PROTOCOL_VERSION I
+	public static final field GATEWAY_SSE_EVENT Ljava/lang/String;
+	public static final field GATEWAY_VERSION_HEADER Ljava/lang/String;
+	public static final fun toGatewayEvent (Lsaien/magrathea/provider/api/ProviderEvent;)Lsaien/magrathea/gateway/protocol/GatewayEvent;
+	public static final fun toProviderEventOrNull (Lsaien/magrathea/gateway/protocol/GatewayEvent;)Lsaien/magrathea/provider/api/ProviderEvent;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayProtocolLimits {
+	public fun <init> ()V
+	public fun <init> (IIIIIIJIIIII)V
+	public synthetic fun <init> (IIIIIIJIIIIIILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component10 ()I
+	public final fun component11 ()I
+	public final fun component12 ()I
+	public final fun component2 ()I
+	public final fun component3 ()I
+	public final fun component4 ()I
+	public final fun component5 ()I
+	public final fun component6 ()I
+	public final fun component7 ()J
+	public final fun component8 ()I
+	public final fun component9 ()I
+	public final fun copy (IIIIIIJIIIII)Lsaien/magrathea/gateway/protocol/GatewayProtocolLimits;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayProtocolLimits;IIIIIIJIIIIIILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayProtocolLimits;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMaxAttachmentBytes ()J
+	public final fun getMaxAttachments ()I
+	public final fun getMaxDescriptionChars ()I
+	public final fun getMaxFailureMessageChars ()I
+	public final fun getMaxIdChars ()I
+	public final fun getMaxJsonChars ()I
+	public final fun getMaxMessages ()I
+	public final fun getMaxModelChars ()I
+	public final fun getMaxRequestIdChars ()I
+	public final fun getMaxRequestTextChars ()I
+	public final fun getMaxSignatureChars ()I
+	public final fun getMaxTools ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayStreamDescriptor {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayStreamDescriptor$Companion;
+	public fun <init> (ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;J)V
+	public synthetic fun <init> (ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()J
+	public final fun copy (ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;J)Lsaien/magrathea/gateway/protocol/GatewayStreamDescriptor;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayStreamDescriptor;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;JILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayStreamDescriptor;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getExpiresAtEpochMs ()J
+	public final fun getProtocolVersion ()I
+	public final fun getRequestId ()Ljava/lang/String;
+	public final fun getSessionId ()Ljava/lang/String;
+	public final fun getStreamId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+	public final fun validate (Lsaien/magrathea/gateway/protocol/GatewayProtocolLimits;)V
+	public static synthetic fun validate$default (Lsaien/magrathea/gateway/protocol/GatewayStreamDescriptor;Lsaien/magrathea/gateway/protocol/GatewayProtocolLimits;ILjava/lang/Object;)V
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayStreamDescriptor$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayStreamDescriptor$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayStreamDescriptor;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayStreamDescriptor;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayStreamDescriptor$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayStreamEnvelope {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayStreamEnvelope$Companion;
+	public fun <init> (ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;JLsaien/magrathea/gateway/protocol/GatewayEvent;)V
+	public synthetic fun <init> (ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;JLsaien/magrathea/gateway/protocol/GatewayEvent;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()J
+	public final fun component6 ()Lsaien/magrathea/gateway/protocol/GatewayEvent;
+	public final fun copy (ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;JLsaien/magrathea/gateway/protocol/GatewayEvent;)Lsaien/magrathea/gateway/protocol/GatewayStreamEnvelope;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayStreamEnvelope;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;JLsaien/magrathea/gateway/protocol/GatewayEvent;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayStreamEnvelope;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEvent ()Lsaien/magrathea/gateway/protocol/GatewayEvent;
+	public final fun getProtocolVersion ()I
+	public final fun getRequestId ()Ljava/lang/String;
+	public final fun getSequence ()J
+	public final fun getSessionId ()Ljava/lang/String;
+	public final fun getStreamId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayStreamEnvelope$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayStreamEnvelope$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayStreamEnvelope;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayStreamEnvelope;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayStreamEnvelope$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayStreamValidator {
+	public fun <init> (Lsaien/magrathea/gateway/protocol/GatewayStreamDescriptor;JZLsaien/magrathea/gateway/protocol/GatewayProtocolLimits;)V
+	public synthetic fun <init> (Lsaien/magrathea/gateway/protocol/GatewayStreamDescriptor;JZLsaien/magrathea/gateway/protocol/GatewayProtocolLimits;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun accept (Lsaien/magrathea/gateway/protocol/GatewayStreamEnvelope;)Lsaien/magrathea/gateway/protocol/GatewayEvent;
+	public final fun getExpectedSequence ()J
+	public final fun isTerminal ()Z
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayToolCall {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayToolCall$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;ZLjava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;ZLjava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Lkotlinx/serialization/json/JsonElement;
+	public final fun component4 ()Z
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/lang/String;
+	public final fun component7 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;ZLjava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)Lsaien/magrathea/gateway/protocol/GatewayToolCall;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayToolCall;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;ZLjava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayToolCall;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getArguments ()Lkotlinx/serialization/json/JsonElement;
+	public final fun getId ()Ljava/lang/String;
+	public final fun getName ()Ljava/lang/String;
+	public final fun getPartial ()Z
+	public final fun getProviderCallId ()Ljava/lang/String;
+	public final fun getProviderMetadata ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getThoughtSignature ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayToolCall$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayToolCall$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayToolCall;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayToolCall;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayToolCall$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayUsage {
+	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayUsage$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/Integer;Ljava/lang/Integer;Ljava/lang/Integer;)V
+	public synthetic fun <init> (Ljava/lang/Integer;Ljava/lang/Integer;Ljava/lang/Integer;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/Integer;
+	public final fun component2 ()Ljava/lang/Integer;
+	public final fun component3 ()Ljava/lang/Integer;
+	public final fun copy (Ljava/lang/Integer;Ljava/lang/Integer;Ljava/lang/Integer;)Lsaien/magrathea/gateway/protocol/GatewayUsage;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayUsage;Ljava/lang/Integer;Ljava/lang/Integer;Ljava/lang/Integer;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayUsage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getInputTokens ()Ljava/lang/Integer;
+	public final fun getOutputTokens ()Ljava/lang/Integer;
+	public final fun getReasoningTokens ()Ljava/lang/Integer;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/gateway/protocol/GatewayUsage$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/gateway/protocol/GatewayUsage$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/gateway/protocol/GatewayUsage;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/gateway/protocol/GatewayUsage;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/gateway/protocol/GatewayUsage$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+

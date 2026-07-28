@@ -1,0 +1,525 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+TEMP_ROOT="${TMPDIR:-/tmp}"
+FIXTURE="$(mktemp -d "${TEMP_ROOT%/}/magrathea-resume-contract.XXXXXX")"
+PROJECT="$FIXTURE/project"
+REPOSITORY="$FIXTURE/repository"
+LOCAL_REPOSITORY="$FIXTURE/local-maven"
+COORDINATES="$FIXTURE/coordinates.txt"
+MAVEN_MANIFEST="$FIXTURE/maven-files.sha256"
+MISSING_COORDINATES="$FIXTURE/missing-coordinates.txt"
+GRADLE_LOG="$FIXTURE/gradle.log"
+PORT_FILE="$FIXTURE/server.port"
+SERVER_LOG="$FIXTURE/server.log"
+GROUP_PATH="saien/magrathea"
+VERSION="0.1.0-alpha.1"
+server_pid=""
+
+cleanup() {
+  if [[ -n "$server_pid" ]]; then
+    kill "$server_pid" >/dev/null 2>&1 || true
+    wait "$server_pid" 2>/dev/null || true
+  fi
+  rm -rf "$FIXTURE"
+}
+trap cleanup EXIT
+
+mkdir -p \
+  "$PROJECT/scripts" \
+  "$PROJECT/magrathea-provider-openai" \
+  "$PROJECT/magrathea-gateway-server" \
+  "$PROJECT/magrathea-storage-web" \
+  "$REPOSITORY" \
+  "$LOCAL_REPOSITORY"
+cp "$ROOT_DIR/scripts/verify-remote-version-absent" "$PROJECT/scripts/"
+cp "$ROOT_DIR/scripts/verify-remote-version-present" "$PROJECT/scripts/"
+cp "$ROOT_DIR/scripts/write-maven-manifest" "$PROJECT/scripts/"
+
+cat > "$COORDINATES" <<EOF
+saien.magrathea:magrathea-gateway-server:$VERSION
+saien.magrathea:magrathea-provider-openai-android:$VERSION
+saien.magrathea:magrathea-provider-openai-jvm:$VERSION
+saien.magrathea:magrathea-provider-openai:$VERSION
+saien.magrathea:magrathea-storage-web-wasm-js:$VERSION
+saien.magrathea:magrathea-storage-web:$VERSION
+EOF
+cat > "$MISSING_COORDINATES" <<EOF
+saien.magrathea:magrathea-gateway-server:$VERSION
+saien.magrathea:magrathea-provider-openai-jvm:$VERSION
+saien.magrathea:magrathea-provider-openai:$VERSION
+saien.magrathea:magrathea-storage-web-wasm-js:$VERSION
+saien.magrathea:magrathea-storage-web:$VERSION
+EOF
+
+while IFS=: read -r group artifact version; do
+  group_path="$(printf '%s' "$group" | tr '.' '/')"
+  local_directory="$LOCAL_REPOSITORY/$group_path/$artifact/$version"
+  mkdir -p "$local_directory"
+  printf '<project><version>%s</version></project>\n' "$version" > \
+    "$local_directory/$artifact-$version.pom"
+  printf 'pom-signature=%s version=%s\n' "$artifact" "$version" > \
+    "$local_directory/$artifact-$version.pom.asc"
+  printf 'artifact=%s version=%s\n' "$artifact" "$version" > \
+    "$local_directory/$artifact-$version.jar"
+  printf 'signature=%s version=%s\n' "$artifact" "$version" > \
+    "$local_directory/$artifact-$version.jar.asc"
+done < "$COORDINATES"
+"$ROOT_DIR/scripts/write-maven-manifest" \
+  "$LOCAL_REPOSITORY" "$COORDINATES" "$MAVEN_MANIFEST" >/dev/null
+
+present_artifact="magrathea-provider-openai-android"
+present_local="$LOCAL_REPOSITORY/$GROUP_PATH/$present_artifact/$VERSION"
+present_remote="$REPOSITORY/$GROUP_PATH/$present_artifact/$VERSION"
+mkdir -p "$present_remote"
+cp "$present_local"/* "$present_remote/"
+
+cat > "$PROJECT/gradlew" <<'FAKE_GRADLE'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >> "${FAKE_GRADLE_LOG:?missing fake Gradle log}"
+while IFS=: read -r group artifact version; do
+  group_path="$(printf '%s' "$group" | tr '.' '/')"
+  artifact_dir="${FAKE_REPOSITORY_DIR:?missing fake repository}/$group_path/$artifact/$version"
+  source_dir="${FAKE_LOCAL_MAVEN_REPOSITORY:?missing fake local Maven repository}/$group_path/$artifact/$version"
+  mkdir -p "$artifact_dir"
+  cp "$source_dir"/* "$artifact_dir/"
+done < "${FAKE_MISSING_COORDINATES:?missing fake coordinate inventory}"
+FAKE_GRADLE
+chmod +x \
+  "$PROJECT/gradlew" \
+  "$PROJECT/scripts/verify-remote-version-absent" \
+  "$PROJECT/scripts/verify-remote-version-present" \
+  "$PROJECT/scripts/write-maven-manifest"
+
+git -C "$PROJECT" init -q
+git -C "$PROJECT" config user.name "Magrathea Contract"
+git -C "$PROJECT" config user.email "contract@example.invalid"
+git -C "$PROJECT" add .
+git -C "$PROJECT" commit -q -m "fixture"
+
+python3 "$ROOT_DIR/scripts/rollback-fixture-server.py" \
+  "$REPOSITORY" "$PORT_FILE" >"$SERVER_LOG" 2>&1 &
+server_pid=$!
+
+deadline=$((SECONDS + 30))
+port=""
+while ((SECONDS < deadline)); do
+  if [[ -s "$PORT_FILE" ]]; then
+    port="$(tr -d '[:space:]' < "$PORT_FILE")"
+    if [[ "$port" =~ ^[1-9][0-9]*$ ]] &&
+      curl --fail --silent --show-error \
+        "http://127.0.0.1:$port/.magrathea-health" >/dev/null; then
+      break
+    fi
+  fi
+  if ! kill -0 "$server_pid" >/dev/null 2>&1; then
+    printf 'resume publication contract failed: fixture server exited early\n' >&2
+    cat "$SERVER_LOG" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+[[ -n "$port" ]] || {
+  printf 'resume publication contract failed: fixture server did not become ready\n' >&2
+  exit 1
+}
+repository_url="http://127.0.0.1:$port"
+
+output="$(
+  env \
+    -u MAGRATHEA_PUBLISH_USERNAME \
+    -u MAGRATHEA_PUBLISH_PASSWORD \
+    -u GITHUB_SAIEN_MAVEN_USERNAME \
+    -u GITHUB_SAIEN_MAVEN_TOKEN \
+    MAGRATHEA_SIGNING_KEY="contract-signing-key" \
+    MAGRATHEA_REMOTE_VERIFY_ATTEMPTS=1 \
+    MAGRATHEA_REMOTE_VERIFY_RETRY_SECONDS=0 \
+    FAKE_GRADLE_LOG="$GRADLE_LOG" \
+    FAKE_REPOSITORY_DIR="$REPOSITORY" \
+    FAKE_LOCAL_MAVEN_REPOSITORY="$LOCAL_REPOSITORY" \
+    FAKE_MISSING_COORDINATES="$MISSING_COORDINATES" \
+    /bin/bash "$ROOT_DIR/scripts/resume-publish-sdk" \
+      --project-dir "$PROJECT" \
+      --repository-url "$repository_url" \
+      --coordinates-file "$COORDINATES" \
+      --local-maven-repository "$LOCAL_REPOSITORY"
+)"
+
+[[ "$output" == *"MAGRATHEA_RESUME_PLAN total=6 completed=0 present=1 partial=0 missing=5 version=$VERSION"* &&
+  "$output" == *"MAGRATHEA_RESUME_COMPLETE published=5 repaired_files=0 version=$VERSION"* ]] || {
+  printf 'resume publication contract failed: unexpected successful output:\n%s\n' \
+    "$output" >&2
+  exit 1
+}
+[[ -s "$GRADLE_LOG" && "$(wc -l < "$GRADLE_LOG" | tr -d ' ')" -eq 1 ]] || {
+  printf 'resume publication contract failed: Gradle should run exactly once\n' >&2
+  exit 1
+}
+gradle_invocation="$(<"$GRADLE_LOG")"
+for expected in \
+  ":magrathea-gateway-server:publishMavenPublicationToGitHubPackagesRepository" \
+  ":magrathea-provider-openai:publishJvmPublicationToGitHubPackagesRepository" \
+  ":magrathea-provider-openai:publishKotlinMultiplatformPublicationToGitHubPackagesRepository" \
+  ":magrathea-storage-web:publishWasmJsPublicationToGitHubPackagesRepository" \
+  ":magrathea-storage-web:publishKotlinMultiplatformPublicationToGitHubPackagesRepository" \
+  "-Pmagrathea.publish.preflightVerified=saien.magrathea:$VERSION"; do
+  [[ "$gradle_invocation" == *"$expected"* ]] || {
+    printf 'resume publication contract failed: Gradle invocation omitted %s\n' \
+      "$expected" >&2
+    exit 1
+  }
+done
+[[ "$gradle_invocation" != *"publishAndroidPublication"* ]] || {
+  printf 'resume publication contract failed: an existing coordinate was republished\n' >&2
+  exit 1
+}
+
+idempotent_output="$(
+  env \
+    -u MAGRATHEA_PUBLISH_USERNAME \
+    -u MAGRATHEA_PUBLISH_PASSWORD \
+    -u GITHUB_SAIEN_MAVEN_USERNAME \
+    -u GITHUB_SAIEN_MAVEN_TOKEN \
+    -u MAGRATHEA_SIGNING_KEY \
+    MAGRATHEA_REMOTE_VERIFY_ATTEMPTS=1 \
+    MAGRATHEA_REMOTE_VERIFY_RETRY_SECONDS=0 \
+    FAKE_GRADLE_LOG="$GRADLE_LOG" \
+    FAKE_REPOSITORY_DIR="$REPOSITORY" \
+    FAKE_LOCAL_MAVEN_REPOSITORY="$LOCAL_REPOSITORY" \
+    FAKE_MISSING_COORDINATES="$MISSING_COORDINATES" \
+    /bin/bash "$ROOT_DIR/scripts/resume-publish-sdk" \
+      --project-dir "$PROJECT" \
+      --repository-url "$repository_url" \
+      --coordinates-file "$COORDINATES" \
+      --local-maven-repository "$LOCAL_REPOSITORY"
+)"
+[[ "$idempotent_output" == *"MAGRATHEA_RESUME_PLAN total=6 completed=0 present=6 partial=0 missing=0 version=$VERSION"* &&
+  "$idempotent_output" == *"MAGRATHEA_RESUME_COMPLETE published=0 repaired_files=0 version=$VERSION"* &&
+  "$(wc -l < "$GRADLE_LOG" | tr -d ' ')" -eq 1 ]] || {
+  printf 'resume publication contract failed: completed publication was not idempotent\n' >&2
+  exit 1
+}
+
+authenticated_output="$(
+  env \
+    -u GITHUB_SAIEN_MAVEN_USERNAME \
+    -u GITHUB_SAIEN_MAVEN_TOKEN \
+    -u MAGRATHEA_SIGNING_KEY \
+    MAGRATHEA_PUBLISH_USERNAME="contract-user" \
+    MAGRATHEA_PUBLISH_PASSWORD="contract-password" \
+    MAGRATHEA_REMOTE_VERIFY_ATTEMPTS=1 \
+    MAGRATHEA_REMOTE_VERIFY_RETRY_SECONDS=0 \
+    /bin/bash "$ROOT_DIR/scripts/resume-publish-sdk" \
+      --project-dir "$PROJECT" \
+      --repository-url "$repository_url" \
+      --coordinates-file "$COORDINATES" \
+      --local-maven-repository "$LOCAL_REPOSITORY"
+)"
+[[ "$authenticated_output" == *"MAGRATHEA_RESUME_COMPLETE published=0 repaired_files=0 version=$VERSION"* ]] || {
+  printf 'resume publication contract failed: authenticated probing did not complete\n' >&2
+  exit 1
+}
+
+completed_coordinates="$FIXTURE/completed-coordinates.txt"
+head -n 2 "$COORDINATES" > "$completed_coordinates"
+completed_nonreproducible="$REPOSITORY/$GROUP_PATH/magrathea-gateway-server/$VERSION/magrathea-gateway-server-$VERSION.jar"
+printf 'same trusted publication, different archive bytes\n' > "$completed_nonreproducible"
+completed_output="$(
+  env \
+    -u MAGRATHEA_PUBLISH_USERNAME \
+    -u MAGRATHEA_PUBLISH_PASSWORD \
+    -u GITHUB_SAIEN_MAVEN_USERNAME \
+    -u GITHUB_SAIEN_MAVEN_TOKEN \
+    /bin/bash "$ROOT_DIR/scripts/resume-publish-sdk" \
+      --project-dir "$PROJECT" \
+      --repository-url "$repository_url" \
+      --coordinates-file "$COORDINATES" \
+      --local-maven-repository "$LOCAL_REPOSITORY" \
+      --completed-coordinates-file "$completed_coordinates" \
+      --plan-only
+)"
+[[ "$completed_output" == *"MAGRATHEA_RESUME_PLAN total=6 completed=2 present=4 partial=0 missing=0 version=$VERSION"* &&
+  "$completed_output" == *"[resume-publish-sdk] verified completed magrathea-gateway-server"* &&
+  "$completed_output" == *"MAGRATHEA_RESUME_PLAN_ONLY version=$VERSION"* ]] || {
+  printf 'resume publication contract failed: completed-coordinate evidence was not honored: %s\n' \
+    "$completed_output" >&2
+  exit 1
+}
+cp \
+  "$LOCAL_REPOSITORY/$GROUP_PATH/magrathea-gateway-server/$VERSION/magrathea-gateway-server-$VERSION.jar" \
+  "$completed_nonreproducible"
+
+partial_file="$REPOSITORY/$GROUP_PATH/$present_artifact/$VERSION/$present_artifact-$VERSION.jar"
+rm "$partial_file"
+plan_output="$(
+  env \
+    -u MAGRATHEA_PUBLISH_USERNAME \
+    -u MAGRATHEA_PUBLISH_PASSWORD \
+    -u GITHUB_SAIEN_MAVEN_USERNAME \
+    -u GITHUB_SAIEN_MAVEN_TOKEN \
+    /bin/bash "$ROOT_DIR/scripts/resume-publish-sdk" \
+      --project-dir "$PROJECT" \
+      --repository-url "$repository_url" \
+      --coordinates-file "$COORDINATES" \
+      --local-maven-repository "$LOCAL_REPOSITORY" \
+      --plan-only
+)"
+[[ "$plan_output" == *"MAGRATHEA_RESUME_PLAN total=6 completed=0 present=5 partial=1 missing=0 version=$VERSION"* &&
+  "$plan_output" == *"[resume-publish-sdk] would repair "*"provider-openai-android-$VERSION.jar"* &&
+  "$plan_output" == *"MAGRATHEA_RESUME_PLAN_ONLY version=$VERSION"* &&
+  ! -e "$partial_file" &&
+  "$(wc -l < "$GRADLE_LOG" | tr -d ' ')" -eq 1 ]] || {
+  printf 'resume publication contract failed: plan-only mode mutated state: %s\n' \
+    "$plan_output" >&2
+  exit 1
+}
+
+partial_output="$(
+  env \
+    -u MAGRATHEA_PUBLISH_USERNAME \
+    -u MAGRATHEA_PUBLISH_PASSWORD \
+    -u GITHUB_SAIEN_MAVEN_USERNAME \
+    -u GITHUB_SAIEN_MAVEN_TOKEN \
+    /bin/bash "$ROOT_DIR/scripts/resume-publish-sdk" \
+      --project-dir "$PROJECT" \
+      --repository-url "$repository_url" \
+      --coordinates-file "$COORDINATES" \
+      --local-maven-repository "$LOCAL_REPOSITORY" 2>&1
+)"
+partial_digest="$(shasum -a 256 "$partial_file" | cut -d' ' -f1)"
+staged_digest="$(
+  shasum -a 256 "$present_local/$present_artifact-$VERSION.jar" | cut -d' ' -f1
+)"
+[[ "$partial_output" == *"MAGRATHEA_RESUME_PLAN total=6 completed=0 present=5 partial=1 missing=0 version=$VERSION"* &&
+  "$partial_output" == *"MAGRATHEA_RESUME_COMPLETE published=0 repaired_files=1 version=$VERSION"* &&
+  -f "$partial_file" &&
+  "$partial_digest" == "$staged_digest" &&
+  "$(wc -l < "$GRADLE_LOG" | tr -d ' ')" -eq 1 ]] || {
+  printf 'resume publication contract failed: partial-coordinate repair was incorrect: %s\n' \
+    "$partial_output" >&2
+  exit 1
+}
+
+printf 'corrupt remote artifact\n' > "$partial_file"
+if mismatch_output="$(
+  env \
+    -u MAGRATHEA_PUBLISH_USERNAME \
+    -u MAGRATHEA_PUBLISH_PASSWORD \
+    -u GITHUB_SAIEN_MAVEN_USERNAME \
+    -u GITHUB_SAIEN_MAVEN_TOKEN \
+    /bin/bash "$ROOT_DIR/scripts/resume-publish-sdk" \
+      --project-dir "$PROJECT" \
+      --repository-url "$repository_url" \
+      --coordinates-file "$COORDINATES" \
+      --local-maven-repository "$LOCAL_REPOSITORY" 2>&1
+)"; then
+  printf 'resume publication contract failed: mismatched coordinate unexpectedly passed\n' >&2
+  exit 1
+fi
+[[ "$mismatch_output" == *"existing coordinate $present_artifact differs"* ]] || {
+  printf 'resume publication contract failed: mismatched-coordinate rejection was unclear: %s\n' \
+    "$mismatch_output" >&2
+  exit 1
+}
+cp "$present_local/$present_artifact-$VERSION.jar" "$partial_file"
+
+actions_log="$FIXTURE/actions.log"
+cat > "$actions_log" <<'LOG'
+publish-packages	Publish signed Maven artifacts	2026-07-27T22:06:32Z > Task :magrathea-chatbot:publishAndroidPublicationToGitHubPackagesRepository
+publish-packages	Publish signed Maven artifacts	2026-07-27T22:07:32Z > Task :magrathea-chatbot:publishKotlinMultiplatformPublicationToGitHubPackagesRepository
+publish-packages	Publish signed Maven artifacts	2026-07-27T22:08:32Z > Task :magrathea-gateway-server:publishMavenPublicationToGitHubPackagesRepository
+publish-packages	Publish signed Maven artifacts	2026-07-27T22:09:32Z > Task :magrathea-storage-web:publishWasmJsPublicationToGitHubPackagesRepository
+publish-packages	Publish signed Maven artifacts	2026-07-27T22:10:32Z > Task :magrathea-storage-web:publishWasmJsPublicationToSdkVerificationRepository
+LOG
+extracted_coordinates="$(
+  "$ROOT_DIR/scripts/extract-completed-publication-coordinates" \
+    "saien.magrathea" "$VERSION" < "$actions_log"
+)"
+expected_extracted_coordinates="$(
+  cat <<EOF
+saien.magrathea:magrathea-chatbot-android:$VERSION
+saien.magrathea:magrathea-chatbot:$VERSION
+saien.magrathea:magrathea-gateway-server:$VERSION
+saien.magrathea:magrathea-storage-web-wasm-js:$VERSION
+EOF
+)"
+[[ "$extracted_coordinates" == "$expected_extracted_coordinates" ]] || {
+  printf 'resume publication contract failed: completed task extraction was incorrect:\n%s\n' \
+    "$extracted_coordinates" >&2
+  exit 1
+}
+
+duplicate_coordinates="$FIXTURE/duplicate-coordinates.txt"
+cat "$COORDINATES" "$COORDINATES" > "$duplicate_coordinates"
+if duplicate_output="$(
+  env \
+    -u MAGRATHEA_PUBLISH_USERNAME \
+    -u MAGRATHEA_PUBLISH_PASSWORD \
+    -u GITHUB_SAIEN_MAVEN_USERNAME \
+    -u GITHUB_SAIEN_MAVEN_TOKEN \
+    /bin/bash "$ROOT_DIR/scripts/resume-publish-sdk" \
+      --project-dir "$PROJECT" \
+      --repository-url "$repository_url" \
+      --coordinates-file "$duplicate_coordinates" \
+      --local-maven-repository "$LOCAL_REPOSITORY" 2>&1
+)"; then
+  printf 'resume publication contract failed: duplicate coordinates unexpectedly passed\n' >&2
+  exit 1
+fi
+[[ "$duplicate_output" == *"coordinate inventory contains duplicates"* ]] || {
+  printf 'resume publication contract failed: duplicate rejection was unclear: %s\n' \
+    "$duplicate_output" >&2
+  exit 1
+}
+
+rm -rf "$REPOSITORY/$GROUP_PATH"
+exact_fresh_output="$(
+  env \
+    -u MAGRATHEA_PUBLISH_USERNAME \
+    -u MAGRATHEA_PUBLISH_PASSWORD \
+    -u GITHUB_SAIEN_MAVEN_USERNAME \
+    -u GITHUB_SAIEN_MAVEN_TOKEN \
+    -u MAGRATHEA_SIGNING_KEY \
+    MAGRATHEA_REMOTE_VERIFY_ATTEMPTS=1 \
+    MAGRATHEA_REMOTE_VERIFY_RETRY_SECONDS=0 \
+    /bin/bash "$ROOT_DIR/scripts/resume-publish-sdk" \
+      --project-dir "$PROJECT" \
+      --repository-url "$repository_url" \
+      --coordinates-file "$COORDINATES" \
+      --local-maven-repository "$LOCAL_REPOSITORY" \
+      --manifest-file "$MAVEN_MANIFEST" \
+      --exact-files \
+      --fresh
+)"
+[[ "$exact_fresh_output" == *"MAGRATHEA_RESUME_PLAN total=6 completed=0 present=0 partial=0 missing=6 version=$VERSION"* &&
+  "$exact_fresh_output" == *"MAGRATHEA_RESUME_COMPLETE published=6 published_files="*" repaired_files=0 version=$VERSION"* &&
+  "$(wc -l < "$GRADLE_LOG" | tr -d ' ')" -eq 1 ]] || {
+  printf 'resume publication contract failed: exact fresh publication was incorrect: %s\n' \
+    "$exact_fresh_output" >&2
+  exit 1
+}
+
+exact_idempotent_output="$(
+  env \
+    -u MAGRATHEA_PUBLISH_USERNAME \
+    -u MAGRATHEA_PUBLISH_PASSWORD \
+    -u GITHUB_SAIEN_MAVEN_USERNAME \
+    -u GITHUB_SAIEN_MAVEN_TOKEN \
+    -u MAGRATHEA_SIGNING_KEY \
+    MAGRATHEA_REMOTE_VERIFY_ATTEMPTS=1 \
+    MAGRATHEA_REMOTE_VERIFY_RETRY_SECONDS=0 \
+    /bin/bash "$ROOT_DIR/scripts/resume-publish-sdk" \
+      --project-dir "$PROJECT" \
+      --repository-url "$repository_url" \
+      --coordinates-file "$COORDINATES" \
+      --local-maven-repository "$LOCAL_REPOSITORY" \
+      --manifest-file "$MAVEN_MANIFEST" \
+      --exact-files
+)"
+[[ "$exact_idempotent_output" == *"MAGRATHEA_RESUME_PLAN total=6 completed=0 present=6 partial=0 missing=0 version=$VERSION"* &&
+  "$exact_idempotent_output" == *"MAGRATHEA_RESUME_COMPLETE published=0 repaired_files=0 version=$VERSION"* &&
+  "$(wc -l < "$GRADLE_LOG" | tr -d ' ')" -eq 1 ]] || {
+  printf 'resume publication contract failed: exact publication was not idempotent: %s\n' \
+    "$exact_idempotent_output" >&2
+  exit 1
+}
+
+exact_partial_file="$REPOSITORY/$GROUP_PATH/$present_artifact/$VERSION/$present_artifact-$VERSION.jar"
+rm "$exact_partial_file"
+exact_resume_output="$(
+  env \
+    -u MAGRATHEA_PUBLISH_USERNAME \
+    -u MAGRATHEA_PUBLISH_PASSWORD \
+    -u GITHUB_SAIEN_MAVEN_USERNAME \
+    -u GITHUB_SAIEN_MAVEN_TOKEN \
+    -u MAGRATHEA_SIGNING_KEY \
+    MAGRATHEA_REMOTE_VERIFY_ATTEMPTS=1 \
+    MAGRATHEA_REMOTE_VERIFY_RETRY_SECONDS=0 \
+    /bin/bash "$ROOT_DIR/scripts/resume-publish-sdk" \
+      --project-dir "$PROJECT" \
+      --repository-url "$repository_url" \
+      --coordinates-file "$COORDINATES" \
+      --local-maven-repository "$LOCAL_REPOSITORY" \
+      --manifest-file "$MAVEN_MANIFEST" \
+      --exact-files
+)"
+[[ "$exact_resume_output" == *"partial=1 missing=0 version=$VERSION"* &&
+  "$exact_resume_output" == *"MAGRATHEA_RESUME_COMPLETE published=0 repaired_files=1 version=$VERSION"* &&
+  -s "$exact_partial_file" &&
+  "$(wc -l < "$GRADLE_LOG" | tr -d ' ')" -eq 1 ]] || {
+  printf 'resume publication contract failed: exact publication did not resume safely: %s\n' \
+    "$exact_resume_output" >&2
+  exit 1
+}
+
+incomplete_manifest="$FIXTURE/incomplete-maven-files.sha256"
+tail -n +2 "$MAVEN_MANIFEST" > "$incomplete_manifest"
+if manifest_output="$(
+  env \
+    -u MAGRATHEA_PUBLISH_USERNAME \
+    -u MAGRATHEA_PUBLISH_PASSWORD \
+    -u GITHUB_SAIEN_MAVEN_USERNAME \
+    -u GITHUB_SAIEN_MAVEN_TOKEN \
+    /bin/bash "$ROOT_DIR/scripts/resume-publish-sdk" \
+      --project-dir "$PROJECT" \
+      --repository-url "$repository_url" \
+      --coordinates-file "$COORDINATES" \
+      --local-maven-repository "$LOCAL_REPOSITORY" \
+      --manifest-file "$incomplete_manifest" \
+      --exact-files \
+      --plan-only 2>&1
+)"; then
+  printf 'resume publication contract failed: incomplete manifest unexpectedly passed\n' >&2
+  exit 1
+fi
+[[ "$manifest_output" == *"not bound by the release manifest"* ]] || {
+  printf 'resume publication contract failed: manifest rejection was unclear: %s\n' \
+    "$manifest_output" >&2
+  exit 1
+}
+
+touch "$PROJECT/untracked"
+exact_dirty_output="$(
+  env \
+    -u MAGRATHEA_PUBLISH_USERNAME \
+    -u MAGRATHEA_PUBLISH_PASSWORD \
+    -u GITHUB_SAIEN_MAVEN_USERNAME \
+    -u GITHUB_SAIEN_MAVEN_TOKEN \
+    /bin/bash "$ROOT_DIR/scripts/resume-publish-sdk" \
+      --project-dir "$PROJECT" \
+      --repository-url "$repository_url" \
+      --coordinates-file "$COORDINATES" \
+      --local-maven-repository "$LOCAL_REPOSITORY" \
+      --manifest-file "$MAVEN_MANIFEST" \
+      --exact-files \
+      --plan-only
+)"
+[[ "$exact_dirty_output" == *"MAGRATHEA_RESUME_PLAN_ONLY version=$VERSION"* ]] || {
+  printf 'resume publication contract failed: exact-byte promotion depended on checkout cleanliness\n' >&2
+  exit 1
+}
+
+if dirty_output="$(
+  env \
+    -u MAGRATHEA_PUBLISH_USERNAME \
+    -u MAGRATHEA_PUBLISH_PASSWORD \
+    -u GITHUB_SAIEN_MAVEN_USERNAME \
+    -u GITHUB_SAIEN_MAVEN_TOKEN \
+    /bin/bash "$ROOT_DIR/scripts/resume-publish-sdk" \
+      --project-dir "$PROJECT" \
+      --repository-url "$repository_url" \
+      --coordinates-file "$COORDINATES" \
+      --local-maven-repository "$LOCAL_REPOSITORY" 2>&1
+)"; then
+  printf 'resume publication contract failed: dirty checkout unexpectedly passed\n' >&2
+  exit 1
+fi
+[[ "$dirty_output" == *"project checkout must be clean"* ]] || {
+  printf 'resume publication contract failed: dirty-checkout rejection was unclear\n' >&2
+  exit 1
+}
+
+printf 'Resume publication contract passed.\n'

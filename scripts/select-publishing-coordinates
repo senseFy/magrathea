@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+COORDINATES_FILE="${1:?usage: select-publishing-coordinates COORDINATES_FILE MODULE...}"
+shift
+
+fail() {
+  printf 'coordinate selection failed: %s\n' "$*" >&2
+  exit 2
+}
+
+[[ -s "$COORDINATES_FILE" ]] || fail "coordinate inventory is missing or empty"
+[[ "$#" -gt 0 ]] || fail "at least one logical module is required"
+
+modules=()
+for module in "$@"; do
+  module="${module#:}"
+  [[ "$module" =~ ^[a-z0-9][a-z0-9-]*$ ]] || fail "unsafe module name: $module"
+  for existing in "${modules[@]:-}"; do
+    [[ "$module" != "$existing" ]] || fail "duplicate module selection: $module"
+  done
+  modules+=("$module")
+done
+
+temporary_directory="$(mktemp -d "${TMPDIR:-/tmp}/magrathea-coordinate-selection.XXXXXX")"
+selected="$temporary_directory/selected.txt"
+matched_modules="$temporary_directory/matched-modules.txt"
+trap 'rm -rf "$temporary_directory"' EXIT
+: > "$selected"
+: > "$matched_modules"
+
+while IFS=: read -r group artifact version extra; do
+  [[ -n "$group" && -n "$artifact" && -n "$version" && -z "${extra:-}" ]] ||
+    fail "malformed coordinate inventory"
+  [[ "$group" =~ ^[A-Za-z0-9_.-]+$ &&
+    "$artifact" =~ ^[A-Za-z0-9_.-]+$ &&
+    "$version" =~ ^[A-Za-z0-9_.-]+$ ]] ||
+    fail "unsafe coordinate in inventory"
+
+  owner=""
+  for module in "${modules[@]}"; do
+    case "$artifact" in
+      "$module"|\
+      "$module-android"|\
+      "$module-jvm"|\
+      "$module-iosarm64"|\
+      "$module-iossimulatorarm64"|\
+      "$module-js"|\
+      "$module-wasm-js")
+        [[ -z "$owner" ]] || fail "coordinate belongs to multiple selected modules: $artifact"
+        owner="$module"
+        ;;
+    esac
+  done
+  if [[ -n "$owner" ]]; then
+    printf '%s:%s:%s\n' "$group" "$artifact" "$version" >> "$selected"
+    printf '%s\n' "$owner" >> "$matched_modules"
+  fi
+done < "$COORDINATES_FILE"
+
+for module in "${modules[@]}"; do
+  grep -Fxq "$module" "$matched_modules" ||
+    fail "module has no publication coordinates: $module"
+done
+
+duplicate_coordinate="$(LC_ALL=C sort "$selected" | uniq -d | head -n 1)"
+[[ -z "$duplicate_coordinate" ]] ||
+  fail "selected coordinate inventory contains duplicates: $duplicate_coordinate"
+
+LC_ALL=C sort "$selected"

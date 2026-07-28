@@ -1,0 +1,134 @@
+name: Verify Magrathea SDK
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Set up Java 17
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle build cache
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Run JVM and Android SDK gate
+        run: ./gradlew verifySdkLinux --no-daemon --stacktrace
+
+  apple-gate:
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: published-consumer
+            gradle_task: verifyKmpPublishedConsumerApple
+            boot_simulator: false
+          - name: simulator-tests
+            gradle_task: verifyKmpAppleTests
+            boot_simulator: true
+    name: apple-gate (${{ matrix.name }})
+    steps:
+      - name: Check out source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Set up Java 17
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle build cache
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Boot an available iOS Simulator
+        if: matrix.boot_simulator
+        run: |
+          SIMULATOR_UDID=$(xcrun simctl list devices available -j | ruby -rjson -e 'devices = JSON.parse(STDIN.read).fetch("devices").values.flatten; device = devices.find { |item| item["name"].start_with?("iPhone") }; abort("No available iPhone simulator") unless device; puts device.fetch("udid")')
+          SIMULATOR_STATE=$(xcrun simctl list devices available -j | ruby -rjson -e 'udid = ARGV.fetch(0); devices = JSON.parse(STDIN.read).fetch("devices").values.flatten; puts devices.find { |item| item["udid"] == udid }.fetch("state")' "$SIMULATOR_UDID")
+          if [ "$SIMULATOR_STATE" != "Booted" ]; then
+            xcrun simctl boot "$SIMULATOR_UDID"
+          fi
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Run ${{ matrix.name }} Apple gate
+        run: ./gradlew ${{ matrix.gradle_task }} --no-daemon --stacktrace
+
+  web-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Set up Java 17
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle build cache
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Install pinned browser matrix
+        working-directory: tooling/web-browser-e2e
+        run: |
+          npm ci --ignore-scripts
+          npx playwright install --with-deps --only-shell chromium firefox webkit
+
+      - name: Run JS, Wasm, Gateway, and package gates
+        run: ./gradlew verifySdkWeb --no-daemon --stacktrace
+
+      - name: Retain Web gate failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: magrathea-web-gate-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build/reports/web-gateway-e2e-server.log
+            build/reports/problems/**
+            **/build/verified/reports/tests/**
+            **/build/verified/test-results/**
+            **/build/reports/tests/**
+            **/build/test-results/**
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0

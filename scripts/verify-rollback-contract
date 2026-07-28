@@ -1,0 +1,288 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+CURRENT_VERSION="${2:-0.1.0-alpha.1}"
+COORDINATES_FILE="${3:?usage: verify-rollback-contract ROOT_DIR CURRENT_VERSION COORDINATES_FILE}"
+PREVIOUS_VERSION="0.0.0-rehearsal"
+GROUP="saien.magrathea"
+TEMP_ROOT="${TMPDIR:-/tmp}"
+FIXTURE="$(mktemp -d "${TEMP_ROOT%/}/magrathea-rollback-contract.XXXXXX")"
+ABSENT_REPOSITORY="$FIXTURE/absent-repository"
+PRESENT_REPOSITORY="$FIXTURE/present-repository"
+GROUP_PATH="saien/magrathea"
+TRANSIENT_CURL_DIR="$FIXTURE/transient-curl"
+REAL_CURL="$(command -v curl)"
+server_pid=""
+server_log=""
+port=""
+
+[[ -s "$COORDINATES_FILE" ]] || {
+  printf 'rollback contract failed: coordinate inventory is missing or empty\n' >&2
+  exit 1
+}
+coordinate_count="$(wc -l < "$COORDINATES_FILE" | tr -d ' ')"
+unique_coordinate_count="$(sort "$COORDINATES_FILE" | uniq | wc -l | tr -d ' ')"
+[[ "$coordinate_count" -eq 88 && "$unique_coordinate_count" -eq "$coordinate_count" ]] || {
+  printf 'rollback contract failed: expected 88 unique coordinates, found %s/%s\n' \
+    "$unique_coordinate_count" "$coordinate_count" >&2
+  exit 1
+}
+
+fixture_ready_timeout_seconds="${MAGRATHEA_ROLLBACK_FIXTURE_READY_TIMEOUT_SECONDS:-60}"
+[[ "$fixture_ready_timeout_seconds" =~ ^[1-9][0-9]*$ ]] || {
+  printf 'rollback contract failed: fixture readiness timeout must be a positive integer\n' >&2
+  exit 1
+}
+
+stop_fixture_server() {
+  if [[ -n "$server_pid" ]]; then
+    kill "$server_pid" >/dev/null 2>&1 || true
+    wait "$server_pid" 2>/dev/null || true
+  fi
+  server_pid=""
+  server_log=""
+  port=""
+}
+
+cleanup() {
+  stop_fixture_server
+  rm -rf "$FIXTURE"
+}
+trap cleanup EXIT
+
+start_fixture_server() {
+  local repository="$1"
+  local fixture_name="$2"
+  local probe_relative_path="$3"
+  local probe_expected_body="$4"
+  local port_file="$FIXTURE/$fixture_name.port"
+  local server_ready=0
+  local fixture_ready_deadline
+  local probe_body
+
+  server_log="$FIXTURE/$fixture_name.http.log"
+  rm -f "$port_file" "$server_log"
+  python3 "$ROOT_DIR/scripts/rollback-fixture-server.py" "$repository" "$port_file" \
+    >"$server_log" 2>&1 &
+  server_pid=$!
+  fixture_ready_deadline=$((SECONDS + fixture_ready_timeout_seconds))
+
+  while ((SECONDS < fixture_ready_deadline)); do
+    if ! kill -0 "$server_pid" >/dev/null 2>&1; then
+      printf 'rollback contract failed: %s fixture server exited before becoming ready\n' \
+        "$fixture_name" >&2
+      if [[ -s "$server_log" ]]; then
+        cat "$server_log" >&2
+      else
+        printf 'fixture server exited without writing a log\n' >&2
+      fi
+      return 1
+    fi
+    if [[ -s "$port_file" ]]; then
+      port="$(tr -d '[:space:]' < "$port_file")"
+      if [[ "$port" =~ ^[1-9][0-9]*$ ]] &&
+        curl --fail --silent --show-error "http://127.0.0.1:$port/.magrathea-health" >/dev/null &&
+        probe_body="$(
+          curl --fail --silent --show-error \
+            "http://127.0.0.1:$port/$probe_relative_path"
+        )" &&
+        [[ "$probe_body" == "$probe_expected_body" ]]; then
+        server_ready=1
+        break
+      fi
+    fi
+    sleep 0.1
+  done
+
+  [[ "$server_ready" -eq 1 ]] || {
+    printf 'rollback contract failed: %s fixture server did not become ready within %s seconds\n' \
+      "$fixture_name" "$fixture_ready_timeout_seconds" >&2
+    if [[ -s "$port_file" ]]; then
+      printf 'fixture port file: %s\n' "$(<"$port_file")" >&2
+    else
+      printf 'fixture port file was not created\n' >&2
+    fi
+    if [[ -s "$server_log" ]]; then
+      cat "$server_log" >&2
+    elif kill -0 "$server_pid" >/dev/null 2>&1; then
+      printf 'fixture server log is empty; process %s remained alive\n' "$server_pid" >&2
+    else
+      printf 'fixture server exited without writing a log\n' >&2
+    fi
+    return 1
+  }
+}
+
+mkdir -p "$ABSENT_REPOSITORY" "$PRESENT_REPOSITORY"
+mkdir -p "$TRANSIENT_CURL_DIR"
+cat > "$TRANSIENT_CURL_DIR/curl" <<'TRANSIENT_CURL'
+#!/usr/bin/env bash
+set -euo pipefail
+
+state_file="${MAGRATHEA_FAKE_CURL_STATE:?missing fake curl state}"
+failure_count="${MAGRATHEA_FAKE_CURL_FAILURES:-1}"
+attempt=0
+if [[ -s "$state_file" ]]; then
+  attempt="$(<"$state_file")"
+fi
+attempt=$((attempt + 1))
+printf '%s\n' "$attempt" > "$state_file"
+if [[ "$attempt" -le "$failure_count" ]]; then
+  printf 'curl: (28) simulated transient transport failure\n' >&2
+  exit 28
+fi
+exec "${MAGRATHEA_REAL_CURL:?missing real curl path}" "$@"
+TRANSIENT_CURL
+chmod +x "$TRANSIENT_CURL_DIR/curl"
+
+while IFS=: read -r coordinate_group artifact coordinate_version; do
+  [[ "$coordinate_group" == "$GROUP" && "$coordinate_version" == "$CURRENT_VERSION" ]] || {
+    printf 'rollback contract failed: unexpected coordinate %s:%s:%s\n' \
+      "$coordinate_group" "$artifact" "$coordinate_version" >&2
+    exit 1
+  }
+  for repository in "$ABSENT_REPOSITORY" "$PRESENT_REPOSITORY"; do
+    mkdir -p "$repository/$GROUP_PATH/$artifact/$PREVIOUS_VERSION"
+    printf '<project><version>%s</version></project>\n' "$PREVIOUS_VERSION" > \
+      "$repository/$GROUP_PATH/$artifact/$PREVIOUS_VERSION/$artifact-$PREVIOUS_VERSION.pom"
+  done
+  mkdir -p "$PRESENT_REPOSITORY/$GROUP_PATH/$artifact/$CURRENT_VERSION"
+  printf '<project><version>%s</version></project>\n' "$CURRENT_VERSION" > \
+    "$PRESENT_REPOSITORY/$GROUP_PATH/$artifact/$CURRENT_VERSION/$artifact-$CURRENT_VERSION.pom"
+done < "$COORDINATES_FILE"
+
+without_repository_credentials() {
+  env \
+    -u MAGRATHEA_PUBLISH_USERNAME \
+    -u MAGRATHEA_PUBLISH_PASSWORD \
+    -u GITHUB_SAIEN_MAVEN_USERNAME \
+    -u GITHUB_SAIEN_MAVEN_TOKEN \
+    "$@"
+}
+
+probe_artifact="$(head -n 1 "$COORDINATES_FILE" | cut -d: -f2)"
+previous_probe_path="$GROUP_PATH/$probe_artifact/$PREVIOUS_VERSION/$probe_artifact-$PREVIOUS_VERSION.pom"
+previous_probe_body="<project><version>$PREVIOUS_VERSION</version></project>"
+current_probe_path="$GROUP_PATH/$probe_artifact/$CURRENT_VERSION/$probe_artifact-$CURRENT_VERSION.pom"
+current_probe_body="<project><version>$CURRENT_VERSION</version></project>"
+
+start_fixture_server \
+  "$ABSENT_REPOSITORY" \
+  "absent" \
+  "$previous_probe_path" \
+  "$previous_probe_body"
+absent_transport_state="$FIXTURE/absent-transport-attempts"
+without_repository_credentials env \
+  PATH="$TRANSIENT_CURL_DIR:$PATH" \
+  MAGRATHEA_REAL_CURL="$REAL_CURL" \
+  MAGRATHEA_FAKE_CURL_STATE="$absent_transport_state" \
+  MAGRATHEA_REMOTE_TRANSPORT_ATTEMPTS=2 \
+  MAGRATHEA_REMOTE_TRANSPORT_RETRY_SECONDS=0 \
+  /bin/bash "$ROOT_DIR/scripts/verify-remote-version-absent" \
+    "http://127.0.0.1:$port" "$GROUP" "$CURRENT_VERSION" \
+    < "$COORDINATES_FILE" >/dev/null
+[[ "$(<"$absent_transport_state")" -gt "$coordinate_count" ]] || {
+  printf 'rollback contract failed: absent-version verification did not retry transport\n' >&2
+  exit 1
+}
+
+single_coordinate_file="$FIXTURE/single-coordinate.txt"
+head -n 1 "$COORDINATES_FILE" > "$single_coordinate_file"
+exhausted_transport_state="$FIXTURE/exhausted-transport-attempts"
+if output="$(
+  without_repository_credentials env \
+    PATH="$TRANSIENT_CURL_DIR:$PATH" \
+    MAGRATHEA_REAL_CURL="$REAL_CURL" \
+    MAGRATHEA_FAKE_CURL_STATE="$exhausted_transport_state" \
+    MAGRATHEA_FAKE_CURL_FAILURES=2 \
+    MAGRATHEA_REMOTE_TRANSPORT_ATTEMPTS=2 \
+    MAGRATHEA_REMOTE_TRANSPORT_RETRY_SECONDS=0 \
+    /bin/bash "$ROOT_DIR/scripts/verify-remote-version-absent" \
+      "http://127.0.0.1:$port" "$GROUP" "$CURRENT_VERSION" \
+      < "$single_coordinate_file" 2>&1
+)"; then
+  printf 'rollback contract failed: exhausted transport retries unexpectedly passed\n' >&2
+  exit 1
+fi
+[[ "$output" == *"repository transport failed"*"after 2 attempts"* ]] || {
+  printf 'rollback contract failed: exhausted transport retries had an unexpected error: %s\n' \
+    "$output" >&2
+  exit 1
+}
+stop_fixture_server
+
+current_pom_count="$(
+  find "$PRESENT_REPOSITORY/$GROUP_PATH" -type f -path "*/$CURRENT_VERSION/*.pom" |
+    wc -l |
+    tr -d ' '
+)"
+[[ "$current_pom_count" -eq "$coordinate_count" ]] || {
+  printf 'rollback contract failed: expected %s current-version POMs, found %s\n' \
+    "$coordinate_count" "$current_pom_count" >&2
+  exit 1
+}
+
+start_fixture_server \
+  "$PRESENT_REPOSITORY" \
+  "present" \
+  "$current_probe_path" \
+  "$current_probe_body"
+present_transport_state="$FIXTURE/present-transport-attempts"
+without_repository_credentials env \
+  PATH="$TRANSIENT_CURL_DIR:$PATH" \
+  MAGRATHEA_REAL_CURL="$REAL_CURL" \
+  MAGRATHEA_FAKE_CURL_STATE="$present_transport_state" \
+  MAGRATHEA_REMOTE_TRANSPORT_ATTEMPTS=2 \
+  MAGRATHEA_REMOTE_TRANSPORT_RETRY_SECONDS=0 \
+  MAGRATHEA_REMOTE_VERIFY_ATTEMPTS=1 \
+  MAGRATHEA_REMOTE_VERIFY_RETRY_SECONDS=0 \
+  /bin/bash "$ROOT_DIR/scripts/verify-remote-version-present" \
+    "http://127.0.0.1:$port" "$GROUP" "$CURRENT_VERSION" \
+    < "$COORDINATES_FILE" >/dev/null
+[[ "$(<"$present_transport_state")" -gt "$coordinate_count" ]] || {
+  printf 'rollback contract failed: present-version verification did not retry transport\n' >&2
+  exit 1
+}
+
+checksum_version() {
+  local version="$1"
+  while IFS=: read -r ignored_group artifact ignored_version; do
+    shasum -a 256 \
+      "$PRESENT_REPOSITORY/$GROUP_PATH/$artifact/$version/$artifact-$version.pom"
+  done < "$COORDINATES_FILE"
+}
+
+previous_checksums_before="$(checksum_version "$PREVIOUS_VERSION")"
+current_checksums_before="$(checksum_version "$CURRENT_VERSION")"
+
+if output="$(without_repository_credentials /bin/bash "$ROOT_DIR/scripts/verify-remote-version-absent" \
+  "http://127.0.0.1:$port" "$GROUP" "$CURRENT_VERSION" \
+  < "$COORDINATES_FILE" 2>&1)"; then
+  printf 'rollback contract failed: existing immutable version was accepted\n' >&2
+  exit 1
+fi
+[[ "$output" == *"immutable coordinate already exists"* ]] || {
+  printf 'rollback contract failed: unexpected immutable rejection: %s\n' "$output" >&2
+  exit 1
+}
+
+printf '%s\n' "$PREVIOUS_VERSION" > "$FIXTURE/consumer-version.pin"
+[[ "$(<"$FIXTURE/consumer-version.pin")" == "$PREVIOUS_VERSION" ]]
+[[ "$previous_checksums_before" == "$(checksum_version "$PREVIOUS_VERSION")" ]]
+[[ "$current_checksums_before" == "$(checksum_version "$CURRENT_VERSION")" ]]
+grep -Eq '^## Rollback' "$ROOT_DIR/docs/publishing.md" || {
+  printf 'rollback contract failed: publishing runbook has no Rollback section\n' >&2
+  exit 1
+}
+grep -Eqi 'immutable' "$ROOT_DIR/docs/publishing.md" || {
+  printf 'rollback contract failed: publishing runbook omits immutable artifacts\n' >&2
+  exit 1
+}
+[[ -s "$ROOT_DIR/docs/known-issues.md" ]] || {
+  printf 'rollback contract failed: known issues are missing\n' >&2
+  exit 1
+}
+
+printf 'MAGRATHEA_ROLLBACK_CONTRACT_PASS coordinates=%s immutable=1 transportRetry=verified previousPin=%s\n' \
+  "$coordinate_count" "$PREVIOUS_VERSION"

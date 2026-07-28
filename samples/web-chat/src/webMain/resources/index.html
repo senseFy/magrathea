@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en" data-magrathea-runtime="loading">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; connect-src 'self' http://127.0.0.1:18081; img-src 'self'; style-src 'self'; script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'">
+  <title>Magrathea Web Chat</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <h1>Magrathea Web Chat</h1>
+    <p>Status: <span id="chat-status">idle</span></p>
+    <pre id="chat-transcript" aria-live="polite"></pre>
+    <p id="chat-error" role="alert"></p>
+    <form id="chat-form">
+      <label for="chat-input">Message</label>
+      <input id="chat-input" autocomplete="off" required disabled>
+      <button type="submit" disabled>Send</button>
+      <button id="chat-cancel" type="button" disabled>Cancel</button>
+      <button id="chat-close" type="button" disabled>Close</button>
+    </form>
+  </main>
+  <script src="magrathea-web-chat-sample.js" defer></script>
+</body>
+</html>

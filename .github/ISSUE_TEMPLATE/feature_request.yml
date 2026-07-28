@@ -1,0 +1,70 @@
+name: Feature proposal
+description: Propose a scoped capability that fits Magrathea's documented runtime boundaries
+title: "[Proposal] "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start with the user or integration problem. A concrete contract and verification boundary are more useful than a broad feature label.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I reviewed the architecture, explicit Alpha non-goals, and existing proposals.
+          required: true
+        - label: The proposal contains no credentials, private prompts, or proprietary Provider payloads.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Who is blocked, and what cannot be expressed through the current public contracts?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed contract or behavior
+      description: Describe observable behavior, not only an implementation.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Expected layer
+      options:
+        - Kernel contract
+        - Runtime
+        - Optional capability or Provider adapter
+        - Platform adapter
+        - Chatbot facade
+        - Gateway or browser client
+        - Tooling or documentation
+        - Unsure
+    validations:
+      required: true
+
+  - type: textarea
+    id: portability
+    attributes:
+      label: Platforms and compatibility
+      description: Identify target platforms, protocol implications, persistence changes, and expected compatibility risk.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include composition-level solutions or existing extension points.
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: Proposed verification
+      description: Name the nearest meaningful unit, contract, integration, or platform boundary.

@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+VERSION="${2:-0.1.0-alpha.1}"
+FIXTURE="$ROOT_DIR/build/supply-chain-contract-fixture"
+
+fail() {
+  printf 'supply-chain contract verification failed: %s\n' "$*" >&2
+  exit 1
+}
+
+reset_fixture() {
+  rm -rf "$FIXTURE"
+  mkdir -p \
+    "$FIXTURE/gradle/wrapper" \
+    "$FIXTURE/build/reports/cyclonedx" \
+    "$FIXTURE/tooling/web-browser-e2e" \
+    "$FIXTURE/kotlin-js-store" \
+    "$FIXTURE/scripts"
+  cp "$ROOT_DIR/gradle/wrapper/gradle-wrapper.properties" "$FIXTURE/gradle/wrapper/"
+  cp "$ROOT_DIR/gradle/wrapper/gradle-wrapper.jar" "$FIXTURE/gradle/wrapper/"
+  cp "$ROOT_DIR/gradle/libs.versions.toml" "$FIXTURE/gradle/"
+  cp "$ROOT_DIR/build/reports/cyclonedx/bom.json" "$FIXTURE/build/reports/cyclonedx/"
+  cp "$ROOT_DIR/tooling/web-browser-e2e/package-lock.json" "$FIXTURE/tooling/web-browser-e2e/"
+  cp "$ROOT_DIR/kotlin-js-store/yarn.lock" "$FIXTURE/kotlin-js-store/"
+  cp "$ROOT_DIR/scripts/verify-supply-chain" "$FIXTURE/scripts/"
+}
+
+expect_rejected() {
+  local expected="$1"
+  local output
+  if output="$("$FIXTURE/scripts/verify-supply-chain" "$FIXTURE" "$VERSION" 2>&1)"; then
+    fail "unsafe supply-chain fixture unexpectedly passed"
+  fi
+  [[ "$output" == *"$expected"* ]] || fail "unexpected rejection: $output"
+}
+
+reset_fixture
+"$FIXTURE/scripts/verify-supply-chain" "$FIXTURE" "$VERSION" >/dev/null
+
+reset_fixture
+ruby -pi -e 'sub(/distributionSha256Sum=.*/, "distributionSha256Sum=" + "0" * 64)' \
+  "$FIXTURE/gradle/wrapper/gradle-wrapper.properties"
+expect_rejected "distribution checksum is missing or unreviewed"
+
+reset_fixture
+ruby -rjson -e '
+  path = ARGV.fetch(0)
+  bom = JSON.parse(File.read(path))
+  bom.fetch("components") << {
+    "type" => "library",
+    "group" => "saien.magrathea",
+    "name" => "magrathea-unlisted-module",
+    "version" => ARGV.fetch(1),
+    "bom-ref" => "saien.magrathea:magrathea-unlisted-module",
+    "licenses" => [{"license" => {"id" => "MIT"}}]
+  }
+  File.write(path, JSON.pretty_generate(bom))
+' "$FIXTURE/build/reports/cyclonedx/bom.json" "$VERSION"
+expect_rejected "published module set differs from SBOM"
+
+reset_fixture
+ruby -rjson -e '
+  path = ARGV.fetch(0)
+  bom = JSON.parse(File.read(path))
+  component = bom.fetch("components").find { |item| item["group"] != "saien.magrathea" }
+  component.delete("licenses")
+  File.write(path, JSON.pretty_generate(bom))
+' "$FIXTURE/build/reports/cyclonedx/bom.json"
+expect_rejected "unknown license"
+
+rm -rf "$FIXTURE"
+printf 'MAGRATHEA_SUPPLY_CHAIN_CONTRACT_PASS negative_cases=3\n'

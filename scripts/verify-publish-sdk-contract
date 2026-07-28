@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+PUBLISHER="$ROOT_DIR/scripts/publish-sdk"
+
+fail() {
+  printf 'publish contract verification failed: %s\n' "$*" >&2
+  exit 1
+}
+
+run_publisher() {
+  /bin/bash "$PUBLISHER" "$@"
+}
+
+expect_rejected() {
+  local expected="$1"
+  shift
+  local output
+  if output="$(
+    env -u MAGRATHEA_SIGNING_KEY -u MAGRATHEA_SIGNING_PASSWORD \
+      /bin/bash "$PUBLISHER" "$@" 2>&1
+  )"; then
+    fail "unsafe invocation unexpectedly succeeded: $*"
+  fi
+  [[ "$output" == *"$expected"* ]] || fail "unexpected rejection for $*: $output"
+}
+
+/bin/bash -n "$PUBLISHER"
+/bin/bash -n "$ROOT_DIR/scripts/verify-release-tag"
+/bin/bash -n "$ROOT_DIR/scripts/verify-remote-version-absent"
+/bin/bash -n "$ROOT_DIR/scripts/verify-remote-version-present"
+help="$(run_publisher --help)"
+[[ "$help" != *"--password"* ]] || fail "help exposes a password argument"
+[[ "$help" != *"--allow-dirty"* ]] || fail "help exposes a dirty remote path"
+[[ "$help" == *"--prepare-only"* && "$help" == *"--use-prepared"* ]] ||
+  fail "help omits the staged release flow"
+[[ "$help" == *"--verified-ci-run"* ]] ||
+  fail "help omits the exact-SHA CI promotion flow"
+
+expect_rejected "does not allow --skip-tests" --target github --skip-tests --dry-run
+expect_rejected "does not allow --no-clean" --target custom --repo-url https://example.invalid/releases --no-clean --dry-run
+expect_rejected "require a remote publish target" --prepare-only
+expect_rejected "cannot be combined" --target github --prepare-only --use-prepared
+expect_rejected "positive numeric workflow run ID" --target github --prepare-only --verified-ci-run invalid
+expect_rejected "valid only with --prepare-only" --target github --verified-ci-run 123
+expect_rejected "Unknown option: --password" --password secret
+expect_rejected "Unknown option: --allow-dirty" --allow-dirty
+expect_rejected "requires MAGRATHEA_SIGNING_KEY" --target github
+if output="$(MAGRATHEA_SIGNING_KEY='   ' run_publisher --target github 2>&1)"; then
+  fail "whitespace-only signing key unexpectedly passed"
+fi
+[[ "$output" == *"requires MAGRATHEA_SIGNING_KEY"* ]] || fail "whitespace-only key had an unexpected rejection: $output"
+
+if grep -En -- '-Pmagrathea\.publish\.(username|password|signingKey|signingPassword)|publishProperty\("(username|password|signingKey|signingPassword)"' \
+  "$PUBLISHER" "$ROOT_DIR/build.gradle.kts" >/dev/null; then
+  fail "repository credential can still enter a Gradle command-line property"
+fi
+
+grep -Fq 'MAGRATHEA_PUBLISH_USERNAME' "$PUBLISHER" || fail "publisher does not use environment credentials"
+grep -Fq 'MAGRATHEA_PUBLISH_PASSWORD' "$ROOT_DIR/build.gradle.kts" ||
+  fail "Gradle repository does not use environment credentials"
+grep -Fq 'magrathea.publish.preflightVerified' "$ROOT_DIR/build.gradle.kts" ||
+  fail "direct Gradle remote publish lacks preflight enforcement"
+grep -Fq 'verify-remote-version-absent' "$PUBLISHER" ||
+  fail "publisher does not reject immutable version reuse"
+grep -Fq "tr '.' '/'" "$PUBLISHER" ||
+  fail "publisher does not use a Bash 3.2-compatible Maven group path"
+grep -Fq 'publish-verification.receipt' "$PUBLISHER" ||
+  fail "publisher does not bind staged publication to a verification receipt"
+grep -Fq 'signing_key_sha256' "$PUBLISHER" ||
+  fail "verification receipt is not bound to signing material"
+grep -Fq 'publication-docs/${publication.name}' "$ROOT_DIR/build.gradle.kts" ||
+  fail "publication javadoc outputs are not isolated before signing"
+
+fixture_root="$(mktemp -d)"
+cleanup_fixture() {
+  rm -rf "$fixture_root"
+}
+trap cleanup_fixture EXIT
+mkdir -p "$fixture_root/scripts" "$fixture_root/docs"
+cp "$PUBLISHER" "$fixture_root/scripts/publish-sdk"
+cp "$ROOT_DIR/scripts/write-maven-manifest" "$fixture_root/scripts/write-maven-manifest"
+chmod +x "$fixture_root/scripts/publish-sdk" "$fixture_root/scripts/write-maven-manifest"
+printf 'contract public key\n' > "$fixture_root/docs/release-signing-key.asc"
+printf 'build/\n' > "$fixture_root/.gitignore"
+printf '%s\n' \
+  'magrathea.group=saien.magrathea' \
+  'magrathea.version=0.1.0-alpha.1' \
+  > "$fixture_root/gradle.properties"
+cat > "$fixture_root/gradlew" <<'FIXTURE_GRADLE'
+#!/usr/bin/env bash
+set -euo pipefail
+
+case " $* " in
+  *" verifySdkRelease "*|*" prepareSdkRelease "*)
+    mkdir -p \
+      build/distributions \
+      build/reports/supply-chain \
+      build/sdk-verification-repository/saien/magrathea/magrathea-core/0.1.0-alpha.1
+    bundle="build/distributions/Magrathea-0.1.0-alpha.1-release-bundle.zip"
+    printf 'contract release bundle\n' > "$bundle"
+    shasum -a 256 "$bundle" > "$bundle.sha256"
+    coordinate="build/sdk-verification-repository/saien/magrathea/magrathea-core/0.1.0-alpha.1/magrathea-core-0.1.0-alpha.1"
+    printf '<project/>\n' > "$coordinate.pom"
+    printf 'pom signature\n' > "$coordinate.pom.asc"
+    printf 'artifact\n' > "$coordinate.jar"
+    printf 'artifact signature\n' > "$coordinate.jar.asc"
+    printf '{}\n' > build/reports/supply-chain/magrathea-sbom.cdx.json
+    printf 'component\tlicense\n' > build/reports/supply-chain/third-party-licenses.tsv
+    ;;
+  *" printPublishingArtifactCoordinates "*)
+    printf 'saien.magrathea:magrathea-core:0.1.0-alpha.1\n'
+    ;;
+esac
+FIXTURE_GRADLE
+chmod +x "$fixture_root/gradlew"
+git -C "$fixture_root" init --quiet
+git -C "$fixture_root" add .
+git -C "$fixture_root" \
+  -c user.name='Magrathea Contract' \
+  -c user.email='contract@invalid.example' \
+  commit --quiet -m fixture
+if ! fixture_output="$(
+  MAGRATHEA_SIGNING_KEY=contract-test-key \
+  MAGRATHEA_SIGNING_PASSWORD=contract-test-password \
+    /bin/bash "$fixture_root/scripts/publish-sdk" \
+      --target github \
+      --prepare-only \
+      --verified-ci-run 12345 \
+      2>&1
+)"; then
+  fail "Bash 3.2 release preparation with empty Gradle arguments failed: $fixture_output"
+fi
+[[ "$fixture_output" == *"Preparation completed; no remote artifacts were published"* ]] ||
+  fail "release preparation fixture did not complete without publication: $fixture_output"
+[[ "$fixture_output" == *"Running verification tasks: clean prepareSdkRelease"* ]] ||
+  fail "verified CI did not select the release-only preparation task: $fixture_output"
+[[ -s "$fixture_root/build/distributions/Magrathea-0.1.0-alpha.1-release-candidate.zip" &&
+  -s "$fixture_root/build/distributions/Magrathea-0.1.0-alpha.1-release-candidate.zip.sha256" &&
+  -s "$fixture_root/build/distributions/Magrathea-0.1.0-alpha.1-maven-files.sha256" ]] ||
+  fail "release preparation did not produce the complete promotion evidence"
+grep -Fxq 'format=2' "$fixture_root/build/release/publish-verification.receipt" ||
+  fail "release preparation did not write a format-2 receipt"
+grep -Fxq 'ci_run_id=12345' "$fixture_root/build/release/publish-verification.receipt" ||
+  fail "release receipt is not bound to the exact-SHA CI run"
+
+verification_line="$(grep -En 'run_gradle "\$\{VERIFY_TASKS\[@\]\}"' "$PUBLISHER" | cut -d: -f1)"
+preflight_line="$(grep -En 'printPublishingArtifactCoordinates \|' "$PUBLISHER" | tail -1 | cut -d: -f1)"
+[[ -n "$verification_line" && -n "$preflight_line" && "$preflight_line" -gt "$verification_line" ]] ||
+  fail "immutable-version preflight is not adjacent to and after release verification"
+
+signing_graph="$(
+  MAGRATHEA_SIGNING_KEY=contract-test-key \
+    "$ROOT_DIR/gradlew" \
+      :magrathea-core:publishKotlinMultiplatformPublicationToSdkVerificationRepository \
+      :magrathea-gateway-server:publishMavenPublicationToSdkVerificationRepository \
+      --dry-run \
+      --no-daemon \
+      --project-cache-dir "$ROOT_DIR/build/signing-contract-project-cache" \
+      --console=plain \
+      2>&1
+)" || fail "could not construct the signed publication task graph: $signing_graph"
+[[ "$signing_graph" == *":magrathea-core:signKotlinMultiplatformPublication"* ]] ||
+  fail "KMP publication is not wired to its signing task"
+[[ "$signing_graph" == *":magrathea-gateway-server:signMavenPublication"* ]] ||
+  fail "JVM publication is not wired to its signing task"
+
+if remote_guard_output="$(
+  MAGRATHEA_SIGNING_KEY=contract-test-key \
+    "$ROOT_DIR/gradlew" \
+      :magrathea-core:publishKotlinMultiplatformPublicationToGitHubPackagesRepository \
+      --no-daemon \
+      --project-cache-dir "$ROOT_DIR/build/signing-contract-project-cache" \
+      --console=plain \
+      2>&1
+)"; then
+  fail "direct remote Gradle publication bypassed the preflight guard"
+fi
+[[ "$remote_guard_output" == *"immutable-version preflight through scripts/publish-sdk"* ]] ||
+  fail "direct remote publication had an unexpected rejection: $remote_guard_output"
+
+for module in \
+  magrathea-gateway-protocol \
+  magrathea-gateway-server \
+  magrathea-provider-gateway \
+  magrathea-chatbot \
+  magrathea-storage-web \
+  magrathea-web-client; do
+  grep -Fq "\"$module\"" "$PUBLISHER" || fail "publisher module inventory misses $module"
+done
+
+printf 'MAGRATHEA_PUBLISH_CONTRACT_PASS signing_graphs=2 preflight_order=verified staged_release=bound bash32_empty_args=verified\n'

@@ -1,0 +1,132 @@
+public final class saien/magrathea/policy/InMemoryToolAuditLog : saien/magrathea/policy/ToolAuditLog {
+	public fun <init> ()V
+	public fun entries (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun record (Lsaien/magrathea/policy/ToolAuditEntry;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/policy/PermissionPolicy {
+	public fun <init> (Ljava/lang/String;Z)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Z
+	public final fun copy (Ljava/lang/String;Z)Lsaien/magrathea/policy/PermissionPolicy;
+	public static synthetic fun copy$default (Lsaien/magrathea/policy/PermissionPolicy;Ljava/lang/String;ZILjava/lang/Object;)Lsaien/magrathea/policy/PermissionPolicy;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAllowed ()Z
+	public final fun getPermission ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/policy/PolicyBackedApprovalGateway : saien/magrathea/core/ToolApprovalGateway {
+	public fun <init> (Lsaien/magrathea/policy/ToolPolicyEngine;Lsaien/magrathea/policy/ToolApprovalPresenter;Lsaien/magrathea/policy/ToolAuditLog;Lkotlin/jvm/functions/Function0;Lsaien/magrathea/core/EpochClock;)V
+	public synthetic fun <init> (Lsaien/magrathea/policy/ToolPolicyEngine;Lsaien/magrathea/policy/ToolApprovalPresenter;Lsaien/magrathea/policy/ToolAuditLog;Lkotlin/jvm/functions/Function0;Lsaien/magrathea/core/EpochClock;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun requestApproval (Lsaien/magrathea/core/ToolApprovalRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/policy/PolicyBackedPermissionGateway : saien/magrathea/core/ToolPermissionGateway {
+	public fun <init> (Lsaien/magrathea/policy/ToolPolicyEngine;Lsaien/magrathea/policy/ToolAuditLog;Lsaien/magrathea/core/EpochClock;)V
+	public synthetic fun <init> (Lsaien/magrathea/policy/ToolPolicyEngine;Lsaien/magrathea/policy/ToolAuditLog;Lsaien/magrathea/core/EpochClock;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun ensurePermission (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/policy/ToolApprovalMode : java/lang/Enum {
+	public static final field ALLOW Lsaien/magrathea/policy/ToolApprovalMode;
+	public static final field ASK_EVERY_TIME Lsaien/magrathea/policy/ToolApprovalMode;
+	public static final field ASK_ONCE_PER_SESSION Lsaien/magrathea/policy/ToolApprovalMode;
+	public static final field DENY Lsaien/magrathea/policy/ToolApprovalMode;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/policy/ToolApprovalMode;
+	public static fun values ()[Lsaien/magrathea/policy/ToolApprovalMode;
+}
+
+public abstract interface class saien/magrathea/policy/ToolApprovalPresenter {
+	public abstract fun requestApproval (Lsaien/magrathea/core/ToolApprovalRequest;Lsaien/magrathea/policy/ToolPolicy;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/policy/ToolAuditEntry {
+	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/policy/ToolAuditOutcome;Lsaien/magrathea/policy/ToolRiskLevel;Lsaien/magrathea/policy/ToolApprovalMode;Ljava/lang/String;Ljava/lang/String;J)V
+	public synthetic fun <init> (Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/policy/ToolAuditOutcome;Lsaien/magrathea/policy/ToolRiskLevel;Lsaien/magrathea/policy/ToolApprovalMode;Ljava/lang/String;Ljava/lang/String;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Lsaien/magrathea/policy/ToolAuditOutcome;
+	public final fun component5 ()Lsaien/magrathea/policy/ToolRiskLevel;
+	public final fun component6 ()Lsaien/magrathea/policy/ToolApprovalMode;
+	public final fun component7 ()Ljava/lang/String;
+	public final fun component8 ()Ljava/lang/String;
+	public final fun component9 ()J
+	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/policy/ToolAuditOutcome;Lsaien/magrathea/policy/ToolRiskLevel;Lsaien/magrathea/policy/ToolApprovalMode;Ljava/lang/String;Ljava/lang/String;J)Lsaien/magrathea/policy/ToolAuditEntry;
+	public static synthetic fun copy$default (Lsaien/magrathea/policy/ToolAuditEntry;Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/policy/ToolAuditOutcome;Lsaien/magrathea/policy/ToolRiskLevel;Lsaien/magrathea/policy/ToolApprovalMode;Ljava/lang/String;Ljava/lang/String;JILjava/lang/Object;)Lsaien/magrathea/policy/ToolAuditEntry;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getApprovalMode ()Lsaien/magrathea/policy/ToolApprovalMode;
+	public final fun getCreatedAtEpochMs ()J
+	public final fun getOutcome ()Lsaien/magrathea/policy/ToolAuditOutcome;
+	public final fun getPermission ()Ljava/lang/String;
+	public final fun getReason ()Ljava/lang/String;
+	public final fun getRiskLevel ()Lsaien/magrathea/policy/ToolRiskLevel;
+	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun getToolCallId ()Ljava/lang/String;
+	public final fun getToolName ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class saien/magrathea/policy/ToolAuditLog {
+	public abstract fun entries (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun entries$default (Lsaien/magrathea/policy/ToolAuditLog;Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun record (Lsaien/magrathea/policy/ToolAuditEntry;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/policy/ToolAuditLog$DefaultImpls {
+	public static synthetic fun entries$default (Lsaien/magrathea/policy/ToolAuditLog;Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/policy/ToolAuditOutcome : java/lang/Enum {
+	public static final field APPROVAL_REQUESTED Lsaien/magrathea/policy/ToolAuditOutcome;
+	public static final field PERMISSION_ALLOWED Lsaien/magrathea/policy/ToolAuditOutcome;
+	public static final field PERMISSION_DENIED Lsaien/magrathea/policy/ToolAuditOutcome;
+	public static final field TOOL_ALLOWED Lsaien/magrathea/policy/ToolAuditOutcome;
+	public static final field TOOL_APPROVED Lsaien/magrathea/policy/ToolAuditOutcome;
+	public static final field TOOL_DENIED Lsaien/magrathea/policy/ToolAuditOutcome;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/policy/ToolAuditOutcome;
+	public static fun values ()[Lsaien/magrathea/policy/ToolAuditOutcome;
+}
+
+public final class saien/magrathea/policy/ToolPolicy {
+	public fun <init> (Ljava/lang/String;Lsaien/magrathea/policy/ToolRiskLevel;Lsaien/magrathea/policy/ToolApprovalMode;Ljava/util/Set;)V
+	public synthetic fun <init> (Ljava/lang/String;Lsaien/magrathea/policy/ToolRiskLevel;Lsaien/magrathea/policy/ToolApprovalMode;Ljava/util/Set;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Lsaien/magrathea/policy/ToolRiskLevel;
+	public final fun component3 ()Lsaien/magrathea/policy/ToolApprovalMode;
+	public final fun component4 ()Ljava/util/Set;
+	public final fun copy (Ljava/lang/String;Lsaien/magrathea/policy/ToolRiskLevel;Lsaien/magrathea/policy/ToolApprovalMode;Ljava/util/Set;)Lsaien/magrathea/policy/ToolPolicy;
+	public static synthetic fun copy$default (Lsaien/magrathea/policy/ToolPolicy;Ljava/lang/String;Lsaien/magrathea/policy/ToolRiskLevel;Lsaien/magrathea/policy/ToolApprovalMode;Ljava/util/Set;ILjava/lang/Object;)Lsaien/magrathea/policy/ToolPolicy;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getApprovalMode ()Lsaien/magrathea/policy/ToolApprovalMode;
+	public final fun getRequiredPermissions ()Ljava/util/Set;
+	public final fun getRiskLevel ()Lsaien/magrathea/policy/ToolRiskLevel;
+	public final fun getToolName ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/policy/ToolPolicyEngine {
+	public fun <init> ()V
+	public fun <init> (Ljava/util/List;Ljava/util/List;Ljava/lang/String;Lsaien/magrathea/policy/ToolPolicy;)V
+	public synthetic fun <init> (Ljava/util/List;Ljava/util/List;Ljava/lang/String;Lsaien/magrathea/policy/ToolPolicy;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getPolicyVersion ()Ljava/lang/String;
+	public final fun isPermissionAllowed (Ljava/lang/String;)Z
+	public final fun policyFor (Ljava/lang/String;)Lsaien/magrathea/policy/ToolPolicy;
+}
+
+public final class saien/magrathea/policy/ToolRiskLevel : java/lang/Enum {
+	public static final field CRITICAL Lsaien/magrathea/policy/ToolRiskLevel;
+	public static final field HIGH Lsaien/magrathea/policy/ToolRiskLevel;
+	public static final field LOW Lsaien/magrathea/policy/ToolRiskLevel;
+	public static final field MEDIUM Lsaien/magrathea/policy/ToolRiskLevel;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/policy/ToolRiskLevel;
+	public static fun values ()[Lsaien/magrathea/policy/ToolRiskLevel;
+}
+

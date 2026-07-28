@@ -1,0 +1,334 @@
+public final class saien/magrathea/mcp/JvmMcpStdioKt {
+	public static final fun jvmStdioMcpTransportFactory (Lsaien/magrathea/mcp/JvmMcpStdioProcess;)Lsaien/magrathea/mcp/McpTransportFactory;
+}
+
+public final class saien/magrathea/mcp/JvmMcpStdioProcess {
+	public fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/util/Map;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/List;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/util/Map;
+	public final fun copy (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/util/Map;)Lsaien/magrathea/mcp/JvmMcpStdioProcess;
+	public static synthetic fun copy$default (Lsaien/magrathea/mcp/JvmMcpStdioProcess;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/util/Map;ILjava/lang/Object;)Lsaien/magrathea/mcp/JvmMcpStdioProcess;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getArguments ()Ljava/util/List;
+	public final fun getCommand ()Ljava/lang/String;
+	public final fun getEnvironment ()Ljava/util/Map;
+	public final fun getWorkingDirectory ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/mcp/McpConnectionFailure : java/lang/Enum {
+	public static final field AUTHENTICATION Lsaien/magrathea/mcp/McpConnectionFailure;
+	public static final field CLOSED Lsaien/magrathea/mcp/McpConnectionFailure;
+	public static final field PROTOCOL Lsaien/magrathea/mcp/McpConnectionFailure;
+	public static final field TRANSPORT Lsaien/magrathea/mcp/McpConnectionFailure;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/mcp/McpConnectionFailure;
+	public static fun values ()[Lsaien/magrathea/mcp/McpConnectionFailure;
+}
+
+public final class saien/magrathea/mcp/McpConnectionOptions {
+	public fun <init> ()V
+	public fun <init> (JJIIIIII)V
+	public synthetic fun <init> (JJIIIIIIILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun component3 ()I
+	public final fun component4 ()I
+	public final fun component5 ()I
+	public final fun component6 ()I
+	public final fun component7 ()I
+	public final fun component8 ()I
+	public final fun copy (JJIIIIII)Lsaien/magrathea/mcp/McpConnectionOptions;
+	public static synthetic fun copy$default (Lsaien/magrathea/mcp/McpConnectionOptions;JJIIIIIIILjava/lang/Object;)Lsaien/magrathea/mcp/McpConnectionOptions;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getInitializeTimeoutMs ()J
+	public final fun getListToolsTimeoutMs ()J
+	public final fun getMaxServerInstructionsChars ()I
+	public final fun getMaxToolDefinitionChars ()I
+	public final fun getMaxToolListChars ()I
+	public final fun getMaxToolListPages ()I
+	public final fun getMaxToolResultChars ()I
+	public final fun getMaxTools ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class saien/magrathea/mcp/McpConnectionState {
+}
+
+public final class saien/magrathea/mcp/McpConnectionState$Connected : saien/magrathea/mcp/McpConnectionState {
+	public fun <init> (Lsaien/magrathea/mcp/McpImplementationInfo;ILjava/lang/String;)V
+	public synthetic fun <init> (Lsaien/magrathea/mcp/McpImplementationInfo;ILjava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lsaien/magrathea/mcp/McpImplementationInfo;
+	public final fun component2 ()I
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Lsaien/magrathea/mcp/McpImplementationInfo;ILjava/lang/String;)Lsaien/magrathea/mcp/McpConnectionState$Connected;
+	public static synthetic fun copy$default (Lsaien/magrathea/mcp/McpConnectionState$Connected;Lsaien/magrathea/mcp/McpImplementationInfo;ILjava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/mcp/McpConnectionState$Connected;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getInstructions ()Ljava/lang/String;
+	public final fun getServer ()Lsaien/magrathea/mcp/McpImplementationInfo;
+	public final fun getToolCount ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/mcp/McpConnectionState$Connecting : saien/magrathea/mcp/McpConnectionState {
+	public static final field INSTANCE Lsaien/magrathea/mcp/McpConnectionState$Connecting;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/mcp/McpConnectionState$Disconnected : saien/magrathea/mcp/McpConnectionState {
+	public static final field INSTANCE Lsaien/magrathea/mcp/McpConnectionState$Disconnected;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/mcp/McpConnectionState$Failed : saien/magrathea/mcp/McpConnectionState {
+	public fun <init> (Lsaien/magrathea/mcp/McpConnectionFailure;)V
+	public final fun component1 ()Lsaien/magrathea/mcp/McpConnectionFailure;
+	public final fun copy (Lsaien/magrathea/mcp/McpConnectionFailure;)Lsaien/magrathea/mcp/McpConnectionState$Failed;
+	public static synthetic fun copy$default (Lsaien/magrathea/mcp/McpConnectionState$Failed;Lsaien/magrathea/mcp/McpConnectionFailure;ILjava/lang/Object;)Lsaien/magrathea/mcp/McpConnectionState$Failed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Lsaien/magrathea/mcp/McpConnectionFailure;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/mcp/McpImplementationInfo {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/mcp/McpImplementationInfo;
+	public static synthetic fun copy$default (Lsaien/magrathea/mcp/McpImplementationInfo;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/mcp/McpImplementationInfo;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getName ()Ljava/lang/String;
+	public final fun getTitle ()Ljava/lang/String;
+	public final fun getVersion ()Ljava/lang/String;
+	public final fun getWebsiteUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/mcp/McpModelsKt {
+	public static final fun toToolDefinition (Lsaien/magrathea/mcp/McpToolDescriptor;Lsaien/magrathea/mcp/McpToolPolicy;)Lsaien/magrathea/core/ToolDefinition;
+}
+
+public final class saien/magrathea/mcp/McpOperation : java/lang/Enum {
+	public static final field CALL_TOOL Lsaien/magrathea/mcp/McpOperation;
+	public static final field CONNECT Lsaien/magrathea/mcp/McpOperation;
+	public static final field REFRESH_TOOLS Lsaien/magrathea/mcp/McpOperation;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/mcp/McpOperation;
+	public static fun values ()[Lsaien/magrathea/mcp/McpOperation;
+}
+
+public final class saien/magrathea/mcp/McpOperationException : java/lang/IllegalStateException {
+	public fun <init> (Lsaien/magrathea/mcp/McpOperation;Lsaien/magrathea/mcp/McpConnectionFailure;)V
+	public final fun getOperation ()Lsaien/magrathea/mcp/McpOperation;
+	public final fun getReason ()Lsaien/magrathea/mcp/McpConnectionFailure;
+}
+
+public abstract interface class saien/magrathea/mcp/McpRequestHeadersProvider {
+	public abstract fun headers (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/mcp/McpServer {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/mcp/McpServer;
+	public static synthetic fun copy$default (Lsaien/magrathea/mcp/McpServer;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/mcp/McpServer;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDisplayName ()Ljava/lang/String;
+	public final fun getId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/mcp/McpServerConnection : saien/magrathea/core/ToolRegistry {
+	public fun <init> (Lsaien/magrathea/mcp/McpServer;Lsaien/magrathea/mcp/McpTransportFactory;Lsaien/magrathea/mcp/McpToolPolicyProvider;Lsaien/magrathea/mcp/McpImplementationInfo;Lsaien/magrathea/mcp/McpConnectionOptions;Lkotlinx/coroutines/CoroutineDispatcher;)V
+	public synthetic fun <init> (Lsaien/magrathea/mcp/McpServer;Lsaien/magrathea/mcp/McpTransportFactory;Lsaien/magrathea/mcp/McpToolPolicyProvider;Lsaien/magrathea/mcp/McpImplementationInfo;Lsaien/magrathea/mcp/McpConnectionOptions;Lkotlinx/coroutines/CoroutineDispatcher;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun connect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun definitions ()Ljava/util/List;
+	public final fun disconnect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun find (Ljava/lang/String;)Lsaien/magrathea/core/ToolExecutor;
+	public final fun getServer ()Lsaien/magrathea/mcp/McpServer;
+	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getTools ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun refreshTools (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/mcp/McpTaskSupport : java/lang/Enum {
+	public static final field FORBIDDEN Lsaien/magrathea/mcp/McpTaskSupport;
+	public static final field OPTIONAL Lsaien/magrathea/mcp/McpTaskSupport;
+	public static final field REQUIRED Lsaien/magrathea/mcp/McpTaskSupport;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/mcp/McpTaskSupport;
+	public static fun values ()[Lsaien/magrathea/mcp/McpTaskSupport;
+}
+
+public final class saien/magrathea/mcp/McpToolCompatibility : java/lang/Enum {
+	public static final field REQUIRES_TASKS Lsaien/magrathea/mcp/McpToolCompatibility;
+	public static final field SUPPORTED Lsaien/magrathea/mcp/McpToolCompatibility;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/mcp/McpToolCompatibility;
+	public static fun values ()[Lsaien/magrathea/mcp/McpToolCompatibility;
+}
+
+public final class saien/magrathea/mcp/McpToolDescriptor {
+	public fun <init> (Lsaien/magrathea/mcp/McpServer;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Lsaien/magrathea/mcp/McpToolHints;Ljava/util/List;Lsaien/magrathea/mcp/McpTaskSupport;Lsaien/magrathea/mcp/McpToolCompatibility;Lkotlinx/serialization/json/JsonObject;)V
+	public synthetic fun <init> (Lsaien/magrathea/mcp/McpServer;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Lsaien/magrathea/mcp/McpToolHints;Ljava/util/List;Lsaien/magrathea/mcp/McpTaskSupport;Lsaien/magrathea/mcp/McpToolCompatibility;Lkotlinx/serialization/json/JsonObject;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lsaien/magrathea/mcp/McpServer;
+	public final fun component10 ()Lsaien/magrathea/mcp/McpTaskSupport;
+	public final fun component11 ()Lsaien/magrathea/mcp/McpToolCompatibility;
+	public final fun component12 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun component7 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun component8 ()Lsaien/magrathea/mcp/McpToolHints;
+	public final fun component9 ()Ljava/util/List;
+	public final fun copy (Lsaien/magrathea/mcp/McpServer;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Lsaien/magrathea/mcp/McpToolHints;Ljava/util/List;Lsaien/magrathea/mcp/McpTaskSupport;Lsaien/magrathea/mcp/McpToolCompatibility;Lkotlinx/serialization/json/JsonObject;)Lsaien/magrathea/mcp/McpToolDescriptor;
+	public static synthetic fun copy$default (Lsaien/magrathea/mcp/McpToolDescriptor;Lsaien/magrathea/mcp/McpServer;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Lsaien/magrathea/mcp/McpToolHints;Ljava/util/List;Lsaien/magrathea/mcp/McpTaskSupport;Lsaien/magrathea/mcp/McpToolCompatibility;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lsaien/magrathea/mcp/McpToolDescriptor;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCompatibility ()Lsaien/magrathea/mcp/McpToolCompatibility;
+	public final fun getDescription ()Ljava/lang/String;
+	public final fun getHints ()Lsaien/magrathea/mcp/McpToolHints;
+	public final fun getIcons ()Ljava/util/List;
+	public final fun getInputSchema ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getMetadata ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getOutputSchema ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getRemoteName ()Ljava/lang/String;
+	public final fun getRuntimeName ()Ljava/lang/String;
+	public final fun getServer ()Lsaien/magrathea/mcp/McpServer;
+	public final fun getTaskSupport ()Lsaien/magrathea/mcp/McpTaskSupport;
+	public final fun getTitle ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/mcp/McpToolHints {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/Boolean;Ljava/lang/Boolean;Ljava/lang/Boolean;Ljava/lang/Boolean;)V
+	public synthetic fun <init> (Ljava/lang/Boolean;Ljava/lang/Boolean;Ljava/lang/Boolean;Ljava/lang/Boolean;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/Boolean;
+	public final fun component2 ()Ljava/lang/Boolean;
+	public final fun component3 ()Ljava/lang/Boolean;
+	public final fun component4 ()Ljava/lang/Boolean;
+	public final fun copy (Ljava/lang/Boolean;Ljava/lang/Boolean;Ljava/lang/Boolean;Ljava/lang/Boolean;)Lsaien/magrathea/mcp/McpToolHints;
+	public static synthetic fun copy$default (Lsaien/magrathea/mcp/McpToolHints;Ljava/lang/Boolean;Ljava/lang/Boolean;Ljava/lang/Boolean;Ljava/lang/Boolean;ILjava/lang/Object;)Lsaien/magrathea/mcp/McpToolHints;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDestructive ()Ljava/lang/Boolean;
+	public final fun getIdempotent ()Ljava/lang/Boolean;
+	public final fun getOpenWorld ()Ljava/lang/Boolean;
+	public final fun getReadOnly ()Ljava/lang/Boolean;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/mcp/McpToolIcon {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/util/List;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)Lsaien/magrathea/mcp/McpToolIcon;
+	public static synthetic fun copy$default (Lsaien/magrathea/mcp/McpToolIcon;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/mcp/McpToolIcon;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMimeType ()Ljava/lang/String;
+	public final fun getSizes ()Ljava/util/List;
+	public final fun getSource ()Ljava/lang/String;
+	public final fun getTheme ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/mcp/McpToolIdentity {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/mcp/McpToolIdentity;
+	public static synthetic fun copy$default (Lsaien/magrathea/mcp/McpToolIdentity;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/mcp/McpToolIdentity;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRemoteToolName ()Ljava/lang/String;
+	public final fun getServerId ()Ljava/lang/String;
+	public final fun getServerName ()Ljava/lang/String;
+	public final fun getToolTitle ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/mcp/McpToolNames {
+	public static final field INSTANCE Lsaien/magrathea/mcp/McpToolNames;
+	public final fun runtimeName (Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+}
+
+public final class saien/magrathea/mcp/McpToolPolicy {
+	public fun <init> ()V
+	public fun <init> (ZLjava/lang/String;ZLjava/lang/Long;Ljava/lang/Integer;Ljava/lang/Integer;)V
+	public synthetic fun <init> (ZLjava/lang/String;ZLjava/lang/Long;Ljava/lang/Integer;Ljava/lang/Integer;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Z
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Z
+	public final fun component4 ()Ljava/lang/Long;
+	public final fun component5 ()Ljava/lang/Integer;
+	public final fun component6 ()Ljava/lang/Integer;
+	public final fun copy (ZLjava/lang/String;ZLjava/lang/Long;Ljava/lang/Integer;Ljava/lang/Integer;)Lsaien/magrathea/mcp/McpToolPolicy;
+	public static synthetic fun copy$default (Lsaien/magrathea/mcp/McpToolPolicy;ZLjava/lang/String;ZLjava/lang/Long;Ljava/lang/Integer;Ljava/lang/Integer;ILjava/lang/Object;)Lsaien/magrathea/mcp/McpToolPolicy;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEnabled ()Z
+	public final fun getMaxCallsPerRun ()Ljava/lang/Integer;
+	public final fun getMaxCallsPerTurn ()Ljava/lang/Integer;
+	public final fun getRequiresApproval ()Z
+	public final fun getRequiresPermission ()Ljava/lang/String;
+	public final fun getTimeoutMs ()Ljava/lang/Long;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class saien/magrathea/mcp/McpToolPolicyProvider {
+	public abstract fun policyFor (Lsaien/magrathea/mcp/McpToolDescriptor;)Lsaien/magrathea/mcp/McpToolPolicy;
+}
+
+public final class saien/magrathea/mcp/McpToolRegistry : saien/magrathea/core/ToolRegistry {
+	public fun <init> (Lkotlin/jvm/functions/Function0;)V
+	public fun definitions ()Ljava/util/List;
+	public fun find (Ljava/lang/String;)Lsaien/magrathea/core/ToolExecutor;
+}
+
+public final class saien/magrathea/mcp/McpToolResultMetadataKt {
+	public static final fun mcpToolIdentityOrNull (Lkotlinx/serialization/json/JsonObject;)Lsaien/magrathea/mcp/McpToolIdentity;
+}
+
+public abstract interface class saien/magrathea/mcp/McpTransportFactory {
+	public abstract fun create (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/mcp/McpTransportHandle {
+	public fun <init> (Lio/modelcontextprotocol/kotlin/sdk/shared/Transport;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;)V
+	public synthetic fun <init> (Lio/modelcontextprotocol/kotlin/sdk/shared/Transport;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getTransport ()Lio/modelcontextprotocol/kotlin/sdk/shared/Transport;
+}
+
+public final class saien/magrathea/mcp/McpTransportsKt {
+	public static final fun requireValidMcpStreamableHttpEndpoint (Ljava/lang/String;)V
+	public static final fun streamableHttpMcpTransportFactory (Lio/ktor/client/HttpClient;Ljava/lang/String;Lsaien/magrathea/mcp/McpRequestHeadersProvider;)Lsaien/magrathea/mcp/McpTransportFactory;
+	public static synthetic fun streamableHttpMcpTransportFactory$default (Lio/ktor/client/HttpClient;Ljava/lang/String;Lsaien/magrathea/mcp/McpRequestHeadersProvider;ILjava/lang/Object;)Lsaien/magrathea/mcp/McpTransportFactory;
+}
+

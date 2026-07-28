@@ -1,0 +1,13 @@
+{
+  "events": [
+    {"type": "text_start"},
+    {"type": "text_delta", "delta": "hello"},
+    {"type": "text_end"},
+    {
+      "type": "completed",
+      "finishReason": "STOP",
+      "stopReason": "COMPLETED",
+      "usage": {"inputTokens": 2, "outputTokens": 1}
+    }
+  ]
+}

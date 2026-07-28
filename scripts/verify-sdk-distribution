@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="${1:?usage: verify-sdk-distribution ROOT_DIR VERSION}"
+VERSION="${2:?usage: verify-sdk-distribution ROOT_DIR VERSION}"
+REPOSITORY="$ROOT_DIR/build/sdk-verification-repository/saien/magrathea"
+
+MOBILE_KMP_MODULES=(
+  magrathea-core
+  magrathea-provider-api
+  magrathea-provider-openai
+  magrathea-provider-gemini
+  magrathea-provider-anthropic
+  magrathea-runtime
+  magrathea-mcp
+  magrathea-policy
+  magrathea-storage-room
+  magrathea-credentials
+  magrathea-gateway-protocol
+  magrathea-provider-gateway
+  magrathea-chatbot
+)
+WEB_ENABLED_KMP_MODULES=(
+  magrathea-core
+  magrathea-provider-api
+  magrathea-runtime
+  magrathea-mcp
+  magrathea-policy
+  magrathea-gateway-protocol
+  magrathea-provider-gateway
+  magrathea-chatbot
+)
+WEB_ONLY_KMP_MODULES=(magrathea-storage-web magrathea-web-client)
+JVM_MODULES=(magrathea-gateway-server)
+
+fail() {
+  printf 'distribution verification failed: %s\n' "$*" >&2
+  exit 1
+}
+
+require_file() {
+  local file="$1"
+  [[ -s "$file" ]] || fail "missing or empty file $file"
+}
+
+verify_checksums() {
+  local file="$1"
+  require_file "$file.md5"
+  require_file "$file.sha1"
+}
+
+verify_coordinate() {
+  local artifact="$1"
+  local extension="$2"
+  local directory="$REPOSITORY/$artifact/$VERSION"
+  local prefix="$directory/$artifact-$VERSION"
+  local main="$prefix.$extension"
+  local pom="$prefix.pom"
+  local sources="$prefix-sources.jar"
+  local javadoc="$prefix-javadoc.jar"
+
+  require_file "$main"
+  require_file "$pom"
+  require_file "$sources"
+  require_file "$javadoc"
+  require_file "$prefix.module"
+  verify_checksums "$main"
+  verify_checksums "$pom"
+  verify_checksums "$sources"
+  verify_checksums "$javadoc"
+
+  grep -Eq '<name>[^<]+</name>' "$pom" || fail "$artifact POM has no name"
+  grep -Eq '<description>[^<]+</description>' "$pom" || fail "$artifact POM has no description"
+  grep -Fq '<url>https://github.com/senseFy/magrathea</url>' "$pom" ||
+    fail "$artifact POM has no project URL"
+  grep -Fq '<licenses>' "$pom" || fail "$artifact POM has no license"
+  grep -Fq '<developers>' "$pom" || fail "$artifact POM has no developer"
+  grep -Fq '<scm>' "$pom" || fail "$artifact POM has no SCM metadata"
+  jar tf "$javadoc" | awk '/(^|\/)index[.]html$/ { found = 1 } END { exit !found }' ||
+    fail "$artifact javadoc jar has no generated index"
+}
+
+require_file "$ROOT_DIR/LICENSE"
+grep -Fxq 'MIT License' "$ROOT_DIR/LICENSE" || fail "LICENSE is not MIT text"
+grep -Eq '^Permission is hereby granted, free of charge' "$ROOT_DIR/LICENSE" ||
+  fail "LICENSE is not canonical MIT text"
+[[ -d "$REPOSITORY" ]] || fail "verification repository does not exist"
+
+for module in "${MOBILE_KMP_MODULES[@]}"; do
+  verify_coordinate "$module" jar
+  verify_coordinate "$module-android" aar
+  verify_coordinate "$module-jvm" jar
+  verify_coordinate "$module-iosarm64" klib
+  verify_coordinate "$module-iossimulatorarm64" klib
+done
+
+for module in "${WEB_ENABLED_KMP_MODULES[@]}"; do
+  verify_coordinate "$module-js" klib
+  verify_coordinate "$module-wasm-js" klib
+done
+
+for module in "${WEB_ONLY_KMP_MODULES[@]}"; do
+  verify_coordinate "$module" jar
+  verify_coordinate "$module-js" klib
+  verify_coordinate "$module-wasm-js" klib
+done
+
+for module in "${JVM_MODULES[@]}"; do
+  verify_coordinate "$module" jar
+done
+
+actual_coordinates="$(find "$REPOSITORY" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+[[ "$actual_coordinates" == "88" ]] || fail "expected 88 coordinates, found $actual_coordinates"
+
+printf 'MAGRATHEA_DISTRIBUTION_PASS coordinates=88\n'

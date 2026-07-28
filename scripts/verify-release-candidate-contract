@@ -1,0 +1,229 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+FIXTURE="$(mktemp -d "${TMPDIR:-/tmp}/magrathea-candidate-contract.XXXXXX")"
+SOURCE="$FIXTURE/source"
+BUILD="$FIXTURE/build"
+REPOSITORY="$BUILD/bundle/maven"
+VERSION="9.8.7-alpha.1"
+GROUP="saien.magrathea"
+COMMIT="0123456789abcdef0123456789abcdef01234567"
+RUN_ID="123456"
+CI_RUN_ID="123450"
+COORDINATES="$BUILD/distributions/Magrathea-$VERSION-maven-coordinates.txt"
+MANIFEST="$BUILD/distributions/Magrathea-$VERSION-maven-files.sha256"
+BUNDLE="$BUILD/distributions/Magrathea-$VERSION-release-bundle.zip"
+RECEIPT="$BUILD/release/publish-verification.receipt"
+CANDIDATE="$FIXTURE/Magrathea-$VERSION-release-candidate.zip"
+CANDIDATE_CHECKSUM="$CANDIDATE.sha256"
+FAKE_BIN="$FIXTURE/bin"
+
+cleanup() {
+  rm -rf "$FIXTURE"
+}
+trap cleanup EXIT
+
+mkdir -p \
+  "$SOURCE/scripts" \
+  "$SOURCE/docs" \
+  "$BUILD/distributions" \
+  "$BUILD/release" \
+  "$BUILD/reports/supply-chain" \
+  "$BUILD/bundle/supply-chain" \
+  "$FAKE_BIN"
+cp "$ROOT_DIR/scripts/write-maven-manifest" "$SOURCE/scripts/"
+cp "$ROOT_DIR/scripts/verify-release-candidate" "$SOURCE/scripts/"
+cp "$ROOT_DIR/scripts/select-publishing-coordinates" "$SOURCE/scripts/"
+chmod +x \
+  "$SOURCE/scripts/select-publishing-coordinates" \
+  "$SOURCE/scripts/write-maven-manifest" \
+  "$SOURCE/scripts/verify-release-candidate"
+printf '%s\n' \
+  "magrathea.group=$GROUP" \
+  "magrathea.version=$VERSION" \
+  > "$SOURCE/gradle.properties"
+
+cat > "$COORDINATES" <<EOF
+$GROUP:magrathea-core:$VERSION
+$GROUP:magrathea-core-jvm:$VERSION
+EOF
+cat > "$SOURCE/gradlew" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' \\
+  '$GROUP:magrathea-core:$VERSION' \\
+  '$GROUP:magrathea-core-jvm:$VERSION'
+EOF
+cat > "$SOURCE/scripts/publish-sdk" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "\${1:-}" == "--print" ]]
+printf '%s\n' '$GROUP:magrathea-core:$VERSION'
+EOF
+chmod +x "$SOURCE/gradlew" "$SOURCE/scripts/publish-sdk"
+
+printf 'contract release public key\n' > "$SOURCE/docs/release-signing-key.asc"
+cat > "$FAKE_BIN/gpg" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case " $* " in
+  *" --import "*)
+    printf 'contract gpg import must not be used\n' >&2
+    exit 41
+    ;;
+  *" --dearmor "*)
+    output=
+    input=
+    while (( $# > 0 )); do
+      case "$1" in
+        --output)
+          output="${2:?missing dearmor output}"
+          shift 2
+          ;;
+        --batch|--yes|--quiet|--dearmor)
+          shift
+          ;;
+        *)
+          input="$1"
+          shift
+          ;;
+      esac
+    done
+    cp "${input:?missing dearmor input}" "${output:?missing dearmor output}"
+    ;;
+  *" --with-colons --show-keys "*)
+    printf 'pub:-:2048:1:0123456789ABCDEF:0:0::::::\n'
+    printf 'fpr:::::::::0123456789ABCDEF0123456789ABCDEF01234567:\n'
+    ;;
+  *)
+    printf 'unexpected contract gpg invocation: %s\n' "$*" >&2
+    exit 42
+    ;;
+esac
+EOF
+chmod +x "$FAKE_BIN/gpg"
+cat > "$FAKE_BIN/gpgv" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ " $* " == *" --keyring "* ]] || {
+  printf 'contract gpgv invocation has no explicit keyring\n' >&2
+  exit 43
+}
+EOF
+chmod +x "$FAKE_BIN/gpgv"
+
+group_path="$(printf '%s' "$GROUP" | tr '.' '/')"
+while IFS=: read -r ignored_group artifact ignored_version; do
+  directory="$REPOSITORY/$group_path/$artifact/$VERSION"
+  prefix="$directory/$artifact-$VERSION"
+  mkdir -p "$directory"
+  printf '<project><groupId>%s</groupId><artifactId>%s</artifactId><version>%s</version></project>\n' \
+    "$GROUP" "$artifact" "$VERSION" > "$prefix.pom"
+  printf 'artifact=%s version=%s\n' "$artifact" "$VERSION" > "$prefix.jar"
+  for payload in "$prefix.pom" "$prefix.jar"; do
+    printf 'contract signature for %s\n' "$(basename "$payload")" > "$payload.asc"
+  done
+done < "$COORDINATES"
+
+printf '{"bomFormat":"CycloneDX"}\n' > "$BUILD/bundle/supply-chain/magrathea-sbom.cdx.json"
+printf 'component\tlicense\nfixture\tMIT\n' > "$BUILD/bundle/supply-chain/third-party-licenses.tsv"
+cp \
+  "$BUILD/bundle/supply-chain/magrathea-sbom.cdx.json" \
+  "$BUILD/reports/supply-chain/magrathea-sbom.cdx.json"
+cp \
+  "$BUILD/bundle/supply-chain/third-party-licenses.tsv" \
+  "$BUILD/reports/supply-chain/third-party-licenses.tsv"
+
+"$SOURCE/scripts/write-maven-manifest" \
+  "$REPOSITORY" "$COORDINATES" "$MANIFEST" >/dev/null
+(
+  cd "$BUILD/bundle"
+  zip -q -X -r "$BUNDLE" maven supply-chain
+)
+printf '%s  %s\n' "$(shasum -a 256 "$BUNDLE" | awk '{ print $1 }')" "$(basename "$BUNDLE")" \
+  > "$BUNDLE.sha256"
+
+modules="$FIXTURE/modules.txt"
+printf 'magrathea-core\n' > "$modules"
+printf '%s\n' \
+  'format=2' \
+  "head=$COMMIT" \
+  "group=$GROUP" \
+  "version=$VERSION" \
+  'repository_url=https://maven.pkg.github.com/sensefy/magrathea' \
+  "ci_run_id=$CI_RUN_ID" \
+  "candidate_run_id=$RUN_ID" \
+  'candidate_run_attempt=1' \
+  "modules_sha256=$(shasum -a 256 "$modules" | awk '{ print $1 }')" \
+  'signing_key_sha256=contract-private-key-digest' \
+  "release_public_key_sha256=$(shasum -a 256 "$SOURCE/docs/release-signing-key.asc" | awk '{ print $1 }')" \
+  "coordinates_sha256=$(shasum -a 256 "$COORDINATES" | awk '{ print $1 }')" \
+  "maven_manifest_sha256=$(shasum -a 256 "$MANIFEST" | awk '{ print $1 }')" \
+  "bundle_sha256=$(shasum -a 256 "$BUNDLE" | awk '{ print $1 }')" \
+  > "$RECEIPT"
+
+(
+  cd "$BUILD"
+  zip -q -X "$CANDIDATE" \
+    "distributions/Magrathea-$VERSION-release-bundle.zip" \
+    "distributions/Magrathea-$VERSION-release-bundle.zip.sha256" \
+    "distributions/Magrathea-$VERSION-maven-coordinates.txt" \
+    "distributions/Magrathea-$VERSION-maven-files.sha256" \
+    "reports/supply-chain/magrathea-sbom.cdx.json" \
+    "reports/supply-chain/third-party-licenses.tsv" \
+    "release/publish-verification.receipt"
+)
+printf '%s  %s\n' "$(shasum -a 256 "$CANDIDATE" | awk '{ print $1 }')" "$(basename "$CANDIDATE")" \
+  > "$CANDIDATE_CHECKSUM"
+
+output="$(
+  PATH="$FAKE_BIN:$PATH" "$SOURCE/scripts/verify-release-candidate" \
+    "$SOURCE" \
+    "$CANDIDATE" \
+    "$CANDIDATE_CHECKSUM" \
+    "$COMMIT" \
+    "$VERSION" \
+    "$RUN_ID" \
+    "$FIXTURE/verified"
+)"
+[[ "$output" == *"MAGRATHEA_RELEASE_CANDIDATE_VERIFIED version=$VERSION coordinates=2 signatures=4 ci_run_id=$CI_RUN_ID candidate_run_id=$RUN_ID"* ]] || {
+  printf 'release candidate contract failed: valid candidate was rejected: %s\n' "$output" >&2
+  exit 1
+}
+
+if mismatch_output="$(
+  PATH="$FAKE_BIN:$PATH" "$SOURCE/scripts/verify-release-candidate" \
+    "$SOURCE" \
+    "$CANDIDATE" \
+    "$CANDIDATE_CHECKSUM" \
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    "$VERSION" \
+    "$RUN_ID" \
+    "$FIXTURE/mismatch" 2>&1
+)"; then
+  printf 'release candidate contract failed: wrong commit unexpectedly passed\n' >&2
+  exit 1
+fi
+[[ "$mismatch_output" == *"different commit"* ]] || {
+  printf 'release candidate contract failed: wrong-commit rejection was unclear: %s\n' \
+    "$mismatch_output" >&2
+  exit 1
+}
+
+unsigned_payload="$REPOSITORY/$group_path/magrathea-core/$VERSION/magrathea-core-$VERSION.jar"
+rm "$unsigned_payload.asc"
+if unsigned_output="$(
+  "$SOURCE/scripts/write-maven-manifest" \
+    "$REPOSITORY" "$COORDINATES" "$FIXTURE/unsigned-manifest.sha256" 2>&1
+)"; then
+  printf 'release candidate contract failed: unsigned payload unexpectedly passed\n' >&2
+  exit 1
+fi
+[[ "$unsigned_output" == *"publishable file has no signature"* ]] || {
+  printf 'release candidate contract failed: unsigned-payload rejection was unclear: %s\n' \
+    "$unsigned_output" >&2
+  exit 1
+}
+
+printf 'MAGRATHEA_RELEASE_CANDIDATE_CONTRACT_PASS coordinates=2 signatures=4\n'

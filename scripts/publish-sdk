@@ -1,0 +1,713 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+GRADLEW="$ROOT_DIR/gradlew"
+
+TARGET="local"
+VERSION=""
+REPOSITORY_NAME=""
+REPOSITORY_URL=""
+DRY_RUN=false
+SKIP_TESTS=false
+NO_CLEAN=false
+PRINT_ONLY=false
+COMMIT_VERSION=false
+PREPARE_ONLY=false
+USE_PREPARED=false
+VERIFIED_CI_RUN_ID=""
+MODULES=()
+GRADLE_ARGS=()
+VERSION_FILE="$ROOT_DIR/gradle.properties"
+VERSION_PROPERTY="magrathea.version"
+GROUP_PROPERTY="magrathea.group"
+SDK_MODULES=(
+  "magrathea-core"
+  "magrathea-provider-api"
+  "magrathea-provider-openai"
+  "magrathea-provider-gemini"
+  "magrathea-provider-anthropic"
+  "magrathea-runtime"
+  "magrathea-mcp"
+  "magrathea-storage-room"
+  "magrathea-credentials"
+  "magrathea-policy"
+  "magrathea-gateway-protocol"
+  "magrathea-gateway-server"
+  "magrathea-provider-gateway"
+  "magrathea-chatbot"
+  "magrathea-storage-web"
+  "magrathea-web-client"
+)
+
+log() {
+  printf '[publish-sdk] %s\n' "$*"
+}
+
+normalize_module() {
+  local module="$1"
+  if [[ "$module" == :* ]]; then
+    printf '%s\n' "$module"
+  else
+    printf ':%s\n' "$module"
+  fi
+}
+
+set_gradle_property() {
+  local key="$1"
+  local value="$2"
+  local file="$3"
+  local tmp
+  tmp="$(mktemp)"
+  awk -v key="$key" -v value="$value" '
+    BEGIN { updated = 0 }
+    $0 ~ "^[[:space:]]*" key "=" {
+      print key "=" value
+      updated = 1
+      next
+    }
+    { print }
+    END {
+      if (!updated) {
+        print key "=" value
+      }
+    }
+  ' "$file" > "$tmp"
+  mv "$tmp" "$file"
+}
+
+read_gradle_property() {
+  local key="$1"
+  local file="$2"
+  awk -F= -v key="$key" '
+    $1 == key {
+      print substr($0, index($0, "=") + 1)
+      exit
+    }
+  ' "$file"
+}
+
+sha256_file() {
+  shasum -a 256 "$1" | awk '{ print $1 }'
+}
+
+sha256_stdin() {
+  shasum -a 256 | awk '{ print $1 }'
+}
+
+effective_version() {
+  if [[ -n "$VERSION" && ( "$DRY_RUN" == true || "$PRINT_ONLY" == true ) ]]; then
+    printf '%s\n' "$VERSION"
+  else
+    read_gradle_property "$VERSION_PROPERTY" "$VERSION_FILE"
+  fi
+}
+
+read_receipt_property() {
+  local key="$1"
+  local receipt="$2"
+  awk -F= -v key="$key" '
+    $1 == key {
+      print substr($0, index($0, "=") + 1)
+      exit
+    }
+  ' "$receipt"
+}
+
+write_verification_receipt() {
+  local distributions_dir="$ROOT_DIR/build/distributions"
+  local release_dir="$ROOT_DIR/build/release"
+  local bundle="$distributions_dir/Magrathea-$PUBLISH_VERSION-release-bundle.zip"
+  local checksum_file="$bundle.sha256"
+  local coordinates_file="$distributions_dir/Magrathea-$PUBLISH_VERSION-maven-coordinates.txt"
+  local maven_manifest="$distributions_dir/Magrathea-$PUBLISH_VERSION-maven-files.sha256"
+  local receipt="$release_dir/publish-verification.receipt"
+  local public_key="$ROOT_DIR/docs/release-signing-key.asc"
+  local expected_bundle_digest
+  local actual_bundle_digest
+  local head
+  local modules_digest
+  local signing_key_digest
+  local public_key_digest
+  local coordinates_digest
+  local maven_manifest_digest
+  local tmp_coordinates
+  local tmp_receipt
+
+  [[ -s "$bundle" && -s "$checksum_file" ]] || {
+    echo "Verified release bundle or checksum is missing." >&2
+    exit 2
+  }
+
+  expected_bundle_digest="$(awk 'NR == 1 { print $1 }' "$checksum_file")"
+  actual_bundle_digest="$(sha256_file "$bundle")"
+  [[ "$expected_bundle_digest" == "$actual_bundle_digest" ]] || {
+    echo "Verified release bundle checksum does not match." >&2
+    exit 2
+  }
+
+  mkdir -p "$distributions_dir" "$release_dir"
+  tmp_coordinates="$(mktemp "$distributions_dir/.coordinates.XXXXXX")"
+  run_gradle --quiet printPublishingArtifactCoordinates > "$tmp_coordinates"
+  [[ -s "$tmp_coordinates" ]] || {
+    rm -f "$tmp_coordinates"
+    echo "Verified publication coordinate inventory is empty." >&2
+    exit 2
+  }
+  mv "$tmp_coordinates" "$coordinates_file"
+
+  [[ -s "$public_key" ]] || {
+    echo "Release signing public key is missing." >&2
+    exit 2
+  }
+  "$ROOT_DIR/scripts/write-maven-manifest" \
+    "$ROOT_DIR/build/sdk-verification-repository" \
+    "$coordinates_file" \
+    "$maven_manifest"
+
+  head="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+  modules_digest="$(selected_modules | sha256_stdin)"
+  signing_key_digest="$(printf '%s' "$SIGNING_KEY" | sha256_stdin)"
+  public_key_digest="$(sha256_file "$public_key")"
+  coordinates_digest="$(sha256_file "$coordinates_file")"
+  maven_manifest_digest="$(sha256_file "$maven_manifest")"
+  tmp_receipt="$(mktemp "$release_dir/.publish-verification.XXXXXX")"
+  chmod 0600 "$tmp_receipt"
+  printf '%s\n' \
+    "format=2" \
+    "head=$head" \
+    "group=$PUBLISH_GROUP" \
+    "version=$PUBLISH_VERSION" \
+    "repository_url=$REPOSITORY_URL" \
+    "ci_run_id=${VERIFIED_CI_RUN_ID:-none}" \
+    "candidate_run_id=${GITHUB_RUN_ID:-local}" \
+    "candidate_run_attempt=${GITHUB_RUN_ATTEMPT:-local}" \
+    "modules_sha256=$modules_digest" \
+    "signing_key_sha256=$signing_key_digest" \
+    "release_public_key_sha256=$public_key_digest" \
+    "coordinates_sha256=$coordinates_digest" \
+    "maven_manifest_sha256=$maven_manifest_digest" \
+    "bundle_sha256=$actual_bundle_digest" \
+    > "$tmp_receipt"
+  mv "$tmp_receipt" "$receipt"
+  log "Prepared verified release receipt: $receipt"
+  package_release_candidate
+}
+
+package_release_candidate() {
+  local distributions_dir="$ROOT_DIR/build/distributions"
+  local candidate="$distributions_dir/Magrathea-$PUBLISH_VERSION-release-candidate.zip"
+  local candidate_checksum="$candidate.sha256"
+  local temporary_directory
+  local temporary_candidate
+  local relative_files=(
+    "distributions/Magrathea-$PUBLISH_VERSION-release-bundle.zip"
+    "distributions/Magrathea-$PUBLISH_VERSION-release-bundle.zip.sha256"
+    "distributions/Magrathea-$PUBLISH_VERSION-maven-coordinates.txt"
+    "distributions/Magrathea-$PUBLISH_VERSION-maven-files.sha256"
+    "reports/supply-chain/magrathea-sbom.cdx.json"
+    "reports/supply-chain/third-party-licenses.tsv"
+    "release/publish-verification.receipt"
+  )
+  local relative_file
+
+  for relative_file in "${relative_files[@]}"; do
+    [[ -s "$ROOT_DIR/build/$relative_file" ]] || {
+      echo "Release candidate evidence is missing: $relative_file" >&2
+      exit 2
+    }
+  done
+
+  temporary_directory="$(mktemp -d "${TMPDIR:-/tmp}/magrathea-release-candidate.XXXXXX")"
+  temporary_candidate="$temporary_directory/candidate.zip"
+  (
+    cd "$ROOT_DIR/build"
+    zip -q -X "$temporary_candidate" "${relative_files[@]}"
+  )
+  [[ -s "$temporary_candidate" ]] || {
+    rm -rf "$temporary_directory"
+    echo "Release candidate archive was not created." >&2
+    exit 2
+  }
+  mv "$temporary_candidate" "$candidate"
+  rm -rf "$temporary_directory"
+  printf '%s  %s\n' "$(sha256_file "$candidate")" "$(basename "$candidate")" \
+    > "$candidate_checksum"
+  log "Prepared immutable release candidate: $candidate"
+}
+
+validate_verification_receipt() {
+  local distributions_dir="$ROOT_DIR/build/distributions"
+  local receipt="$ROOT_DIR/build/release/publish-verification.receipt"
+  local bundle="$distributions_dir/Magrathea-$PUBLISH_VERSION-release-bundle.zip"
+  local checksum_file="$bundle.sha256"
+  local coordinates_file="$distributions_dir/Magrathea-$PUBLISH_VERSION-maven-coordinates.txt"
+  local maven_manifest="$distributions_dir/Magrathea-$PUBLISH_VERSION-maven-files.sha256"
+  local public_key="$ROOT_DIR/docs/release-signing-key.asc"
+  local expected_modules_digest
+  local expected_signing_key_digest
+  local expected_bundle_digest
+
+  [[ -s "$receipt" ]] || {
+    echo "--use-prepared requires a verification receipt from --prepare-only." >&2
+    exit 2
+  }
+  [[ "$(read_receipt_property format "$receipt")" == "2" ]] ||
+    { echo "Prepared verification receipt has an unsupported format." >&2; exit 2; }
+  [[ "$(read_receipt_property head "$receipt")" == "$(git -C "$ROOT_DIR" rev-parse HEAD)" ]] ||
+    { echo "Prepared verification receipt belongs to a different commit." >&2; exit 2; }
+  [[ "$(read_receipt_property group "$receipt")" == "$PUBLISH_GROUP" ]] ||
+    { echo "Prepared verification receipt has a different group." >&2; exit 2; }
+  [[ "$(read_receipt_property version "$receipt")" == "$PUBLISH_VERSION" ]] ||
+    { echo "Prepared verification receipt has a different version." >&2; exit 2; }
+  [[ "$(read_receipt_property repository_url "$receipt")" == "$REPOSITORY_URL" ]] ||
+    { echo "Prepared verification receipt targets a different repository." >&2; exit 2; }
+
+  expected_modules_digest="$(selected_modules | sha256_stdin)"
+  [[ "$(read_receipt_property modules_sha256 "$receipt")" == "$expected_modules_digest" ]] ||
+    { echo "Prepared verification receipt has a different module selection." >&2; exit 2; }
+  expected_signing_key_digest="$(printf '%s' "$SIGNING_KEY" | sha256_stdin)"
+  [[ "$(read_receipt_property signing_key_sha256 "$receipt")" == "$expected_signing_key_digest" ]] ||
+    { echo "Prepared verification receipt was created with different signing material." >&2; exit 2; }
+  [[ "$(read_receipt_property release_public_key_sha256 "$receipt")" == "$(sha256_file "$public_key")" ]] ||
+    { echo "Prepared verification receipt has a different release public key." >&2; exit 2; }
+
+  [[ -s "$bundle" && -s "$checksum_file" && -s "$coordinates_file" &&
+    -s "$maven_manifest" ]] ||
+    { echo "Prepared release artifacts are missing." >&2; exit 2; }
+  expected_bundle_digest="$(read_receipt_property bundle_sha256 "$receipt")"
+  [[ "$(sha256_file "$bundle")" == "$expected_bundle_digest" ]] ||
+    { echo "Prepared release bundle changed after verification." >&2; exit 2; }
+  [[ "$(awk 'NR == 1 { print $1 }' "$checksum_file")" == "$expected_bundle_digest" ]] ||
+    { echo "Prepared release checksum changed after verification." >&2; exit 2; }
+  [[ "$(sha256_file "$coordinates_file")" == "$(read_receipt_property coordinates_sha256 "$receipt")" ]] ||
+    { echo "Prepared publication coordinate inventory changed after verification." >&2; exit 2; }
+  [[ "$(sha256_file "$maven_manifest")" == "$(read_receipt_property maven_manifest_sha256 "$receipt")" ]] ||
+    { echo "Prepared Maven file manifest changed after verification." >&2; exit 2; }
+
+  log "Prepared release receipt matches the current commit, artifacts, modules, and signing key"
+}
+
+selected_modules() {
+  if [[ ${#MODULES[@]} -gt 0 ]]; then
+    for module in "${MODULES[@]}"; do
+      printf '%s\n' "${module#:}"
+    done
+  else
+    printf '%s\n' "${SDK_MODULES[@]}"
+  fi
+}
+
+joined_selected_modules() {
+  local joined=""
+  local module
+  while IFS= read -r module; do
+    if [[ -z "$joined" ]]; then
+      joined="$module"
+    else
+      joined="$joined, $module"
+    fi
+  done < <(selected_modules)
+  printf '%s\n' "$joined"
+}
+
+target_label() {
+  case "$TARGET" in
+    local) printf 'Maven Local\n' ;;
+    github) printf 'GitHub Packages\n' ;;
+    custom) printf 'Custom Maven Repository\n' ;;
+  esac
+}
+
+target_location() {
+  local group_path
+  group_path="$(printf '%s' "$PUBLISH_GROUP" | tr '.' '/')"
+  case "$TARGET" in
+    local) printf '%s/.m2/repository/%s\n' "$HOME" "$group_path" ;;
+    github|custom) printf '%s\n' "$REPOSITORY_URL" ;;
+  esac
+}
+
+print_publish_result() {
+  local module
+  log "Publish result: SUCCESS"
+  log "Target: $(target_label)"
+  log "Repository: $(target_location)"
+  log "Version: $PUBLISH_VERSION"
+  log "Modules: $(joined_selected_modules)"
+  log "Coordinates:"
+  while IFS= read -r module; do
+    log "  $PUBLISH_GROUP:$module:$PUBLISH_VERSION"
+  done < <(selected_modules)
+}
+
+commit_version_change() {
+  if ! git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "--commit-version requires a git checkout" >&2
+    exit 2
+  fi
+
+  if git -C "$ROOT_DIR" diff --quiet -- gradle.properties &&
+    git -C "$ROOT_DIR" diff --cached --quiet -- gradle.properties; then
+    echo "No gradle.properties version change to commit"
+    return
+  fi
+
+  git -C "$ROOT_DIR" commit --only gradle.properties -m "Bump Magrathea SDK version to $VERSION"
+}
+
+require_clean_git() {
+  if ! git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return
+  fi
+
+  if [[ -n "$(git -C "$ROOT_DIR" status --porcelain)" ]]; then
+    echo "Remote publish requires a clean git worktree. Commit changes first." >&2
+    exit 2
+  fi
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  scripts/publish-sdk [options]
+
+Targets:
+  --target local                Publish to ~/.m2/repository (default)
+  --target github               Publish to GitHub Packages
+  --target custom               Publish to --repo-url
+
+Common options:
+  --version VERSION             Set magrathea.version before publishing
+  --module MODULE               Publish one module; repeat for multiple modules
+  --skip-tests                  Skip the pre-publish test task
+  --no-clean                    Do not run clean before verification/publish
+  --dry-run                     Print Gradle task graph without executing
+  --print                       Print coordinates and exit
+  --commit-version              Commit the gradle.properties version change before publishing
+
+Remote repository options:
+  --repo-url URL                Maven repository URL
+  --repo-name NAME              Maven repository name (default: GitHubPackages)
+  MAGRATHEA_PUBLISH_USERNAME    Maven repository username
+  MAGRATHEA_PUBLISH_PASSWORD    Maven repository password/token
+  --prepare-only                Verify and stage a remote release without publishing
+  --use-prepared                Publish a staged release receipt without repeating verification
+  --verified-ci-run RUN_ID      Use the release-only gate after an exact-SHA CI run
+
+Signing options for remote repositories:
+  MAGRATHEA_SIGNING_KEY         ASCII-armored PGP private key
+  MAGRATHEA_SIGNING_PASSWORD    PGP key password
+
+Environment fallback:
+  GITHUB_SAIEN_MAVEN_USERNAME
+  GITHUB_SAIEN_MAVEN_TOKEN
+
+Examples:
+  scripts/publish-sdk --print
+  scripts/publish-sdk
+  scripts/publish-sdk --version 0.1.0-alpha.1
+  scripts/publish-sdk --version 0.1.0-alpha.1 --commit-version
+  scripts/publish-sdk --target github --version 0.1.0-alpha.1
+  MAGRATHEA_PUBLISH_USERNAME=... MAGRATHEA_PUBLISH_PASSWORD=... \
+    scripts/publish-sdk --target custom --repo-url https://repo.example/releases
+  scripts/publish-sdk --module :magrathea-core
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --target)
+      TARGET="${2:?missing value for --target}"
+      shift 2
+      ;;
+    --version)
+      VERSION="${2:?missing value for --version}"
+      shift 2
+      ;;
+    --module)
+      MODULES+=("$(normalize_module "${2:?missing value for --module}")")
+      shift 2
+      ;;
+    --repo-url)
+      REPOSITORY_URL="${2:?missing value for --repo-url}"
+      shift 2
+      ;;
+    --repo-name)
+      REPOSITORY_NAME="${2:?missing value for --repo-name}"
+      shift 2
+      ;;
+    --skip-tests)
+      SKIP_TESTS=true
+      shift
+      ;;
+    --no-clean)
+      NO_CLEAN=true
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    --print)
+      PRINT_ONLY=true
+      shift
+      ;;
+    --commit-version)
+      COMMIT_VERSION=true
+      shift
+      ;;
+    --prepare-only)
+      PREPARE_ONLY=true
+      shift
+      ;;
+    --use-prepared)
+      USE_PREPARED=true
+      shift
+      ;;
+    --verified-ci-run)
+      VERIFIED_CI_RUN_ID="${2:?missing value for --verified-ci-run}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+case "$TARGET" in
+  local|github|custom) ;;
+  *)
+    echo "Unsupported target: $TARGET" >&2
+    exit 2
+    ;;
+esac
+
+if [[ "$PREPARE_ONLY" == true && "$USE_PREPARED" == true ]]; then
+  echo "--prepare-only and --use-prepared cannot be combined." >&2
+  exit 2
+fi
+
+if [[ -n "$VERIFIED_CI_RUN_ID" ]]; then
+  [[ "$VERIFIED_CI_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+    echo "--verified-ci-run requires a positive numeric workflow run ID." >&2
+    exit 2
+  }
+  [[ "$PREPARE_ONLY" == true ]] || {
+    echo "--verified-ci-run is valid only with --prepare-only." >&2
+    exit 2
+  }
+fi
+
+if [[ ( "$PREPARE_ONLY" == true || "$USE_PREPARED" == true ) && "$TARGET" == "local" ]]; then
+  echo "--prepare-only and --use-prepared require a remote publish target." >&2
+  exit 2
+fi
+
+if [[ ( "$PREPARE_ONLY" == true || "$USE_PREPARED" == true ) &&
+  ( "$DRY_RUN" == true || "$PRINT_ONLY" == true ) ]]; then
+  echo "Prepared release modes cannot be combined with --dry-run or --print." >&2
+  exit 2
+fi
+
+PROPS=()
+if [[ "$COMMIT_VERSION" == true && -z "$VERSION" ]]; then
+  echo "--commit-version requires --version" >&2
+  exit 2
+fi
+
+if [[ "$COMMIT_VERSION" == true && ( "$DRY_RUN" == true || "$PRINT_ONLY" == true ) ]]; then
+  echo "--commit-version cannot be used with --dry-run or --print" >&2
+  exit 2
+fi
+
+if [[ -n "$VERSION" && ( "$DRY_RUN" == true || "$PRINT_ONLY" == true ) ]]; then
+  PROPS+=("-Pmagrathea.version=$VERSION")
+fi
+
+run_gradle() {
+  (
+    cd "$ROOT_DIR"
+    if [[ ${#PROPS[@]} -gt 0 ]]; then
+      set -- "$@" "${PROPS[@]}"
+    fi
+    if [[ ${#GRADLE_ARGS[@]} -gt 0 ]]; then
+      set -- "$@" "${GRADLE_ARGS[@]}"
+    fi
+    "$GRADLEW" "$@"
+  )
+}
+
+if [[ "$PRINT_ONLY" == true ]]; then
+  run_gradle --quiet printPublishingCoordinates
+  exit 0
+fi
+
+if [[ "$TARGET" == "github" ]]; then
+  REPOSITORY_NAME="${REPOSITORY_NAME:-GitHubPackages}"
+  REPOSITORY_URL="${REPOSITORY_URL:-https://maven.pkg.github.com/sensefy/magrathea}"
+fi
+
+if [[ "$TARGET" == "custom" && -z "$REPOSITORY_URL" ]]; then
+  echo "--target custom requires --repo-url" >&2
+  exit 2
+fi
+
+if [[ "$TARGET" != "local" && "$REPOSITORY_URL" != https://* ]]; then
+  echo "Remote publish requires an HTTPS repository URL." >&2
+  exit 2
+fi
+
+if [[ "$TARGET" != "local" && "$SKIP_TESTS" == true ]]; then
+  echo "Remote publish does not allow --skip-tests; verification evidence is mandatory." >&2
+  exit 2
+fi
+
+if [[ "$TARGET" != "local" && "$NO_CLEAN" == true ]]; then
+  echo "Remote publish does not allow --no-clean; clean release evidence is mandatory." >&2
+  exit 2
+fi
+
+SIGNING_KEY="${MAGRATHEA_SIGNING_KEY:-}"
+if [[ "$TARGET" != "local" && "$DRY_RUN" != true && -z "${SIGNING_KEY//[[:space:]]/}" ]]; then
+  echo "Remote publish requires MAGRATHEA_SIGNING_KEY; unsigned remote artifacts are forbidden." >&2
+  exit 2
+fi
+
+if [[ "$TARGET" != "local" ]] &&
+  [[ "$DRY_RUN" != true ]] &&
+  [[ -n "$VERSION" ]] &&
+  [[ "$COMMIT_VERSION" != true ]]; then
+  echo "Remote publish with --version must use --commit-version, or update gradle.properties and commit first." >&2
+  exit 2
+fi
+
+if [[ "$TARGET" != "local" ]] &&
+  [[ "$DRY_RUN" != true ]] &&
+  [[ "$COMMIT_VERSION" == true ]]; then
+  require_clean_git
+fi
+
+if [[ -n "$VERSION" && "$DRY_RUN" != true ]]; then
+  set_gradle_property "$VERSION_PROPERTY" "$VERSION" "$VERSION_FILE"
+fi
+
+PUBLISH_GROUP="$(read_gradle_property "$GROUP_PROPERTY" "$VERSION_FILE")"
+PUBLISH_VERSION="$(effective_version)"
+
+if [[ ${#MODULES[@]} -gt 0 ]]; then
+  selected_csv="$(selected_modules | paste -sd, -)"
+  PROPS+=("-Pmagrathea.publish.selectedModules=$selected_csv")
+fi
+
+if [[ "$COMMIT_VERSION" == true ]]; then
+  commit_version_change
+fi
+
+if [[ "$TARGET" != "local" && "$DRY_RUN" != true ]]; then
+  require_clean_git
+fi
+
+if [[ "$TARGET" != "local" && "$DRY_RUN" != true && "$PREPARE_ONLY" != true ]]; then
+  PUBLISH_USERNAME="${MAGRATHEA_PUBLISH_USERNAME:-${GITHUB_SAIEN_MAVEN_USERNAME:-}}"
+  PUBLISH_PASSWORD="${MAGRATHEA_PUBLISH_PASSWORD:-${GITHUB_SAIEN_MAVEN_TOKEN:-}}"
+  if [[ -z "${PUBLISH_USERNAME//[[:space:]]/}" || -z "${PUBLISH_PASSWORD//[[:space:]]/}" ]]; then
+    echo "Remote publish requires MAGRATHEA_PUBLISH_USERNAME/MAGRATHEA_PUBLISH_PASSWORD or the GitHub fallback variables." >&2
+    exit 2
+  fi
+fi
+
+if [[ -n "$REPOSITORY_NAME" ]]; then
+  PROPS+=("-Pmagrathea.publish.repositoryName=$REPOSITORY_NAME")
+fi
+if [[ -n "$REPOSITORY_URL" ]]; then
+  PROPS+=("-Pmagrathea.publish.repositoryUrl=$REPOSITORY_URL")
+fi
+if [[ "$DRY_RUN" == true ]]; then
+  GRADLE_ARGS+=("--dry-run")
+fi
+
+log "Publish target: $(target_label)"
+log "Version: $PUBLISH_VERSION"
+log "Modules: $(joined_selected_modules)"
+if [[ "$DRY_RUN" == true ]]; then
+  log "Mode: dry run"
+fi
+
+VERIFY_TASKS=()
+if [[ "$USE_PREPARED" != true ]]; then
+  if [[ "$NO_CLEAN" != true ]]; then
+    VERIFY_TASKS+=("clean")
+  fi
+  if [[ "$SKIP_TESTS" != true ]]; then
+    if [[ -n "$VERIFIED_CI_RUN_ID" ]]; then
+      VERIFY_TASKS+=("prepareSdkRelease")
+    else
+      VERIFY_TASKS+=("verifySdkRelease")
+    fi
+  fi
+fi
+
+if [[ ${#VERIFY_TASKS[@]} -gt 0 ]]; then
+  log "Running verification tasks: ${VERIFY_TASKS[*]}"
+  run_gradle "${VERIFY_TASKS[@]}"
+  log "Verification completed"
+else
+  log "Using an existing verified release receipt"
+fi
+
+if [[ "$TARGET" != "local" && "$DRY_RUN" != true ]]; then
+  if [[ "$USE_PREPARED" == true ]]; then
+    validate_verification_receipt
+  else
+    write_verification_receipt
+  fi
+fi
+
+if [[ "$PREPARE_ONLY" == true ]]; then
+  log "Preparation completed; no remote artifacts were published"
+  exit 0
+fi
+
+if [[ "$TARGET" != "local" && "$DRY_RUN" != true ]]; then
+  # Keep the immutable-version check adjacent to publication. The remote repository must also
+  # reject overwrites, because no client-side preflight can eliminate a concurrent publisher race.
+  require_clean_git
+  run_gradle --quiet printPublishingArtifactCoordinates |
+    "$ROOT_DIR/scripts/verify-remote-version-absent" \
+      "$REPOSITORY_URL" \
+      "$PUBLISH_GROUP" \
+      "$PUBLISH_VERSION"
+  PROPS+=("-Pmagrathea.publish.preflightVerified=$PUBLISH_GROUP:$PUBLISH_VERSION")
+fi
+
+PUBLISH_TASKS=()
+if [[ ${#MODULES[@]} -gt 0 ]]; then
+  for module in "${MODULES[@]}"; do
+    if [[ "$TARGET" == "local" ]]; then
+      PUBLISH_TASKS+=("$module:publishToMavenLocal")
+    else
+      PUBLISH_TASKS+=("$module:publish")
+    fi
+  done
+else
+  if [[ "$TARGET" == "local" ]]; then
+    PUBLISH_TASKS+=("publishSdkToMavenLocal")
+  else
+    PUBLISH_TASKS+=("publishSdk")
+  fi
+fi
+
+log "Running publish tasks: ${PUBLISH_TASKS[*]}"
+run_gradle "${PUBLISH_TASKS[@]}"
+if [[ "$DRY_RUN" == true ]]; then
+  log "Dry run completed; no artifacts were published"
+else
+  print_publish_result
+fi

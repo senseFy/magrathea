@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+GROUP="${1:?usage: extract-completed-publication-coordinates GROUP VERSION}"
+VERSION="${2:?usage: extract-completed-publication-coordinates GROUP VERSION}"
+
+[[ "$GROUP" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ &&
+  "$VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || {
+  printf 'completed publication extraction failed: invalid group or version\n' >&2
+  exit 2
+}
+
+TEMP_ROOT="${TMPDIR:-/tmp}"
+COORDINATES="$(mktemp "${TEMP_ROOT%/}/magrathea-completed-publications.XXXXXX")"
+cleanup() {
+  rm -f "$COORDINATES"
+}
+trap cleanup EXIT
+
+while IFS= read -r line; do
+  if [[ "$line" =~ \>\ Task\ :([A-Za-z0-9][A-Za-z0-9_.-]*):publish([A-Za-z0-9]+)PublicationToGitHubPackagesRepository$ ]]; then
+    project_name="${BASH_REMATCH[1]}"
+    publication="${BASH_REMATCH[2]}"
+    case "$publication" in
+      Android) suffix="-android" ;;
+      IosArm64) suffix="-iosarm64" ;;
+      IosSimulatorArm64) suffix="-iossimulatorarm64" ;;
+      Js) suffix="-js" ;;
+      Jvm) suffix="-jvm" ;;
+      WasmJs) suffix="-wasm-js" ;;
+      KotlinMultiplatform|Maven) suffix="" ;;
+      *)
+        printf 'completed publication extraction failed: unknown publication %s\n' \
+          "$publication" >&2
+        exit 2
+        ;;
+    esac
+    printf '%s:%s%s:%s\n' "$GROUP" "$project_name" "$suffix" "$VERSION" \
+      >> "$COORDINATES"
+  fi
+done
+
+[[ -s "$COORDINATES" ]] || {
+  printf 'completed publication extraction failed: no completed publications found\n' >&2
+  exit 2
+}
+
+LC_ALL=C sort -u "$COORDINATES"
+printf 'MAGRATHEA_COMPLETED_PUBLICATIONS count=%s version=%s\n' \
+  "$(LC_ALL=C sort -u "$COORDINATES" | wc -l | tr -d ' ')" "$VERSION" >&2

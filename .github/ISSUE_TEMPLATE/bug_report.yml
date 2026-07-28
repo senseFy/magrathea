@@ -1,0 +1,96 @@
+name: Bug report
+description: Report a reproducible Magrathea defect without credentials or private conversation data
+title: "[Bug] "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Magrathea. Security vulnerabilities belong in the private reporting flow, not this form.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and Known Issues for the same behavior.
+          required: true
+        - label: This report contains no credentials, private prompts, conversation content, or unredacted Provider payloads.
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Core model or serialization
+        - Runtime or Tool execution
+        - Chatbot facade
+        - Provider adapter
+        - MCP adapter
+        - Gateway or browser client
+        - Storage or credentials
+        - Publishing or build tooling
+        - Documentation
+        - Unsure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Published version, tag, or full commit SHA where the problem occurs.
+      placeholder: 0.1.0-alpha.1 or a full commit SHA
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform and environment
+      description: Include target, OS, JDK, device/API level, browser, or Xcode details that affect reproduction.
+      placeholder: JVM on macOS 15, JDK 17
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Provide the smallest synthetic-data reproduction and exact commands.
+      placeholder: |
+        1. Configure ...
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include stable error categories and sanitized output only.
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification attempted
+      description: List focused tests or repository gates already run and their result.
+      placeholder: ./gradlew :magrathea-runtime:jvmTest
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Add only information needed to reproduce or assess impact.

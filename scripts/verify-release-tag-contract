@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+FIXTURE="$ROOT_DIR/build/release-tag-contract-fixture"
+
+expect_rejected() {
+  local expected="$1"
+  shift
+  local output
+  if output="$("$@" 2>&1)"; then
+    printf 'release tag contract failed: unsafe fixture unexpectedly passed\n' >&2
+    exit 1
+  fi
+  [[ "$output" == *"$expected"* ]] || {
+    printf 'release tag contract failed: unexpected rejection: %s\n' "$output" >&2
+    exit 1
+  }
+}
+
+rm -rf "$FIXTURE"
+mkdir -p "$FIXTURE/scripts" "$FIXTURE/docs/releases"
+cp "$ROOT_DIR/scripts/verify-release-tag" "$FIXTURE/scripts/verify-release-tag"
+printf 'magrathea.version=0.1.0-alpha.1\n' > "$FIXTURE/gradle.properties"
+printf '# Changelog\n\n## 0.1.0-alpha.1 — 2026-07-26\n' > "$FIXTURE/CHANGELOG.md"
+printf '# Release\n' > "$FIXTURE/docs/releases/v0.1.0-alpha.1.md"
+
+git -C "$FIXTURE" init -q -b main
+git -C "$FIXTURE" config user.name "Magrathea Contract"
+git -C "$FIXTURE" config user.email "contract@example.invalid"
+git -C "$FIXTURE" add .
+git -C "$FIXTURE" commit -q -m "fixture"
+git -C "$FIXTURE" tag -a v0.1.0-alpha.1 -m "fixture release"
+
+[[ "$("$FIXTURE/scripts/verify-release-tag" v0.1.0-alpha.1)" == "0.1.0-alpha.1" ]] || {
+  printf 'release tag contract failed: valid annotated tag was rejected\n' >&2
+  exit 1
+}
+
+printf 'magrathea.version=0.1.0-alpha.2\n' > "$FIXTURE/gradle.properties"
+expect_rejected "does not match magrathea.version" \
+  "$FIXTURE/scripts/verify-release-tag" v0.1.0-alpha.1
+git -C "$FIXTURE" restore gradle.properties
+
+rm "$FIXTURE/docs/releases/v0.1.0-alpha.1.md"
+expect_rejected "missing release notes" \
+  "$FIXTURE/scripts/verify-release-tag" v0.1.0-alpha.1
+git -C "$FIXTURE" restore docs/releases/v0.1.0-alpha.1.md
+
+git -C "$FIXTURE" tag v0.1.0-alpha.2
+printf 'magrathea.version=0.1.0-alpha.2\n' > "$FIXTURE/gradle.properties"
+printf '\n## 0.1.0-alpha.2 — 2026-07-27\n' >> "$FIXTURE/CHANGELOG.md"
+printf '# Release\n' > "$FIXTURE/docs/releases/v0.1.0-alpha.2.md"
+git -C "$FIXTURE" add .
+git -C "$FIXTURE" commit -q -m "lightweight fixture"
+git -C "$FIXTURE" tag -f v0.1.0-alpha.2 >/dev/null
+expect_rejected "must be an annotated tag" \
+  "$FIXTURE/scripts/verify-release-tag" v0.1.0-alpha.2
+
+rm -rf "$FIXTURE"
+printf 'MAGRATHEA_RELEASE_TAG_CONTRACT_PASS annotated=required version=bound notes=required\n'

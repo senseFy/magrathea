@@ -1,0 +1,152 @@
+name: Build Magrathea Release Candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: magrathea-release-candidate
+  cancel-in-progress: false
+
+jobs:
+  release-bundle:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - name: Check out source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Set up Java 17
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle build cache
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Require successful CI for the exact main commit
+        id: ci
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_COMMIT="$(git rev-parse HEAD)"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main
+          CI_RUN_ID="$(
+            gh api \
+              --method GET \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/verify.yml/runs" \
+              -f "head_sha=$RELEASE_COMMIT" \
+              -f branch=main \
+              -f event=push \
+              -f status=success \
+              -f per_page=100 \
+              --jq \
+              "[.workflow_runs[] |
+                select(.head_sha == \"$RELEASE_COMMIT\" and .conclusion == \"success\")] |
+               sort_by([.run_number, .run_attempt]) |
+               last |
+               .id // empty"
+          )"
+          if [[ ! "$CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "No successful Verify Magrathea SDK run exists for $RELEASE_COMMIT." >&2
+            exit 1
+          fi
+          echo "commit=$RELEASE_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "run_id=$CI_RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Build and verify the immutable release candidate
+        timeout-minutes: 110
+        env:
+          MAGRATHEA_SIGNING_KEY: ${{ secrets.MAGRATHEA_SIGNING_KEY }}
+          MAGRATHEA_SIGNING_PASSWORD: ${{ secrets.MAGRATHEA_SIGNING_PASSWORD }}
+          VERIFIED_CI_RUN_ID: ${{ steps.ci.outputs.run_id }}
+        run: |
+          scripts/run-with-heartbeat \
+            --label release-candidate-preparation \
+            --interval 300 \
+            -- \
+            scripts/publish-sdk \
+              --target github \
+              --prepare-only \
+              --verified-ci-run "$VERIFIED_CI_RUN_ID"
+
+      - name: Verify the completed candidate against the release key
+        timeout-minutes: 15
+        env:
+          RELEASE_COMMIT: ${{ steps.ci.outputs.commit }}
+        run: |
+          RELEASE_VERSION="$(
+            awk -F= '$1 == "magrathea.version" {
+              print substr($0, index($0, "=") + 1)
+              exit
+            }' gradle.properties
+          )"
+          CANDIDATE="$GITHUB_WORKSPACE/build/distributions/Magrathea-$RELEASE_VERSION-release-candidate.zip"
+          scripts/verify-release-candidate \
+            "$GITHUB_WORKSPACE" \
+            "$CANDIDATE" \
+            "$CANDIDATE.sha256" \
+            "$RELEASE_COMMIT" \
+            "$RELEASE_VERSION" \
+            "$GITHUB_RUN_ID" \
+            "$RUNNER_TEMP/verified-release-candidate"
+
+      - name: Retain release-candidate failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: magrathea-release-candidate-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build/reports/web-gateway-e2e-server.log
+            build/reports/problems/**
+            **/build/verified/reports/tests/**
+            **/build/verified/test-results/**
+            **/build/reports/tests/**
+            **/build/test-results/**
+
+      - name: Upload the immutable release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: magrathea-release-candidate
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            build/distributions/Magrathea-*-release-candidate.zip
+            build/distributions/Magrathea-*-release-candidate.zip.sha256
+
+      - name: Attest release-candidate provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4
+        with:
+          subject-path: build/distributions/Magrathea-*-release-candidate.zip
+
+      - name: Attest release-bundle provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4
+        with:
+          subject-path: build/distributions/Magrathea-*-release-bundle.zip
+
+      - name: Summarize release candidate
+        env:
+          RELEASE_COMMIT: ${{ steps.ci.outputs.commit }}
+          CI_RUN_ID: ${{ steps.ci.outputs.run_id }}
+        run: |
+          {
+            echo "## Release candidate"
+            echo
+            echo "- Commit: \`$RELEASE_COMMIT\`"
+            echo "- Verified CI run: \`$CI_RUN_ID\`"
+            echo "- Candidate run: \`$GITHUB_RUN_ID\` attempt \`$GITHUB_RUN_ATTEMPT\`"
+          } >> "$GITHUB_STEP_SUMMARY"

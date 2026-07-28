@@ -1,0 +1,30 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}
+
+main {
+  margin: 3rem auto;
+  max-width: 48rem;
+  padding: 0 1rem;
+}
+
+#chat-transcript {
+  min-height: 14rem;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+form {
+  display: flex;
+  gap: 0.5rem;
+}
+
+label {
+  position: absolute;
+  clip: rect(0 0 0 0);
+}
+
+input {
+  flex: 1;
+}

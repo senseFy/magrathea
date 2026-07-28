@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+LABEL=""
+INTERVAL=300
+
+usage() {
+  cat <<'EOF'
+Usage:
+  scripts/run-with-heartbeat --label LABEL [--interval SECONDS] -- COMMAND [ARG...]
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --label)
+      LABEL="${2:?missing value for --label}"
+      shift 2
+      ;;
+    --interval)
+      INTERVAL="${2:?missing value for --interval}"
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'unknown option: %s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+[[ -n "$LABEL" && "$#" -gt 0 ]] || {
+  usage >&2
+  exit 2
+}
+[[ "$INTERVAL" =~ ^[1-9][0-9]*$ ]] || {
+  printf 'heartbeat interval must be a positive integer\n' >&2
+  exit 2
+}
+
+started_at="$(date +%s)"
+next_heartbeat=$((started_at + INTERVAL))
+poll_interval=5
+if [[ "$INTERVAL" -lt "$poll_interval" ]]; then
+  poll_interval="$INTERVAL"
+fi
+"$@" &
+command_pid=$!
+
+forward_signal() {
+  kill -TERM "$command_pid" >/dev/null 2>&1 || true
+}
+trap forward_signal INT TERM
+
+while kill -0 "$command_pid" >/dev/null 2>&1; do
+  sleep "$poll_interval"
+  if kill -0 "$command_pid" >/dev/null 2>&1; then
+    now="$(date +%s)"
+    if [[ "$now" -ge "$next_heartbeat" ]]; then
+      elapsed=$((now - started_at))
+      printf '[heartbeat] %s still running elapsed=%ss\n' "$LABEL" "$elapsed"
+      next_heartbeat=$((now + INTERVAL))
+    fi
+  fi
+done
+
+set +e
+wait "$command_pid"
+status=$?
+set -e
+finished_at="$(date +%s)"
+printf '[heartbeat] %s finished status=%s elapsed=%ss\n' \
+  "$LABEL" "$status" "$((finished_at - started_at))"
+exit "$status"

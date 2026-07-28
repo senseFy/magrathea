@@ -1,0 +1,45 @@
+{
+  "sessionId": {"value": "session-fixture-1"},
+  "request": {
+    "sessionId": {"value": "session-fixture-1"},
+    "systemPrompt": "You are concise.",
+    "messages": [
+      {
+        "id": "user-fixture-1",
+        "role": "USER",
+        "parts": [{"type": "text", "text": "hello"}],
+        "createdAtEpochMs": 1700000000001
+      }
+    ],
+    "model": {
+      "provider": "gemini",
+      "model": "gemini-contract",
+      "supportsReasoning": true,
+      "supportsStreaming": true,
+      "contextWindowTokens": 128000
+    },
+    "engine": {
+      "provider": {
+        "temperature": 0.2,
+        "options": {"family": "gemini", "values": {"thinkingSummaries": "auto"}},
+        "credentialRef": {"provider": "gemini", "profile": "work"}
+      }
+    }
+  },
+  "state": {
+    "messages": [
+      {
+        "id": "user-fixture-1",
+        "role": "USER",
+        "parts": [{"type": "text", "text": "hello"}],
+        "createdAtEpochMs": 1700000000001
+      }
+    ],
+    "turn": 2,
+    "status": "COMPLETED",
+    "stopReason": "COMPLETED",
+    "usage": {"inputTokens": 12, "outputTokens": 4, "reasoningTokens": 2},
+    "latestRequestUsage": {"inputTokens": 9, "outputTokens": 4, "reasoningTokens": 2}
+  },
+  "updatedAtEpochMs": 1700000000002
+}

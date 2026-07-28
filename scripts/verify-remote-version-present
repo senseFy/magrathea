@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPOSITORY_URL="${1:?usage: verify-remote-version-present REPOSITORY_URL GROUP VERSION}"
+GROUP="${2:?usage: verify-remote-version-present REPOSITORY_URL GROUP VERSION}"
+VERSION="${3:?usage: verify-remote-version-present REPOSITORY_URL GROUP VERSION}"
+MAX_ATTEMPTS="${MAGRATHEA_REMOTE_VERIFY_ATTEMPTS:-12}"
+RETRY_SECONDS="${MAGRATHEA_REMOTE_VERIFY_RETRY_SECONDS:-5}"
+TRANSPORT_ATTEMPTS="${MAGRATHEA_REMOTE_TRANSPORT_ATTEMPTS:-4}"
+TRANSPORT_RETRY_SECONDS="${MAGRATHEA_REMOTE_TRANSPORT_RETRY_SECONDS:-2}"
+
+if [[ ! "$GROUP" =~ ^[A-Za-z0-9_.-]+$ || ! "$VERSION" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+  printf 'remote verification failed: invalid group or version\n' >&2
+  exit 2
+fi
+if [[ ! "$MAX_ATTEMPTS" =~ ^[1-9][0-9]*$ || ! "$RETRY_SECONDS" =~ ^[0-9]+$ ||
+  ! "$TRANSPORT_ATTEMPTS" =~ ^[1-9][0-9]*$ ||
+  ! "$TRANSPORT_RETRY_SECONDS" =~ ^[0-9]+$ ]]; then
+  printf 'remote verification failed: retry settings must be non-negative integers\n' >&2
+  exit 2
+fi
+
+case "$REPOSITORY_URL" in
+  https://*) ;;
+  http://127.0.0.1:*|http://localhost:*) ;;
+  *)
+    printf 'remote verification failed: repository URL must use HTTPS\n' >&2
+    exit 2
+    ;;
+esac
+
+credentials_file=""
+coordinates_file="$(mktemp)"
+missing_file="$(mktemp)"
+cleanup() {
+  rm -f "$coordinates_file" "$missing_file"
+  if [[ -n "$credentials_file" ]]; then
+    rm -f "$credentials_file"
+  fi
+}
+trap cleanup EXIT
+
+username="${MAGRATHEA_PUBLISH_USERNAME:-${GITHUB_SAIEN_MAVEN_USERNAME:-}}"
+password="${MAGRATHEA_PUBLISH_PASSWORD:-${GITHUB_SAIEN_MAVEN_TOKEN:-}}"
+if [[ -n "$username" || -n "$password" ]]; then
+  if [[ -z "$username" || -z "$password" ]]; then
+    printf 'remote verification failed: repository username and password must both be set\n' >&2
+    exit 2
+  fi
+  if [[ "$username" == *$'\n'* || "$username" == *$'\r'* || "$password" == *$'\n'* || "$password" == *$'\r'* ]]; then
+    printf 'remote verification failed: repository credentials contain a newline\n' >&2
+    exit 2
+  fi
+  repository_host="${REPOSITORY_URL#*://}"
+  repository_host="${repository_host%%/*}"
+  repository_host="${repository_host%%:*}"
+  credentials_file="$(mktemp)"
+  chmod 0600 "$credentials_file"
+  printf 'machine %s\nlogin %s\npassword %s\n' "$repository_host" "$username" "$password" > "$credentials_file"
+fi
+
+fetch_status() {
+  local url="$1"
+  local attempt=1
+  local status=""
+
+  while [[ "$attempt" -le "$TRANSPORT_ATTEMPTS" ]]; do
+    if [[ -n "$credentials_file" ]]; then
+      if status="$(
+        curl --silent --show-error --location --output /dev/null --write-out '%{http_code}' \
+          --connect-timeout 10 --max-time 30 --netrc-file "$credentials_file" "$url"
+      )"; then
+        printf '%s' "$status"
+        return 0
+      fi
+    elif status="$(
+      curl --silent --show-error --location --output /dev/null --write-out '%{http_code}' \
+        --connect-timeout 10 --max-time 30 "$url"
+    )"; then
+      printf '%s' "$status"
+      return 0
+    fi
+
+    if [[ "$attempt" -lt "$TRANSPORT_ATTEMPTS" ]]; then
+      sleep "$TRANSPORT_RETRY_SECONDS"
+    fi
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+coordinate_count=0
+while IFS=: read -r coordinate_group artifact coordinate_version; do
+  [[ -n "$coordinate_group" && -n "$artifact" && -n "$coordinate_version" ]] || {
+    printf 'remote verification failed: malformed coordinate input\n' >&2
+    exit 2
+  }
+  [[ "$coordinate_group" =~ ^[A-Za-z0-9_.-]+$ && "$artifact" =~ ^[A-Za-z0-9_.-]+$ && "$coordinate_version" =~ ^[A-Za-z0-9_.-]+$ ]] || {
+    printf 'remote verification failed: unsafe coordinate input\n' >&2
+    exit 2
+  }
+  [[ "$coordinate_group" == "$GROUP" && "$coordinate_version" == "$VERSION" ]] || {
+    printf 'remote verification failed: coordinate does not match requested group/version: %s:%s:%s\n' \
+      "$coordinate_group" "$artifact" "$coordinate_version" >&2
+    exit 2
+  }
+  printf '%s:%s:%s\n' "$coordinate_group" "$artifact" "$coordinate_version" >> "$coordinates_file"
+  coordinate_count=$((coordinate_count + 1))
+done
+
+[[ "$coordinate_count" -gt 0 ]] || {
+  printf 'remote verification failed: no publication coordinates were provided\n' >&2
+  exit 2
+}
+
+group_path="$(printf '%s' "$GROUP" | tr '.' '/')"
+attempt=1
+while [[ "$attempt" -le "$MAX_ATTEMPTS" ]]; do
+  : > "$missing_file"
+  while IFS=: read -r ignored_group artifact ignored_version; do
+    pom_url="${REPOSITORY_URL%/}/$group_path/$artifact/$VERSION/$artifact-$VERSION.pom"
+    if ! status="$(fetch_status "$pom_url")"; then
+      printf 'remote verification failed: repository transport failed for %s after %s attempts\n' \
+        "$artifact" "$TRANSPORT_ATTEMPTS" >&2
+      exit 2
+    fi
+    case "$status" in
+      200) ;;
+      404|408|429|5??)
+        printf '%s HTTP %s\n' "$artifact" "$status" >> "$missing_file"
+        ;;
+      401|403)
+        printf 'remote verification failed: repository authentication was rejected for %s\n' "$artifact" >&2
+        exit 2
+        ;;
+      *)
+        printf 'remote verification failed: repository returned HTTP %s for %s\n' "$status" "$artifact" >&2
+        exit 2
+        ;;
+    esac
+  done < "$coordinates_file"
+
+  if [[ ! -s "$missing_file" ]]; then
+    printf 'MAGRATHEA_REMOTE_VERSION_PRESENT coordinates=%s version=%s\n' \
+      "$coordinate_count" "$VERSION"
+    exit 0
+  fi
+  if [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; then
+    sleep "$RETRY_SECONDS"
+  fi
+  attempt=$((attempt + 1))
+done
+
+printf 'remote verification failed: %s coordinates were still unavailable after %s attempts\n' \
+  "$(wc -l < "$missing_file" | tr -d ' ')" "$MAX_ATTEMPTS" >&2
+sed 's/^/  - /' "$missing_file" >&2
+exit 2

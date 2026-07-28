@@ -1,0 +1,15 @@
+{
+  "name": "magrathea-web-browser-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "verify": "node verify.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.61.1"
+  }
+}

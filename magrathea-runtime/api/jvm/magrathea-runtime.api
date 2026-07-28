@@ -1,0 +1,346 @@
+public final class saien/magrathea/runtime/CompositeToolRegistry : saien/magrathea/core/ToolRegistry {
+	public fun <init> (Lkotlin/jvm/functions/Function0;)V
+	public fun definitions ()Ljava/util/List;
+	public fun find (Ljava/lang/String;)Lsaien/magrathea/core/ToolExecutor;
+}
+
+public final class saien/magrathea/runtime/DefaultAgentRunner : saien/magrathea/core/AgentRunner {
+	public fun <init> (Lsaien/magrathea/provider/api/ProviderRegistry;Lsaien/magrathea/core/ToolRegistry;Lsaien/magrathea/core/SessionStore;Lsaien/magrathea/core/CheckpointStore;Ljava/util/List;Lsaien/magrathea/core/ToolApprovalGateway;Lsaien/magrathea/core/ToolPermissionGateway;Lsaien/magrathea/core/CredentialProvider;Lsaien/magrathea/core/ContextTransformer;Lsaien/magrathea/core/ReplayPolicy;Lsaien/magrathea/core/ContextManager;Lsaien/magrathea/core/FollowUpMessageProvider;Lsaien/magrathea/core/SteeringMessageProvider;Lsaien/magrathea/core/RetryPolicy;Lkotlinx/coroutines/CoroutineDispatcher;Lsaien/magrathea/core/MagratheaTelemetry;Lsaien/magrathea/core/MonotonicClock;)V
+	public synthetic fun <init> (Lsaien/magrathea/provider/api/ProviderRegistry;Lsaien/magrathea/core/ToolRegistry;Lsaien/magrathea/core/SessionStore;Lsaien/magrathea/core/CheckpointStore;Ljava/util/List;Lsaien/magrathea/core/ToolApprovalGateway;Lsaien/magrathea/core/ToolPermissionGateway;Lsaien/magrathea/core/CredentialProvider;Lsaien/magrathea/core/ContextTransformer;Lsaien/magrathea/core/ReplayPolicy;Lsaien/magrathea/core/ContextManager;Lsaien/magrathea/core/FollowUpMessageProvider;Lsaien/magrathea/core/SteeringMessageProvider;Lsaien/magrathea/core/RetryPolicy;Lkotlinx/coroutines/CoroutineDispatcher;Lsaien/magrathea/core/MagratheaTelemetry;Lsaien/magrathea/core/MonotonicClock;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun cancel (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun resume (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun run (Lsaien/magrathea/core/AgentRequest;)Lkotlinx/coroutines/flow/Flow;
+}
+
+public final class saien/magrathea/runtime/InMemoryCheckpointStore : saien/magrathea/core/CheckpointStore {
+	public fun <init> ()V
+	public fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun deleteSession (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun loadLatestCheckpoint (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun saveCheckpoint (Lsaien/magrathea/core/AgentCheckpoint;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/runtime/InMemorySessionStore : saien/magrathea/core/SessionStore {
+	public fun <init> ()V
+	public fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun deleteSession (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun listSessions (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun loadSession (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun saveSession (Lsaien/magrathea/core/AgentSessionSnapshot;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/runtime/InMemoryToolRegistry : saien/magrathea/core/ToolRegistry {
+	public fun <init> ()V
+	public fun <init> (Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun definitions ()Ljava/util/List;
+	public fun find (Ljava/lang/String;)Lsaien/magrathea/core/ToolExecutor;
+}
+
+public final class saien/magrathea/runtime/TokenAwareContextManager : saien/magrathea/core/ContextManager {
+	public fun <init> (Lsaien/magrathea/core/ContextSummarizer;)V
+	public fun prepare (Lsaien/magrathea/core/ContextPreparationRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class saien/magrathea/runtime/search/WebSearchBackend {
+	public abstract fun search (Lsaien/magrathea/runtime/search/WebSearchBackendRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/runtime/search/WebSearchBackendException : java/lang/Exception {
+	public fun <init> (Lsaien/magrathea/runtime/search/WebSearchFailureCode;Ljava/lang/String;Ljava/lang/Throwable;)V
+	public synthetic fun <init> (Lsaien/magrathea/runtime/search/WebSearchFailureCode;Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getCode ()Lsaien/magrathea/runtime/search/WebSearchFailureCode;
+}
+
+public final class saien/magrathea/runtime/search/WebSearchBackendRequest {
+	public fun <init> (Ljava/lang/String;ILsaien/magrathea/runtime/search/WebSearchDepth;Lsaien/magrathea/runtime/search/WebSearchFreshness;Ljava/util/List;Ljava/util/List;Lsaien/magrathea/runtime/search/WebSearchLocale;Lsaien/magrathea/runtime/search/WebSearchLocation;Lsaien/magrathea/runtime/search/WebSearchSafeSearch;J)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component10 ()J
+	public final fun component2 ()I
+	public final fun component3 ()Lsaien/magrathea/runtime/search/WebSearchDepth;
+	public final fun component4 ()Lsaien/magrathea/runtime/search/WebSearchFreshness;
+	public final fun component5 ()Ljava/util/List;
+	public final fun component6 ()Ljava/util/List;
+	public final fun component7 ()Lsaien/magrathea/runtime/search/WebSearchLocale;
+	public final fun component8 ()Lsaien/magrathea/runtime/search/WebSearchLocation;
+	public final fun component9 ()Lsaien/magrathea/runtime/search/WebSearchSafeSearch;
+	public final fun copy (Ljava/lang/String;ILsaien/magrathea/runtime/search/WebSearchDepth;Lsaien/magrathea/runtime/search/WebSearchFreshness;Ljava/util/List;Ljava/util/List;Lsaien/magrathea/runtime/search/WebSearchLocale;Lsaien/magrathea/runtime/search/WebSearchLocation;Lsaien/magrathea/runtime/search/WebSearchSafeSearch;J)Lsaien/magrathea/runtime/search/WebSearchBackendRequest;
+	public static synthetic fun copy$default (Lsaien/magrathea/runtime/search/WebSearchBackendRequest;Ljava/lang/String;ILsaien/magrathea/runtime/search/WebSearchDepth;Lsaien/magrathea/runtime/search/WebSearchFreshness;Ljava/util/List;Ljava/util/List;Lsaien/magrathea/runtime/search/WebSearchLocale;Lsaien/magrathea/runtime/search/WebSearchLocation;Lsaien/magrathea/runtime/search/WebSearchSafeSearch;JILjava/lang/Object;)Lsaien/magrathea/runtime/search/WebSearchBackendRequest;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAllowedDomains ()Ljava/util/List;
+	public final fun getBlockedDomains ()Ljava/util/List;
+	public final fun getDepth ()Lsaien/magrathea/runtime/search/WebSearchDepth;
+	public final fun getFreshness ()Lsaien/magrathea/runtime/search/WebSearchFreshness;
+	public final fun getLocale ()Lsaien/magrathea/runtime/search/WebSearchLocale;
+	public final fun getLocation ()Lsaien/magrathea/runtime/search/WebSearchLocation;
+	public final fun getMaxResults ()I
+	public final fun getQuery ()Ljava/lang/String;
+	public final fun getSafeSearch ()Lsaien/magrathea/runtime/search/WebSearchSafeSearch;
+	public final fun getTimeoutMs ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/runtime/search/WebSearchBackendResponse {
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lsaien/magrathea/runtime/search/WebSearchBackendResponse;
+	public static synthetic fun copy$default (Lsaien/magrathea/runtime/search/WebSearchBackendResponse;Ljava/util/List;ILjava/lang/Object;)Lsaien/magrathea/runtime/search/WebSearchBackendResponse;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getResults ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/runtime/search/WebSearchDepth : java/lang/Enum {
+	public static final field BALANCED Lsaien/magrathea/runtime/search/WebSearchDepth;
+	public static final field DEEP Lsaien/magrathea/runtime/search/WebSearchDepth;
+	public static final field QUICK Lsaien/magrathea/runtime/search/WebSearchDepth;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/runtime/search/WebSearchDepth;
+	public static fun values ()[Lsaien/magrathea/runtime/search/WebSearchDepth;
+}
+
+public final class saien/magrathea/runtime/search/WebSearchFailureCode : java/lang/Enum {
+	public static final field AUTHENTICATION Lsaien/magrathea/runtime/search/WebSearchFailureCode;
+	public static final field INVALID_QUERY Lsaien/magrathea/runtime/search/WebSearchFailureCode;
+	public static final field INVALID_REQUEST Lsaien/magrathea/runtime/search/WebSearchFailureCode;
+	public static final field NETWORK Lsaien/magrathea/runtime/search/WebSearchFailureCode;
+	public static final field RATE_LIMITED Lsaien/magrathea/runtime/search/WebSearchFailureCode;
+	public static final field UNAVAILABLE Lsaien/magrathea/runtime/search/WebSearchFailureCode;
+	public static final field UNSUPPORTED_POLICY Lsaien/magrathea/runtime/search/WebSearchFailureCode;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/runtime/search/WebSearchFailureCode;
+	public static fun values ()[Lsaien/magrathea/runtime/search/WebSearchFailureCode;
+}
+
+public final class saien/magrathea/runtime/search/WebSearchFreshness : java/lang/Enum {
+	public static final field AUTO Lsaien/magrathea/runtime/search/WebSearchFreshness;
+	public static final field PAST_DAY Lsaien/magrathea/runtime/search/WebSearchFreshness;
+	public static final field PAST_MONTH Lsaien/magrathea/runtime/search/WebSearchFreshness;
+	public static final field PAST_WEEK Lsaien/magrathea/runtime/search/WebSearchFreshness;
+	public static final field PAST_YEAR Lsaien/magrathea/runtime/search/WebSearchFreshness;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/runtime/search/WebSearchFreshness;
+	public static fun values ()[Lsaien/magrathea/runtime/search/WebSearchFreshness;
+}
+
+public final class saien/magrathea/runtime/search/WebSearchLocale {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/runtime/search/WebSearchLocale;
+	public static synthetic fun copy$default (Lsaien/magrathea/runtime/search/WebSearchLocale;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/runtime/search/WebSearchLocale;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCountryCode ()Ljava/lang/String;
+	public final fun getLanguageTag ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/runtime/search/WebSearchLocation {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/runtime/search/WebSearchLocation;
+	public static synthetic fun copy$default (Lsaien/magrathea/runtime/search/WebSearchLocation;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/runtime/search/WebSearchLocation;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCity ()Ljava/lang/String;
+	public final fun getCountryCode ()Ljava/lang/String;
+	public final fun getRegion ()Ljava/lang/String;
+	public final fun getTimezone ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/runtime/search/WebSearchPolicy {
+	public fun <init> ()V
+	public fun <init> (IIIIILsaien/magrathea/runtime/search/WebSearchDepth;Lsaien/magrathea/runtime/search/WebSearchFreshness;Ljava/util/List;Ljava/util/List;Lsaien/magrathea/runtime/search/WebSearchLocale;Lsaien/magrathea/runtime/search/WebSearchLocation;Lsaien/magrathea/runtime/search/WebSearchSafeSearch;J)V
+	public synthetic fun <init> (IIIIILsaien/magrathea/runtime/search/WebSearchDepth;Lsaien/magrathea/runtime/search/WebSearchFreshness;Ljava/util/List;Ljava/util/List;Lsaien/magrathea/runtime/search/WebSearchLocale;Lsaien/magrathea/runtime/search/WebSearchLocation;Lsaien/magrathea/runtime/search/WebSearchSafeSearch;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component10 ()Lsaien/magrathea/runtime/search/WebSearchLocale;
+	public final fun component11 ()Lsaien/magrathea/runtime/search/WebSearchLocation;
+	public final fun component12 ()Lsaien/magrathea/runtime/search/WebSearchSafeSearch;
+	public final fun component13 ()J
+	public final fun component2 ()I
+	public final fun component3 ()I
+	public final fun component4 ()I
+	public final fun component5 ()I
+	public final fun component6 ()Lsaien/magrathea/runtime/search/WebSearchDepth;
+	public final fun component7 ()Lsaien/magrathea/runtime/search/WebSearchFreshness;
+	public final fun component8 ()Ljava/util/List;
+	public final fun component9 ()Ljava/util/List;
+	public final fun copy (IIIIILsaien/magrathea/runtime/search/WebSearchDepth;Lsaien/magrathea/runtime/search/WebSearchFreshness;Ljava/util/List;Ljava/util/List;Lsaien/magrathea/runtime/search/WebSearchLocale;Lsaien/magrathea/runtime/search/WebSearchLocation;Lsaien/magrathea/runtime/search/WebSearchSafeSearch;J)Lsaien/magrathea/runtime/search/WebSearchPolicy;
+	public static synthetic fun copy$default (Lsaien/magrathea/runtime/search/WebSearchPolicy;IIIIILsaien/magrathea/runtime/search/WebSearchDepth;Lsaien/magrathea/runtime/search/WebSearchFreshness;Ljava/util/List;Ljava/util/List;Lsaien/magrathea/runtime/search/WebSearchLocale;Lsaien/magrathea/runtime/search/WebSearchLocation;Lsaien/magrathea/runtime/search/WebSearchSafeSearch;JILjava/lang/Object;)Lsaien/magrathea/runtime/search/WebSearchPolicy;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAllowedDomains ()Ljava/util/List;
+	public final fun getBlockedDomains ()Ljava/util/List;
+	public final fun getDepth ()Lsaien/magrathea/runtime/search/WebSearchDepth;
+	public final fun getFreshness ()Lsaien/magrathea/runtime/search/WebSearchFreshness;
+	public final fun getLocale ()Lsaien/magrathea/runtime/search/WebSearchLocale;
+	public final fun getLocation ()Lsaien/magrathea/runtime/search/WebSearchLocation;
+	public final fun getMaxQueryChars ()I
+	public final fun getMaxResultsPerQuery ()I
+	public final fun getMaxSearchCallsPerRun ()I
+	public final fun getMaxSnippetChars ()I
+	public final fun getMaxSourcesInContext ()I
+	public final fun getSafeSearch ()Lsaien/magrathea/runtime/search/WebSearchSafeSearch;
+	public final fun getTimeoutMs ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/runtime/search/WebSearchSafeSearch : java/lang/Enum {
+	public static final field MODERATE Lsaien/magrathea/runtime/search/WebSearchSafeSearch;
+	public static final field OFF Lsaien/magrathea/runtime/search/WebSearchSafeSearch;
+	public static final field STRICT Lsaien/magrathea/runtime/search/WebSearchSafeSearch;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/runtime/search/WebSearchSafeSearch;
+	public static fun values ()[Lsaien/magrathea/runtime/search/WebSearchSafeSearch;
+}
+
+public final class saien/magrathea/runtime/search/WebSearchSource {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/runtime/search/WebSearchSource;
+	public static synthetic fun copy$default (Lsaien/magrathea/runtime/search/WebSearchSource;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/runtime/search/WebSearchSource;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPublishedAt ()Ljava/lang/String;
+	public final fun getSnippet ()Ljava/lang/String;
+	public final fun getTitle ()Ljava/lang/String;
+	public final fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/runtime/search/WebSearchTool : saien/magrathea/core/ToolExecutor {
+	public static final field Companion Lsaien/magrathea/runtime/search/WebSearchTool$Companion;
+	public static final field NAME Ljava/lang/String;
+	public fun <init> (Lsaien/magrathea/runtime/search/WebSearchBackend;Lsaien/magrathea/runtime/search/WebSearchPolicy;Ljava/lang/String;Z)V
+	public synthetic fun <init> (Lsaien/magrathea/runtime/search/WebSearchBackend;Lsaien/magrathea/runtime/search/WebSearchPolicy;Ljava/lang/String;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun execute (Lsaien/magrathea/core/ToolExecutionRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getDefinition ()Lsaien/magrathea/core/ToolDefinition;
+	public final fun getPolicy ()Lsaien/magrathea/runtime/search/WebSearchPolicy;
+}
+
+public final class saien/magrathea/runtime/search/WebSearchTool$Companion {
+}
+
+public abstract interface class saien/magrathea/runtime/search/XSearchBackend {
+	public abstract fun search (Lsaien/magrathea/runtime/search/XSearchBackendRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/runtime/search/XSearchBackendException : java/lang/Exception {
+	public fun <init> (Lsaien/magrathea/runtime/search/XSearchFailureCode;Ljava/lang/String;Ljava/lang/Throwable;)V
+	public synthetic fun <init> (Lsaien/magrathea/runtime/search/XSearchFailureCode;Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getCode ()Lsaien/magrathea/runtime/search/XSearchFailureCode;
+}
+
+public final class saien/magrathea/runtime/search/XSearchBackendRequest {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;ZZJ)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/util/List;
+	public final fun component5 ()Ljava/util/List;
+	public final fun component6 ()Z
+	public final fun component7 ()Z
+	public final fun component8 ()J
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;ZZJ)Lsaien/magrathea/runtime/search/XSearchBackendRequest;
+	public static synthetic fun copy$default (Lsaien/magrathea/runtime/search/XSearchBackendRequest;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;ZZJILjava/lang/Object;)Lsaien/magrathea/runtime/search/XSearchBackendRequest;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAllowedHandles ()Ljava/util/List;
+	public final fun getEnableImageUnderstanding ()Z
+	public final fun getEnableVideoUnderstanding ()Z
+	public final fun getExcludedHandles ()Ljava/util/List;
+	public final fun getFromDate ()Ljava/lang/String;
+	public final fun getQuery ()Ljava/lang/String;
+	public final fun getTimeoutMs ()J
+	public final fun getToDate ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/runtime/search/XSearchEvidence {
+	public fun <init> (Ljava/lang/String;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/List;
+	public final fun copy (Ljava/lang/String;Ljava/util/List;)Lsaien/magrathea/runtime/search/XSearchEvidence;
+	public static synthetic fun copy$default (Lsaien/magrathea/runtime/search/XSearchEvidence;Ljava/lang/String;Ljava/util/List;ILjava/lang/Object;)Lsaien/magrathea/runtime/search/XSearchEvidence;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCitations ()Ljava/util/List;
+	public final fun getText ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/runtime/search/XSearchFailureCode : java/lang/Enum {
+	public static final field AUTHENTICATION Lsaien/magrathea/runtime/search/XSearchFailureCode;
+	public static final field INVALID_QUERY Lsaien/magrathea/runtime/search/XSearchFailureCode;
+	public static final field INVALID_REQUEST Lsaien/magrathea/runtime/search/XSearchFailureCode;
+	public static final field MALFORMED_RESPONSE Lsaien/magrathea/runtime/search/XSearchFailureCode;
+	public static final field NETWORK Lsaien/magrathea/runtime/search/XSearchFailureCode;
+	public static final field NOT_CONFIGURED Lsaien/magrathea/runtime/search/XSearchFailureCode;
+	public static final field OUTPUT_LIMIT Lsaien/magrathea/runtime/search/XSearchFailureCode;
+	public static final field RATE_LIMITED Lsaien/magrathea/runtime/search/XSearchFailureCode;
+	public static final field TIMEOUT Lsaien/magrathea/runtime/search/XSearchFailureCode;
+	public static final field UNAVAILABLE Lsaien/magrathea/runtime/search/XSearchFailureCode;
+	public static final field UNSUPPORTED_POLICY Lsaien/magrathea/runtime/search/XSearchFailureCode;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/runtime/search/XSearchFailureCode;
+	public static fun values ()[Lsaien/magrathea/runtime/search/XSearchFailureCode;
+}
+
+public final class saien/magrathea/runtime/search/XSearchPolicy {
+	public fun <init> ()V
+	public fun <init> (IIIILjava/util/List;Ljava/util/List;ZZJ)V
+	public synthetic fun <init> (IIIILjava/util/List;Ljava/util/List;ZZJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component2 ()I
+	public final fun component3 ()I
+	public final fun component4 ()I
+	public final fun component5 ()Ljava/util/List;
+	public final fun component6 ()Ljava/util/List;
+	public final fun component7 ()Z
+	public final fun component8 ()Z
+	public final fun component9 ()J
+	public final fun copy (IIIILjava/util/List;Ljava/util/List;ZZJ)Lsaien/magrathea/runtime/search/XSearchPolicy;
+	public static synthetic fun copy$default (Lsaien/magrathea/runtime/search/XSearchPolicy;IIIILjava/util/List;Ljava/util/List;ZZJILjava/lang/Object;)Lsaien/magrathea/runtime/search/XSearchPolicy;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAllowedHandles ()Ljava/util/List;
+	public final fun getEnableImageUnderstanding ()Z
+	public final fun getEnableVideoUnderstanding ()Z
+	public final fun getExcludedHandles ()Ljava/util/List;
+	public final fun getMaxCitationsInContext ()I
+	public final fun getMaxHandlesPerRequest ()I
+	public final fun getMaxQueryChars ()I
+	public final fun getMaxSearchCallsPerRun ()I
+	public final fun getTimeoutMs ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/runtime/search/XSearchTool : saien/magrathea/core/ToolExecutor {
+	public static final field Companion Lsaien/magrathea/runtime/search/XSearchTool$Companion;
+	public static final field NAME Ljava/lang/String;
+	public fun <init> (Lsaien/magrathea/runtime/search/XSearchBackend;Lsaien/magrathea/runtime/search/XSearchPolicy;Ljava/lang/String;Z)V
+	public synthetic fun <init> (Lsaien/magrathea/runtime/search/XSearchBackend;Lsaien/magrathea/runtime/search/XSearchPolicy;Ljava/lang/String;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun execute (Lsaien/magrathea/core/ToolExecutionRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getDefinition ()Lsaien/magrathea/core/ToolDefinition;
+	public final fun getPolicy ()Lsaien/magrathea/runtime/search/XSearchPolicy;
+}
+
+public final class saien/magrathea/runtime/search/XSearchTool$Companion {
+}
+

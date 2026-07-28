@@ -1,0 +1,155 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "digest"
+require "fileutils"
+require "json"
+
+root = File.expand_path(ARGV.fetch(0))
+version = ARGV.fetch(1)
+
+def fail_contract(message)
+  warn "supply-chain verification failed: #{message}"
+  exit 1
+end
+
+def require_file(path)
+  fail_contract("missing #{path}") unless File.file?(path)
+  path
+end
+
+published_modules = %w[
+  magrathea-core
+  magrathea-provider-api
+  magrathea-provider-openai
+  magrathea-provider-gemini
+  magrathea-provider-anthropic
+  magrathea-runtime
+  magrathea-mcp
+  magrathea-storage-room
+  magrathea-credentials
+  magrathea-policy
+  magrathea-gateway-protocol
+  magrathea-gateway-server
+  magrathea-provider-gateway
+  magrathea-chatbot
+  magrathea-storage-web
+  magrathea-web-client
+].freeze
+
+wrapper_properties_path = require_file(File.join(root, "gradle", "wrapper", "gradle-wrapper.properties"))
+wrapper_jar_path = require_file(File.join(root, "gradle", "wrapper", "gradle-wrapper.jar"))
+wrapper_properties = File.readlines(wrapper_properties_path, chomp: true).filter_map do |line|
+  next if line.empty? || line.start_with?("#")
+
+  line.split("=", 2) if line.include?("=")
+end.to_h
+expected_distribution = "https\\://services.gradle.org/distributions/gradle-9.3.1-bin.zip"
+expected_distribution_sha = "b266d5ff6b90eada6dc3b20cb090e3731302e553a27c5d3e4df1f0d76beaff06"
+expected_wrapper_jar_sha = "b3a875ddc1f044746e1b1a55f645584505f4a10438c1afea9f15e92a7c42ec13"
+fail_contract("Gradle distribution URL is not the reviewed 9.3.1 binary") unless
+  wrapper_properties["distributionUrl"] == expected_distribution
+fail_contract("Gradle distribution checksum is missing or unreviewed") unless
+  wrapper_properties["distributionSha256Sum"] == expected_distribution_sha
+fail_contract("Gradle wrapper URL validation must remain enabled") unless
+  wrapper_properties["validateDistributionUrl"] == "true"
+fail_contract("Gradle wrapper JAR does not match the official 9.3.1 wrapper") unless
+  Digest::SHA256.file(wrapper_jar_path).hexdigest == expected_wrapper_jar_sha
+
+catalog_path = require_file(File.join(root, "gradle", "libs.versions.toml"))
+File.readlines(catalog_path, chomp: true).each do |line|
+  next if line.lstrip.start_with?("#")
+
+  line.scan(/(?:^|\s)version\s*=\s*"([^"]+)"|^[-A-Za-z0-9_.]+\s*=\s*"([^"]+)"/) do |inline, catalog|
+    declared = inline || catalog
+    fail_contract("dynamic/SNAPSHOT version in version catalog: #{declared}") if declared.match?(/SNAPSHOT|latest|\+/i)
+  end
+end
+
+raw_sbom_path = require_file(File.join(root, "build", "reports", "cyclonedx", "bom.json"))
+sbom = JSON.parse(File.read(raw_sbom_path))
+fail_contract("SBOM is not CycloneDX") unless sbom["bomFormat"] == "CycloneDX"
+fail_contract("SBOM must use CycloneDX 1.6") unless sbom["specVersion"] == "1.6"
+metadata_component = sbom.dig("metadata", "component") || fail_contract("SBOM has no metadata component")
+fail_contract("SBOM root group mismatch") unless metadata_component["group"] == "saien.magrathea"
+fail_contract("SBOM root name mismatch") unless metadata_component["name"] == "magrathea"
+fail_contract("SBOM root version mismatch") unless metadata_component["version"] == version
+
+components = sbom.fetch("components")
+fail_contract("production SBOM is unexpectedly small") if components.length < 50
+internal = components.select { |component| component["group"] == "saien.magrathea" }
+actual_modules = internal.map { |component| component.fetch("name") }.uniq.sort
+fail_contract("published module set differs from SBOM: #{actual_modules}") unless actual_modules == published_modules.sort
+
+test_only = lambda do |component|
+  group = component["group"].to_s
+  name = component["name"].to_s
+  group == "junit" || group.start_with?("org.junit") || group.start_with?("androidx.test") ||
+    group == "com.android.tools.utp" || group == "com.google.testing.platform" ||
+    (group == "org.jetbrains.kotlin" && name.start_with?("kotlin-test")) ||
+    (group == "org.jetbrains.kotlinx" && name.start_with?("kotlinx-coroutines-test")) ||
+    (group == "io.ktor" && (name.include?("-test") || name.include?("-mock"))) ||
+    (group == "com.squareup.okhttp3" && name == "mockwebserver")
+end
+test_component = components.find(&test_only)
+fail_contract("test-only component entered production SBOM: #{test_component['group']}:#{test_component['name']}") if test_component
+
+allowed_licenses = %w[Apache-2.0 MIT].freeze
+components.each do |component|
+  version_value = component["version"].to_s
+  fail_contract("dynamic/SNAPSHOT component in SBOM: #{component['name']}:#{version_value}") if
+    version_value.match?(/SNAPSHOT|latest|\+/i)
+  next if component["group"] == "saien.magrathea"
+
+  licenses = Array(component["licenses"]).filter_map do |entry|
+    entry.dig("license", "id") || entry.dig("license", "name") || entry["expression"]
+  end
+  fail_contract("unknown license: #{component['group']}:#{component['name']}:#{version_value}") if licenses.empty?
+  usable = licenses.any? do |license|
+    allowed_licenses.any? { |allowed| license == allowed || license.split(/\s+OR\s+/).include?(allowed) }
+  end
+  fail_contract("license not allowed: #{component['group']}:#{component['name']}:#{licenses.join(' OR ')}") unless usable
+end
+
+project_license = [{ "license" => { "id" => "MIT" } }]
+metadata_component["licenses"] = project_license
+internal.each { |component| component["licenses"] = project_license }
+root_ref = metadata_component.fetch("bom-ref")
+dependencies = sbom["dependencies"] ||= []
+dependencies.reject! { |dependency| dependency["ref"] == root_ref }
+dependencies << {
+  "ref" => root_ref,
+  "dependsOn" => internal.map { |component| component.fetch("bom-ref") }.uniq.sort,
+}
+
+reports = File.join(root, "build", "reports", "supply-chain")
+FileUtils.mkdir_p(reports)
+normalized_sbom_path = File.join(reports, "magrathea-sbom.cdx.json")
+File.write(normalized_sbom_path, JSON.pretty_generate(sbom) + "\n")
+
+license_rows = components.map do |component|
+  licenses = Array(component["licenses"]).filter_map do |entry|
+    entry.dig("license", "id") || entry.dig("license", "name") || entry["expression"]
+  end
+  [component["group"], component["name"], component["version"], licenses.sort.join(" OR ")]
+end.uniq.sort
+license_report_path = File.join(reports, "third-party-licenses.tsv")
+File.open(license_report_path, "w") do |file|
+  file.puts "group\tname\tversion\tlicenses"
+  license_rows.each { |row| file.puts row.join("\t") }
+end
+
+package_lock_path = require_file(File.join(root, "tooling", "web-browser-e2e", "package-lock.json"))
+package_lock = JSON.parse(File.read(package_lock_path))
+fail_contract("npm lockfileVersion must be 3") unless package_lock["lockfileVersion"] == 3
+package_lock.fetch("packages").each do |path, package|
+  next if path.empty?
+
+  resolved = package["resolved"]
+  integrity = package["integrity"]
+  fail_contract("npm package is not registry-pinned: #{path}") unless resolved&.start_with?("https://registry.npmjs.org/")
+  fail_contract("npm package has no SHA-512 integrity: #{path}") unless integrity&.start_with?("sha512-")
+end
+require_file(File.join(root, "kotlin-js-store", "yarn.lock"))
+
+puts "MAGRATHEA_SUPPLY_CHAIN_PASS components=#{components.length} licenses=#{license_rows.length}"

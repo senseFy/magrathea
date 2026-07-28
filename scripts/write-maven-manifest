@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPOSITORY="${1:?usage: write-maven-manifest REPOSITORY COORDINATES_FILE OUTPUT_FILE}"
+COORDINATES_FILE="${2:?usage: write-maven-manifest REPOSITORY COORDINATES_FILE OUTPUT_FILE}"
+OUTPUT_FILE="${3:?usage: write-maven-manifest REPOSITORY COORDINATES_FILE OUTPUT_FILE}"
+
+fail() {
+  printf 'Maven manifest generation failed: %s\n' "$*" >&2
+  exit 2
+}
+
+[[ -d "$REPOSITORY" ]] || fail "repository directory does not exist"
+[[ -s "$COORDINATES_FILE" ]] || fail "coordinate inventory is missing or empty"
+
+REPOSITORY="$(
+  cd "$REPOSITORY"
+  pwd
+)"
+OUTPUT_DIRECTORY="$(dirname "$OUTPUT_FILE")"
+mkdir -p "$OUTPUT_DIRECTORY"
+OUTPUT_FILE="$(
+  cd "$OUTPUT_DIRECTORY"
+  printf '%s/%s\n' "$PWD" "$(basename "$OUTPUT_FILE")"
+)"
+
+temporary_directory="$(mktemp -d "${TMPDIR:-/tmp}/magrathea-maven-manifest.XXXXXX")"
+unsorted_manifest="$temporary_directory/manifest.unsorted"
+normalized_coordinates="$temporary_directory/coordinates.txt"
+trap 'rm -rf "$temporary_directory"' EXIT
+: > "$unsorted_manifest"
+: > "$normalized_coordinates"
+
+group=""
+version=""
+coordinate_count=0
+while IFS=: read -r coordinate_group artifact coordinate_version extra; do
+  [[ -n "$coordinate_group" && -n "$artifact" && -n "$coordinate_version" &&
+    -z "${extra:-}" ]] || fail "malformed coordinate inventory"
+  [[ "$coordinate_group" =~ ^[A-Za-z0-9_.-]+$ &&
+    "$artifact" =~ ^[A-Za-z0-9_.-]+$ &&
+    "$coordinate_version" =~ ^[A-Za-z0-9_.-]+$ ]] ||
+    fail "unsafe coordinate in inventory"
+  if [[ -z "$group" ]]; then
+    group="$coordinate_group"
+    version="$coordinate_version"
+  fi
+  [[ "$coordinate_group" == "$group" && "$coordinate_version" == "$version" ]] ||
+    fail "all coordinates must share one group and version"
+  printf '%s:%s:%s\n' "$coordinate_group" "$artifact" "$coordinate_version" \
+    >> "$normalized_coordinates"
+  coordinate_count=$((coordinate_count + 1))
+done < "$COORDINATES_FILE"
+
+[[ "$coordinate_count" -gt 0 ]] || fail "coordinate inventory is empty"
+duplicate_coordinate="$(
+  LC_ALL=C sort "$normalized_coordinates" | uniq -d | head -n 1
+)"
+[[ -z "$duplicate_coordinate" ]] ||
+  fail "coordinate inventory contains duplicates: $duplicate_coordinate"
+
+group_path="$(printf '%s' "$group" | tr '.' '/')"
+while IFS=: read -r ignored_group artifact ignored_version; do
+  coordinate_directory="$REPOSITORY/$group_path/$artifact/$version"
+  pom="$coordinate_directory/$artifact-$version.pom"
+  pom_signature="$pom.asc"
+  [[ -s "$pom" ]] || fail "coordinate is missing its POM: $artifact"
+  [[ -s "$pom_signature" ]] || fail "coordinate is missing its POM signature: $artifact"
+
+  coordinate_file_count=0
+  while IFS= read -r file; do
+    case "$file" in
+      *.md5|*.sha1|*.sha256|*.sha512) continue ;;
+    esac
+    case "$file" in
+      *.asc)
+        [[ -s "${file%.asc}" ]] ||
+          fail "signature has no payload: ${file#"$REPOSITORY/"}"
+        ;;
+      *)
+        [[ -s "$file.asc" ]] ||
+          fail "publishable file has no signature: ${file#"$REPOSITORY/"}"
+        ;;
+    esac
+    relative_path="${file#"$REPOSITORY/"}"
+    [[ "$relative_path" != "$file" &&
+      "$relative_path" != *".."* &&
+      "$relative_path" =~ ^[A-Za-z0-9_./+@()-]+$ ]] ||
+      fail "unsafe Maven path for $artifact"
+    digest="$(shasum -a 256 "$file" | awk '{ print $1 }')"
+    printf '%s  %s\n' "$digest" "$relative_path" >> "$unsorted_manifest"
+    coordinate_file_count=$((coordinate_file_count + 1))
+  done < <(find "$coordinate_directory" -type f -print | LC_ALL=C sort)
+  [[ "$coordinate_file_count" -gt 0 ]] ||
+    fail "coordinate contains no publishable files: $artifact"
+done < "$normalized_coordinates"
+
+LC_ALL=C sort -k2,2 "$unsorted_manifest" > "$OUTPUT_FILE"
+manifest_count="$(wc -l < "$OUTPUT_FILE" | tr -d ' ')"
+[[ "$manifest_count" -gt "$coordinate_count" ]] ||
+  fail "manifest does not contain the expected signed publication files"
+
+printf 'MAGRATHEA_MAVEN_MANIFEST files=%s coordinates=%s version=%s\n' \
+  "$manifest_count" "$coordinate_count" "$version"

@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPOSITORY_URL="${1:?usage: verify-remote-version-absent REPOSITORY_URL GROUP VERSION}"
+GROUP="${2:?usage: verify-remote-version-absent REPOSITORY_URL GROUP VERSION}"
+VERSION="${3:?usage: verify-remote-version-absent REPOSITORY_URL GROUP VERSION}"
+TRANSPORT_ATTEMPTS="${MAGRATHEA_REMOTE_TRANSPORT_ATTEMPTS:-4}"
+TRANSPORT_RETRY_SECONDS="${MAGRATHEA_REMOTE_TRANSPORT_RETRY_SECONDS:-2}"
+
+if [[ ! "$GROUP" =~ ^[A-Za-z0-9_.-]+$ || ! "$VERSION" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+  printf 'remote preflight failed: invalid group or version\n' >&2
+  exit 2
+fi
+if [[ ! "$TRANSPORT_ATTEMPTS" =~ ^[1-9][0-9]*$ || ! "$TRANSPORT_RETRY_SECONDS" =~ ^[0-9]+$ ]]; then
+  printf 'remote preflight failed: transport retry settings must be non-negative integers\n' >&2
+  exit 2
+fi
+
+case "$REPOSITORY_URL" in
+  https://*) ;;
+  http://127.0.0.1:*|http://localhost:*) ;;
+  *)
+    printf 'remote preflight failed: repository URL must use HTTPS\n' >&2
+    exit 2
+    ;;
+esac
+
+credentials_file=""
+cleanup() {
+  if [[ -n "$credentials_file" ]]; then
+    rm -f "$credentials_file"
+  fi
+}
+trap cleanup EXIT
+
+username="${MAGRATHEA_PUBLISH_USERNAME:-${GITHUB_SAIEN_MAVEN_USERNAME:-}}"
+password="${MAGRATHEA_PUBLISH_PASSWORD:-${GITHUB_SAIEN_MAVEN_TOKEN:-}}"
+if [[ -n "$username" || -n "$password" ]]; then
+  if [[ -z "$username" || -z "$password" ]]; then
+    printf 'remote preflight failed: repository username and password must both be set\n' >&2
+    exit 2
+  fi
+  if [[ "$username" == *$'\n'* || "$username" == *$'\r'* || "$password" == *$'\n'* || "$password" == *$'\r'* ]]; then
+    printf 'remote preflight failed: repository credentials contain a newline\n' >&2
+    exit 2
+  fi
+  repository_host="${REPOSITORY_URL#*://}"
+  repository_host="${repository_host%%/*}"
+  repository_host="${repository_host%%:*}"
+  credentials_file="$(mktemp)"
+  chmod 0600 "$credentials_file"
+  printf 'machine %s\nlogin %s\npassword %s\n' "$repository_host" "$username" "$password" > "$credentials_file"
+fi
+
+fetch_status() {
+  local url="$1"
+  local attempt=1
+  local status=""
+
+  while [[ "$attempt" -le "$TRANSPORT_ATTEMPTS" ]]; do
+    if [[ -n "$credentials_file" ]]; then
+      if status="$(
+        curl --silent --show-error --location --output /dev/null --write-out '%{http_code}' \
+          --connect-timeout 10 --max-time 30 --netrc-file "$credentials_file" "$url"
+      )"; then
+        printf '%s' "$status"
+        return 0
+      fi
+    elif status="$(
+      curl --silent --show-error --location --output /dev/null --write-out '%{http_code}' \
+        --connect-timeout 10 --max-time 30 "$url"
+    )"; then
+      printf '%s' "$status"
+      return 0
+    fi
+
+    if [[ "$attempt" -lt "$TRANSPORT_ATTEMPTS" ]]; then
+      sleep "$TRANSPORT_RETRY_SECONDS"
+    fi
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+group_path="$(printf '%s' "$GROUP" | tr '.' '/')"
+coordinate_count=0
+while IFS=: read -r coordinate_group artifact coordinate_version; do
+  [[ -n "$coordinate_group" && -n "$artifact" && -n "$coordinate_version" ]] || {
+    printf 'remote preflight failed: malformed coordinate input\n' >&2
+    exit 2
+  }
+  [[ "$coordinate_group" =~ ^[A-Za-z0-9_.-]+$ && "$artifact" =~ ^[A-Za-z0-9_.-]+$ && "$coordinate_version" =~ ^[A-Za-z0-9_.-]+$ ]] || {
+    printf 'remote preflight failed: unsafe coordinate input\n' >&2
+    exit 2
+  }
+  [[ "$coordinate_group" == "$GROUP" && "$coordinate_version" == "$VERSION" ]] || {
+    printf 'remote preflight failed: coordinate does not match requested group/version: %s:%s:%s\n' \
+      "$coordinate_group" "$artifact" "$coordinate_version" >&2
+    exit 2
+  }
+  coordinate_count=$((coordinate_count + 1))
+  pom_url="${REPOSITORY_URL%/}/$group_path/$artifact/$VERSION/$artifact-$VERSION.pom"
+  if ! status="$(fetch_status "$pom_url")"; then
+    printf 'remote preflight failed: repository transport failed for %s after %s attempts\n' \
+      "$artifact" "$TRANSPORT_ATTEMPTS" >&2
+    exit 2
+  fi
+  case "$status" in
+    404) ;;
+    200)
+      printf 'remote preflight failed: immutable coordinate already exists: %s:%s:%s\n' \
+        "$GROUP" "$artifact" "$VERSION" >&2
+      exit 2
+      ;;
+    401|403)
+      printf 'remote preflight failed: repository authentication was rejected for %s\n' "$artifact" >&2
+      exit 2
+      ;;
+    *)
+      printf 'remote preflight failed: repository returned HTTP %s for %s\n' "$status" "$artifact" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ "$coordinate_count" -eq 0 ]]; then
+  printf 'remote preflight failed: no publication coordinates were provided\n' >&2
+  exit 2
+fi
+
+printf 'MAGRATHEA_REMOTE_VERSION_ABSENT coordinates=%s version=%s\n' "$coordinate_count" "$VERSION"

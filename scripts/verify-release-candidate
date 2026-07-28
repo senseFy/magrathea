@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="${1:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION RUN_ID OUTPUT_DIR}"
+CANDIDATE="${2:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION RUN_ID OUTPUT_DIR}"
+CHECKSUM="${3:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION RUN_ID OUTPUT_DIR}"
+EXPECTED_COMMIT="${4:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION RUN_ID OUTPUT_DIR}"
+EXPECTED_VERSION="${5:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION RUN_ID OUTPUT_DIR}"
+EXPECTED_RUN_ID="${6:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION RUN_ID OUTPUT_DIR}"
+OUTPUT_DIR="${7:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION RUN_ID OUTPUT_DIR}"
+
+fail() {
+  printf 'release candidate verification failed: %s\n' "$*" >&2
+  exit 2
+}
+
+read_property() {
+  local key="$1"
+  local file="$2"
+  awk -F= -v key="$key" '
+    $1 == key {
+      print substr($0, index($0, "=") + 1)
+      exit
+    }
+  ' "$file"
+}
+
+sha256_file() {
+  shasum -a 256 "$1" | awk '{ print $1 }'
+}
+
+[[ -d "$ROOT_DIR" && -x "$ROOT_DIR/gradlew" ]] || fail "source checkout is invalid"
+[[ -x "$ROOT_DIR/scripts/publish-sdk" &&
+  -x "$ROOT_DIR/scripts/select-publishing-coordinates" &&
+  -x "$ROOT_DIR/scripts/write-maven-manifest" ]] ||
+  fail "release verification scripts are unavailable"
+[[ -s "$CANDIDATE" && -s "$CHECKSUM" ]] || fail "candidate archive or checksum is missing"
+[[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail "expected commit is invalid"
+[[ "$EXPECTED_VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]] || fail "expected version is invalid"
+[[ "$EXPECTED_RUN_ID" =~ ^[1-9][0-9]*$ ]] || fail "candidate run ID is invalid"
+[[ ! -e "$OUTPUT_DIR" ]] || fail "output directory must not already exist"
+
+expected_candidate_digest="$(awk 'NR == 1 { print $1 }' "$CHECKSUM")"
+expected_candidate_name="$(awk 'NR == 1 { print $2 }' "$CHECKSUM")"
+[[ "$expected_candidate_digest" =~ ^[0-9a-f]{64}$ ]] ||
+  fail "candidate checksum is malformed"
+[[ "$expected_candidate_name" == "$(basename "$CANDIDATE")" ]] ||
+  fail "candidate checksum names a different archive"
+[[ "$(sha256_file "$CANDIDATE")" == "$expected_candidate_digest" ]] ||
+  fail "candidate archive checksum does not match"
+
+temporary_directory="$(mktemp -d "${TMPDIR:-/tmp}/magrathea-candidate-verification.XXXXXX")"
+trap 'rm -rf "$temporary_directory"' EXIT
+expected_entries="$temporary_directory/expected-entries.txt"
+actual_entries="$temporary_directory/actual-entries.txt"
+cat > "$expected_entries" <<EOF
+distributions/Magrathea-$EXPECTED_VERSION-maven-coordinates.txt
+distributions/Magrathea-$EXPECTED_VERSION-maven-files.sha256
+distributions/Magrathea-$EXPECTED_VERSION-release-bundle.zip
+distributions/Magrathea-$EXPECTED_VERSION-release-bundle.zip.sha256
+release/publish-verification.receipt
+reports/supply-chain/magrathea-sbom.cdx.json
+reports/supply-chain/third-party-licenses.tsv
+EOF
+
+unzip -Z1 "$CANDIDATE" | LC_ALL=C sort > "$actual_entries"
+while IFS= read -r entry; do
+  [[ -n "$entry" &&
+    "$entry" != /* &&
+    "$entry" != *".."* &&
+    "$entry" =~ ^[A-Za-z0-9_./+@()-]+$ ]] ||
+    fail "candidate archive contains an unsafe path"
+done < "$actual_entries"
+diff -u "$expected_entries" "$actual_entries" >/dev/null ||
+  fail "candidate archive layout is not the reviewed evidence set"
+
+mkdir -p "$OUTPUT_DIR"
+unzip -q "$CANDIDATE" -d "$OUTPUT_DIR"
+if find "$OUTPUT_DIR" -type l -print -quit | grep -q .; then
+  fail "candidate archive contains a symbolic link"
+fi
+
+receipt="$OUTPUT_DIR/release/publish-verification.receipt"
+coordinates="$OUTPUT_DIR/distributions/Magrathea-$EXPECTED_VERSION-maven-coordinates.txt"
+manifest="$OUTPUT_DIR/distributions/Magrathea-$EXPECTED_VERSION-maven-files.sha256"
+bundle="$OUTPUT_DIR/distributions/Magrathea-$EXPECTED_VERSION-release-bundle.zip"
+bundle_checksum="$bundle.sha256"
+public_key="$ROOT_DIR/docs/release-signing-key.asc"
+[[ -s "$receipt" && -s "$coordinates" && -s "$manifest" &&
+  -s "$bundle" && -s "$bundle_checksum" && -s "$public_key" ]] ||
+  fail "candidate evidence set is incomplete"
+
+[[ "$(read_property format "$receipt")" == "2" ]] ||
+  fail "candidate receipt format is unsupported"
+[[ "$(read_property head "$receipt")" == "$EXPECTED_COMMIT" ]] ||
+  fail "candidate belongs to a different commit"
+group="$(awk -F= '$1 == "magrathea.group" { print substr($0, index($0, "=") + 1); exit }' "$ROOT_DIR/gradle.properties")"
+[[ -n "$group" && "$(read_property group "$receipt")" == "$group" ]] ||
+  fail "candidate belongs to a different Maven group"
+group_path="$(printf '%s' "$group" | tr '.' '/')"
+[[ "$(read_property version "$receipt")" == "$EXPECTED_VERSION" ]] ||
+  fail "candidate belongs to a different version"
+[[ "$(read_property repository_url "$receipt")" == "https://maven.pkg.github.com/sensefy/magrathea" ]] ||
+  fail "candidate targets a different Maven repository"
+[[ "$(read_property candidate_run_id "$receipt")" == "$EXPECTED_RUN_ID" ]] ||
+  fail "candidate receipt belongs to a different workflow run"
+[[ "$(read_property candidate_run_attempt "$receipt")" =~ ^[1-9][0-9]*$ ]] ||
+  fail "candidate receipt has no workflow attempt"
+ci_run_id="$(read_property ci_run_id "$receipt")"
+[[ "$ci_run_id" =~ ^[1-9][0-9]*$ ]] ||
+  fail "candidate is not bound to an exact-SHA CI run"
+[[ "$(read_property release_public_key_sha256 "$receipt")" == "$(sha256_file "$public_key")" ]] ||
+  fail "candidate was built for a different release public key"
+[[ "$(read_property coordinates_sha256 "$receipt")" == "$(sha256_file "$coordinates")" ]] ||
+  fail "candidate coordinate inventory changed after preparation"
+[[ "$(read_property maven_manifest_sha256 "$receipt")" == "$(sha256_file "$manifest")" ]] ||
+  fail "candidate Maven manifest changed after preparation"
+
+expected_bundle_digest="$(awk 'NR == 1 { print $1 }' "$bundle_checksum")"
+[[ "$expected_bundle_digest" =~ ^[0-9a-f]{64}$ &&
+  "$(awk 'NR == 1 { print $2 }' "$bundle_checksum")" == "$(basename "$bundle")" &&
+  "$(sha256_file "$bundle")" == "$expected_bundle_digest" &&
+  "$(read_property bundle_sha256 "$receipt")" == "$expected_bundle_digest" ]] ||
+  fail "candidate release bundle checksum does not match"
+
+expected_coordinates_raw="$temporary_directory/expected-coordinates.raw.txt"
+expected_coordinates="$temporary_directory/expected-coordinates.txt"
+"$ROOT_DIR/gradlew" -p "$ROOT_DIR" --quiet printPublishingArtifactCoordinates \
+  > "$expected_coordinates_raw"
+grep "^$group:" "$expected_coordinates_raw" > "$expected_coordinates"
+[[ -s "$expected_coordinates" ]] || fail "source produced no publication coordinates"
+diff -u "$expected_coordinates" "$coordinates" >/dev/null ||
+  fail "candidate coordinates do not match the tagged source"
+
+expected_modules="$temporary_directory/expected-modules.txt"
+"$ROOT_DIR/scripts/publish-sdk" --print |
+  awk -F: -v group="$group" '$1 == group { print $2 }' > "$expected_modules"
+[[ -s "$expected_modules" ]] || fail "source produced no logical module inventory"
+[[ "$(shasum -a 256 "$expected_modules" | awk '{ print $1 }')" == \
+  "$(read_property modules_sha256 "$receipt")" ]] ||
+  fail "candidate logical module inventory does not match the tagged source"
+
+module_names=()
+while IFS= read -r module; do
+  [[ -n "$module" ]] && module_names+=("$module")
+done < "$expected_modules"
+selected_coordinates="$temporary_directory/selected-coordinates.txt"
+sorted_coordinates="$temporary_directory/candidate-coordinates.sorted.txt"
+"$ROOT_DIR/scripts/select-publishing-coordinates" \
+  "$coordinates" "${module_names[@]}" > "$selected_coordinates"
+LC_ALL=C sort "$coordinates" > "$sorted_coordinates"
+diff -u "$sorted_coordinates" "$selected_coordinates" >/dev/null ||
+  fail "candidate coordinates cannot be partitioned by logical module"
+
+bundle_directory="$OUTPUT_DIR/bundle"
+mkdir -p "$bundle_directory"
+while IFS= read -r entry; do
+  [[ -n "$entry" &&
+    "$entry" != /* &&
+    "$entry" != *".."* &&
+    "$entry" =~ ^[A-Za-z0-9_./+@()=-]+$ ]] ||
+    fail "release bundle contains an unsafe path"
+done < <(unzip -Z1 "$bundle")
+unzip -q "$bundle" -d "$bundle_directory"
+if find "$bundle_directory" -type l -print -quit | grep -q .; then
+  fail "release bundle contains a symbolic link"
+fi
+[[ -d "$bundle_directory/maven/$group_path" ]] ||
+  fail "candidate bundle has no Maven repository for $group"
+cmp \
+  "$OUTPUT_DIR/reports/supply-chain/magrathea-sbom.cdx.json" \
+  "$bundle_directory/supply-chain/magrathea-sbom.cdx.json" >/dev/null ||
+  fail "candidate SBOM differs from the attested bundle"
+cmp \
+  "$OUTPUT_DIR/reports/supply-chain/third-party-licenses.tsv" \
+  "$bundle_directory/supply-chain/third-party-licenses.tsv" >/dev/null ||
+  fail "candidate license report differs from the attested bundle"
+
+recalculated_manifest="$temporary_directory/recalculated-maven-files.sha256"
+"$ROOT_DIR/scripts/write-maven-manifest" \
+  "$bundle_directory/maven" \
+  "$coordinates" \
+  "$recalculated_manifest" >/dev/null
+diff -u "$manifest" "$recalculated_manifest" >/dev/null ||
+  fail "candidate Maven files differ from the manifest"
+
+gpg_home="$temporary_directory/gnupg"
+mkdir -m 0700 "$gpg_home"
+command -v gpg >/dev/null 2>&1 || fail "gpg is unavailable"
+command -v gpgv >/dev/null 2>&1 || fail "gpgv is unavailable"
+keyring="$gpg_home/release-key.gpg"
+GNUPGHOME="$gpg_home" gpg \
+  --batch \
+  --yes \
+  --quiet \
+  --dearmor \
+  --output "$keyring" \
+  "$public_key" >/dev/null 2>&1 ||
+  fail "release public key could not be decoded"
+[[ -s "$keyring" ]] || fail "decoded release public key is empty"
+signature_count=0
+while IFS= read -r line; do
+  relative_path="${line#*  }"
+  case "$relative_path" in
+    *.asc)
+      signature="$bundle_directory/maven/$relative_path"
+      payload="${signature%.asc}"
+      [[ -s "$payload" ]] || fail "signature has no payload: $relative_path"
+      GNUPGHOME="$gpg_home" gpgv --quiet --keyring "$keyring" "$signature" "$payload" \
+        >/dev/null 2>&1 ||
+        fail "Maven signature is invalid: $relative_path"
+      signature_count=$((signature_count + 1))
+      ;;
+  esac
+done < "$manifest"
+coordinate_count="$(wc -l < "$coordinates" | tr -d ' ')"
+[[ "$signature_count" -ge "$coordinate_count" ]] ||
+  fail "candidate does not contain a signature for every Maven coordinate"
+
+fingerprint="$(
+  GNUPGHOME="$gpg_home" gpg --batch --with-colons --show-keys "$public_key" 2>/dev/null |
+    awk -F: '$1 == "fpr" { print $10; exit }'
+)"
+[[ "$fingerprint" =~ ^[0-9A-F]{40}$ ]] || fail "release signing fingerprint is invalid"
+
+printf 'MAGRATHEA_RELEASE_CANDIDATE_VERIFIED version=%s coordinates=%s signatures=%s ci_run_id=%s candidate_run_id=%s fingerprint=%s\n' \
+  "$EXPECTED_VERSION" "$coordinate_count" "$signature_count" "$ci_run_id" \
+  "$EXPECTED_RUN_ID" "$fingerprint"
