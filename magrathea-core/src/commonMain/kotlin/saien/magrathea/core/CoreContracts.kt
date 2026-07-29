@@ -19,6 +19,8 @@ import kotlinx.serialization.json.encodeToJsonElement
 interface AgentRunner {
     fun run(request: AgentRequest): Flow<AgentEvent>
     suspend fun resume(sessionId: AgentSessionId): Flow<AgentEvent>
+    suspend fun interrupt(sessionId: AgentSessionId): AgentRecoveryInfo
+    suspend fun inspectRecovery(sessionId: AgentSessionId): AgentRecoveryInfo
     suspend fun cancel(sessionId: AgentSessionId)
 }
 
@@ -127,21 +129,34 @@ interface RetryPolicy {
     suspend fun backoffDelayMs(attempt: Int): Long = (attempt * 250L).coerceAtMost(2_000L)
 }
 
-/** Persistent or ephemeral storage for the authoritative snapshot of each Agent session. */
-interface SessionStore {
-    suspend fun saveSession(snapshot: AgentSessionSnapshot)
-    suspend fun loadSession(sessionId: AgentSessionId): AgentSessionSnapshot?
+/**
+ * Atomically persists and loads the authoritative session snapshot together with its latest
+ * recovery checkpoint.
+ */
+interface AgentPersistence {
+    suspend fun commit(
+        snapshot: AgentSessionSnapshot,
+        checkpoint: AgentCheckpoint?,
+    )
+
+    suspend fun load(sessionId: AgentSessionId): AgentPersistenceRecord?
     suspend fun listSessions(): List<AgentSessionSnapshot>
     suspend fun deleteSession(sessionId: AgentSessionId)
     suspend fun clear()
 }
 
-/** Storage for the latest resumable execution checkpoint of each Agent session. */
-interface CheckpointStore {
-    suspend fun saveCheckpoint(checkpoint: AgentCheckpoint)
-    suspend fun loadLatestCheckpoint(sessionId: AgentSessionId): AgentCheckpoint?
-    suspend fun deleteSession(sessionId: AgentSessionId)
-    suspend fun clear()
+data class AgentPersistenceRecord(
+    val snapshot: AgentSessionSnapshot,
+    val checkpoint: AgentCheckpoint?,
+) {
+    init {
+        require(checkpoint == null || snapshot.sessionId == checkpoint.sessionId) {
+            "Session and checkpoint identity must match"
+        }
+        require(checkpoint == null || snapshot.runId == checkpoint.runId) {
+            "Session and checkpoint run identity must match"
+        }
+    }
 }
 
 @Serializable
@@ -178,6 +193,9 @@ fun interface CredentialProvider {
 /** A registered Tool definition and its side-effecting execution boundary. */
 interface ToolExecutor {
     val definition: ToolDefinition
+    val recoveryPolicy: ToolRecoveryPolicy
+        get() = ToolRecoveryPolicy.FAIL_CLOSED
+
     suspend fun execute(request: ToolExecutionRequest): ToolExecutionResult
 }
 
@@ -195,13 +213,22 @@ interface ToolRegistry {
 @Serializable
 data class AgentSessionSnapshot(
     val sessionId: AgentSessionId,
+    val runId: AgentRunId,
     val request: AgentRequest,
     val state: AgentStateSnapshot,
+    val interruption: AgentInterruption? = null,
     @EncodeDefault(EncodeDefault.Mode.ALWAYS)
     val updatedAtEpochMs: Long = SystemEpochClock.nowEpochMs(),
-)
+) {
+    init {
+        require(sessionId == request.sessionId) { "Session and request identity must match" }
+        require((state.status == AgentStatus.INTERRUPTED) == (interruption != null)) {
+            "Only interrupted sessions may carry interruption metadata"
+        }
+    }
+}
 
-const val CURRENT_STORAGE_SCHEMA_VERSION: Int = 3
+const val CURRENT_STORAGE_SCHEMA_VERSION: Int = 4
 
 @Serializable
 data class StoredSessionEnvelope(
@@ -247,7 +274,9 @@ class AgentSessionSnapshotCodec(
 
     fun decode(payload: String): AgentSessionSnapshot {
         val encoded = json.parseToJsonElement(payload)
-        val envelope = json.decodeFromJsonElement(StoredSessionEnvelope.serializer(), encoded)
+        val envelope = decodeCanonical {
+            json.decodeFromJsonElement(StoredSessionEnvelope.serializer(), encoded)
+        }
         validateEnvelope(envelope.schemaVersion, envelope.sdkVersion)
         validateSessionIdentity(envelope.payload)
         validateCanonicalEnvelope(
@@ -288,7 +317,9 @@ class AgentCheckpointCodec(
 
     fun decode(payload: String): AgentCheckpoint {
         val encoded = json.parseToJsonElement(payload)
-        val envelope = json.decodeFromJsonElement(StoredCheckpointEnvelope.serializer(), encoded)
+        val envelope = decodeCanonical {
+            json.decodeFromJsonElement(StoredCheckpointEnvelope.serializer(), encoded)
+        }
         validateEnvelope(envelope.schemaVersion, envelope.sdkVersion)
         validateCheckpointIdentity(envelope.payload)
         validateCanonicalEnvelope(
@@ -297,6 +328,14 @@ class AgentCheckpointCodec(
         )
         return envelope.payload
     }
+}
+
+private inline fun <T> decodeCanonical(block: () -> T): T = try {
+    block()
+} catch (failure: SerializationException) {
+    throw failure
+} catch (failure: IllegalArgumentException) {
+    throw SerializationException("Stored payload violates the current schema", failure)
 }
 
 private fun validateEnvelope(schemaVersion: Int, sdkVersion: String) {
@@ -314,6 +353,9 @@ private fun validateSessionIdentity(snapshot: AgentSessionSnapshot) {
     if (snapshot.sessionId.value.isBlank()) {
         throw SerializationException("Stored sessionId must not be blank")
     }
+    if (snapshot.runId.value.isBlank()) {
+        throw SerializationException("Stored runId must not be blank")
+    }
     if (snapshot.sessionId != snapshot.request.sessionId) {
         throw SerializationException("Stored sessionId does not match request.sessionId")
     }
@@ -322,6 +364,9 @@ private fun validateSessionIdentity(snapshot: AgentSessionSnapshot) {
 private fun validateCheckpointIdentity(checkpoint: AgentCheckpoint) {
     if (checkpoint.sessionId.value.isBlank()) {
         throw SerializationException("Stored checkpoint sessionId must not be blank")
+    }
+    if (checkpoint.runId.value.isBlank()) {
+        throw SerializationException("Stored checkpoint runId must not be blank")
     }
     if (checkpoint.turn < 0 || checkpoint.state.turn != checkpoint.turn) {
         throw SerializationException("Stored checkpoint turn does not match state.turn")
@@ -352,7 +397,7 @@ data class ToolRuntimeContext(
 sealed interface AgentEvent {
     @Serializable
     @SerialName("started")
-    data class Started(val sessionId: AgentSessionId) : AgentEvent
+    data class Started(val sessionId: AgentSessionId, val runId: AgentRunId) : AgentEvent
 
     @Serializable
     @SerialName("turn_started")
@@ -401,7 +446,63 @@ sealed interface AgentEvent {
     @Serializable
     @SerialName("cancelled")
     data class Cancelled(val sessionId: AgentSessionId) : AgentEvent
+
+    @Serializable
+    @SerialName("interrupted")
+    data class Interrupted(
+        val sessionId: AgentSessionId,
+        val runId: AgentRunId,
+        val interruption: AgentInterruption,
+        val state: AgentStateSnapshot,
+    ) : AgentEvent
+
+    @Serializable
+    @SerialName("recovery_blocked")
+    data class RecoveryBlocked(
+        val sessionId: AgentSessionId,
+        val runId: AgentRunId,
+        val reason: AgentRecoveryBlockReason,
+    ) : AgentEvent
 }
+
+@Serializable
+enum class AgentInterruptionReason {
+    HOST_REQUESTED,
+    PROVIDER_NETWORK,
+    PROVIDER_TIMEOUT,
+    ORPHANED,
+}
+
+@Serializable
+data class AgentInterruption(
+    val reason: AgentInterruptionReason,
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS)
+    val occurredAtEpochMs: Long = SystemEpochClock.nowEpochMs(),
+)
+
+enum class AgentRecoveryDisposition {
+    ACTIVE,
+    RESUMABLE,
+    BLOCKED,
+    TERMINAL,
+    NOT_FOUND,
+}
+
+enum class AgentRecoveryBlockReason {
+    TOOL_OUTCOME_UNKNOWN,
+    CHECKPOINT_MISMATCH,
+}
+
+data class AgentRecoveryInfo(
+    val sessionId: AgentSessionId,
+    val runId: AgentRunId? = null,
+    val disposition: AgentRecoveryDisposition,
+    val status: AgentStatus? = null,
+    val state: AgentStateSnapshot? = null,
+    val cursor: AgentResumeCursor? = null,
+    val interruption: AgentInterruption? = null,
+    val blockedReason: AgentRecoveryBlockReason? = null,
+)
 
 abstract class TypedTool<Args>(
     private val serializer: KSerializer<Args>,

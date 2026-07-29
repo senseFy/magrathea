@@ -1,6 +1,7 @@
 package saien.magrathea.chatbot
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +19,7 @@ import kotlinx.coroutines.sync.withLock
 import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentFailureCode
 import saien.magrathea.core.AgentMessage
+import saien.magrathea.core.AgentRecoveryDisposition
 import saien.magrathea.core.AgentRequest
 import saien.magrathea.core.AgentRunner
 import saien.magrathea.core.AgentSessionId
@@ -79,6 +81,7 @@ internal class ChatbotController(
                 messages = messages,
                 status = ChatbotStatus.RUNNING,
                 failure = null,
+                interruption = null,
                 toolActivities = reconcileToolActivities(messages, previousActivities),
             )
         }
@@ -119,6 +122,7 @@ internal class ChatbotController(
                 messages = messages,
                 status = ChatbotStatus.RUNNING,
                 failure = null,
+                interruption = null,
                 toolActivities = reconcileToolActivities(messages, previousActivities),
             )
         }
@@ -127,13 +131,14 @@ internal class ChatbotController(
 
     suspend fun resume(sessionId: AgentSessionId) = commandMutex.withLock {
         ensureOpen()
-        stopActiveRun()
         stateMutex.withLock {
+            check(activeRun == null) { "Cannot resume while a run is active" }
             this@ChatbotController.sessionId = sessionId
             mutableState.value = mutableState.value.copy(
                 sessionId = sessionId.value,
                 status = ChatbotStatus.RUNNING,
                 failure = null,
+                interruption = null,
             )
         }
         startOperation(sessionId) { runner.resume(sessionId) }
@@ -146,7 +151,7 @@ internal class ChatbotController(
         ensureOpen()
         val current = stateMutex.withLock {
             if (this.configuration == configuration) return@withLock ConfigurationState.Unchanged
-            if (mutableState.value.isRunning) return@withLock ConfigurationState.Busy
+            if (mutableState.value.hasPendingRun) return@withLock ConfigurationState.Busy
             ConfigurationState.Ready(
                 sessionId = sessionId,
                 messages = conversation.toList(),
@@ -170,16 +175,33 @@ internal class ChatbotController(
 
     suspend fun cancel() = commandMutex.withLock {
         if (closed) return@withLock
-        if (stopActiveRun()) {
+        val stopped = stopActiveRun()
+        val persistedSessionId = stateMutex.withLock {
+            sessionId?.takeIf {
+                mutableState.value.status == ChatbotStatus.INTERRUPTED ||
+                    mutableState.value.status == ChatbotStatus.RECOVERY_BLOCKED
+            }
+        }
+        if (!stopped && persistedSessionId != null) {
+            runner.cancel(persistedSessionId)
+        }
+        if (stopped || persistedSessionId != null) {
             stateMutex.withLock {
                 mutableState.value = mutableState.value.copy(
                     status = ChatbotStatus.CANCELLED,
+                    failure = null,
+                    interruption = null,
                     toolActivities = mutableState.value.toolActivities.withUnresolvedToolActivities(
                         ChatbotToolActivityStatus.CANCELLED,
                     ),
                 )
             }
         }
+    }
+
+    suspend fun interrupt() = commandMutex.withLock {
+        if (closed) return@withLock
+        interruptActiveRun()
     }
 
     suspend fun loadHistory(
@@ -190,6 +212,8 @@ internal class ChatbotController(
         latestRequestUsage: ChatbotUsage = ChatbotUsage(),
         contextManagement: ChatbotContextManagementSnapshot =
             ChatbotContextManagementSnapshot(),
+        status: ChatbotStatus = ChatbotStatus.IDLE,
+        interruption: ChatbotInterruption? = null,
     ) = commandMutex.withLock {
         ensureOpen()
         stopActiveRun()
@@ -202,7 +226,8 @@ internal class ChatbotController(
                 configuration = configuration,
                 sessionId = sessionId?.value,
                 messages = messageSnapshots,
-                status = ChatbotStatus.IDLE,
+                status = status,
+                interruption = interruption,
                 usage = usage,
                 latestRequestUsage = latestRequestUsage,
                 contextManagement = contextManagement,
@@ -218,16 +243,7 @@ internal class ChatbotController(
         var cancelOwnedScope = false
         commandMutex.withLock {
             if (closed) return@withLock
-            if (stopActiveRun()) {
-                stateMutex.withLock {
-                    mutableState.value = mutableState.value.copy(
-                        status = ChatbotStatus.CANCELLED,
-                        toolActivities = mutableState.value.toolActivities.withUnresolvedToolActivities(
-                            ChatbotToolActivityStatus.CANCELLED,
-                        ),
-                    )
-                }
-            }
+            interruptActiveRun()
             closed = true
             cancelOwnedScope = ownsScope
         }
@@ -268,12 +284,14 @@ internal class ChatbotController(
     ) {
         nextGeneration += 1
         val generation = nextGeneration
+        val ready = CompletableDeferred<Unit>()
         val job = controllerScope.launch(start = CoroutineStart.LAZY) {
             var terminalSeen = false
             var cancelled = false
             try {
                 source().collect { event ->
                     val applied = applyEvent(event, sessionId, generation)
+                    ready.complete(Unit)
                     if (applied && event.isTerminal()) {
                         terminalSeen = true
                         throw TerminalEventCollected()
@@ -292,27 +310,109 @@ internal class ChatbotController(
                     applyFailure(sessionId, generation)
                 }
                 clearActiveRun(generation)
+                ready.complete(Unit)
             }
         }
         stateMutex.withLock {
-            activeRun = ActiveRun(sessionId, generation, job)
+            activeRun = ActiveRun(sessionId, generation, job, ready)
         }
         if (!job.start()) {
             applyFailure(sessionId, generation)
             clearActiveRun(generation)
+            ready.complete(Unit)
         }
     }
 
     private suspend fun stopActiveRun(): Boolean {
-        val active = stateMutex.withLock {
-            activeRun.also { activeRun = null }
-        } ?: return false
+        val active = claimActiveRun() ?: return false
         try {
             runner.cancel(active.sessionId)
         } finally {
             active.job.cancelAndJoin()
         }
         return true
+    }
+
+    private suspend fun interruptActiveRun(): Boolean {
+        val active = claimActiveRun() ?: return false
+        val recovery = try {
+            runner.interrupt(active.sessionId)
+        } finally {
+            active.job.cancelAndJoin()
+        }
+        stateMutex.withLock {
+            val recoveredState = recovery.state
+            val recoveredMessages = recoveredState?.messages
+                ?.map { it.toChatbotMessageSnapshot() }
+                ?: mutableState.value.messages
+            if (recoveredState != null) {
+                conversation.replaceWith(recoveredState.messages)
+            }
+            val recoveredSnapshot = mutableState.value.copy(
+                messages = recoveredMessages,
+                usage = recoveredState?.usage?.toChatbotUsage() ?: mutableState.value.usage,
+                latestRequestUsage = recoveredState?.latestRequestUsage?.toChatbotUsage()
+                    ?: mutableState.value.latestRequestUsage,
+                contextManagement = recoveredState?.contextManagement
+                    ?.toChatbotContextManagementSnapshot()
+                    ?: mutableState.value.contextManagement,
+                toolActivities = reconcileToolActivities(
+                    messages = recoveredMessages,
+                    previous = mutableState.value.toolActivities,
+                ),
+            )
+            mutableState.value = when (recovery.disposition) {
+                AgentRecoveryDisposition.BLOCKED -> recoveredSnapshot.copy(
+                    status = ChatbotStatus.RECOVERY_BLOCKED,
+                    failure = ChatbotFailure.RECOVERY_BLOCKED,
+                    interruption = recovery.interruption?.toChatbotInterruption(),
+                    toolActivities = reconcileToolActivities(
+                        messages = recoveredMessages,
+                        previous = mutableState.value.toolActivities,
+                        terminalUnresolvedStatus = ChatbotToolActivityStatus.INTERRUPTED,
+                    ),
+                )
+                AgentRecoveryDisposition.RESUMABLE -> recoveredSnapshot.copy(
+                    status = ChatbotStatus.INTERRUPTED,
+                    failure = null,
+                    interruption = recovery.interruption?.toChatbotInterruption(),
+                    toolActivities = reconcileToolActivities(
+                        messages = recoveredMessages,
+                        previous = mutableState.value.toolActivities,
+                        terminalUnresolvedStatus = ChatbotToolActivityStatus.INTERRUPTED,
+                    ),
+                )
+                AgentRecoveryDisposition.TERMINAL -> recoveredSnapshot.copy(
+                    status = recovery.status?.toChatbotStatus() ?: mutableState.value.status,
+                    failure = null,
+                    interruption = null,
+                )
+                AgentRecoveryDisposition.NOT_FOUND,
+                AgentRecoveryDisposition.ACTIVE,
+                -> recoveredSnapshot.copy(
+                    status = ChatbotStatus.RECOVERY_BLOCKED,
+                    failure = ChatbotFailure.RECOVERY_BLOCKED,
+                    toolActivities = reconcileToolActivities(
+                        messages = recoveredMessages,
+                        previous = mutableState.value.toolActivities,
+                        terminalUnresolvedStatus = ChatbotToolActivityStatus.INTERRUPTED,
+                    ),
+                )
+            }
+        }
+        return true
+    }
+
+    private suspend fun claimActiveRun(): ActiveRun? {
+        val observed = stateMutex.withLock { activeRun } ?: return null
+        observed.ready.await()
+        return stateMutex.withLock {
+            activeRun
+                ?.takeIf { current ->
+                    current.generation == observed.generation && mutableState.value.isRunning
+                }
+                ?.also { activeRun = null }
+        }
     }
 
     private suspend fun applyEvent(
@@ -326,6 +426,7 @@ internal class ChatbotController(
         mutableState.value = reducer.reduce(mutableState.value, event)
         when (event) {
             is AgentEvent.Completed -> conversation.replaceWith(event.state.messages)
+            is AgentEvent.Interrupted -> conversation.replaceWith(event.state.messages)
             is AgentEvent.MessageEmitted -> conversation.replaceOrAppend(event.message)
             else -> Unit
         }
@@ -365,6 +466,7 @@ internal class ChatbotController(
         val sessionId: AgentSessionId,
         val generation: Long,
         val job: Job,
+        val ready: CompletableDeferred<Unit>,
     )
 
     private sealed interface ConfigurationState {
@@ -378,6 +480,11 @@ internal class ChatbotController(
 
     private class TerminalEventCollected : Throwable()
 }
+
+private val ChatbotSnapshot.hasPendingRun: Boolean
+    get() = isRunning ||
+        status == ChatbotStatus.INTERRUPTED ||
+        status == ChatbotStatus.RECOVERY_BLOCKED
 
 private fun MutableList<AgentMessage>.replaceWith(messages: List<AgentMessage>) {
     clear()
@@ -402,7 +509,13 @@ private fun AgentEvent.sessionId(): AgentSessionId = when (this) {
     is AgentEvent.Completed -> sessionId
     is AgentEvent.Failed -> sessionId
     is AgentEvent.Cancelled -> sessionId
+    is AgentEvent.Interrupted -> sessionId
+    is AgentEvent.RecoveryBlocked -> sessionId
 }
 
 private fun AgentEvent.isTerminal(): Boolean =
-    this is AgentEvent.Completed || this is AgentEvent.Failed || this is AgentEvent.Cancelled
+    this is AgentEvent.Completed ||
+        this is AgentEvent.Failed ||
+        this is AgentEvent.Cancelled ||
+        this is AgentEvent.Interrupted ||
+        this is AgentEvent.RecoveryBlocked

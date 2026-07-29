@@ -40,6 +40,7 @@ import saien.magrathea.provider.api.ProviderChunk
 import saien.magrathea.provider.api.ProviderClientException
 import saien.magrathea.provider.api.ProviderContextLimitException
 import saien.magrathea.provider.api.ProviderException
+import saien.magrathea.provider.api.ProviderInvocationResumeMode
 import saien.magrathea.provider.api.ProviderNetworkException
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRateLimitException
@@ -119,6 +120,9 @@ class GatewayProviderAdapter(
     private val closeTransport: Boolean = true,
     private val codec: GatewayProtocolCodec = GatewayProtocolCodec(),
 ) : ProviderAdapter {
+    override val invocationResumeMode: ProviderInvocationResumeMode =
+        ProviderInvocationResumeMode.REATTACH
+
     init {
         require(key.isNotBlank()) { "Gateway Provider key must not be blank" }
     }

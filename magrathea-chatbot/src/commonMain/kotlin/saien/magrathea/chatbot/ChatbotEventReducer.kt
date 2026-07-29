@@ -8,6 +8,7 @@ internal class ChatbotEventReducer {
             sessionId = event.sessionId.value,
             status = ChatbotStatus.RUNNING,
             failure = null,
+            interruption = null,
         )
         is AgentEvent.TurnStarted,
         is AgentEvent.ContextTransformed,
@@ -23,6 +24,7 @@ internal class ChatbotEventReducer {
                 messages = messages,
                 status = ChatbotStatus.RUNNING,
                 failure = null,
+                interruption = null,
                 toolActivities = reconcileToolActivities(messages, state.toolActivities),
             )
         }
@@ -40,6 +42,7 @@ internal class ChatbotEventReducer {
                 messages = messages,
                 status = ChatbotStatus.COMPLETED,
                 failure = null,
+                interruption = null,
                 usage = event.state.usage.toChatbotUsage(),
                 latestRequestUsage = event.state.latestRequestUsage.toChatbotUsage(),
                 contextManagement = event.state.contextManagement
@@ -54,14 +57,41 @@ internal class ChatbotEventReducer {
         is AgentEvent.Failed -> state.copy(
             status = ChatbotStatus.FAILED,
             failure = event.code.toChatbotFailure(),
+            interruption = null,
             toolActivities = state.toolActivities.withUnresolvedToolActivities(
                 ChatbotToolActivityStatus.INTERRUPTED,
             ),
         )
         is AgentEvent.Cancelled -> state.copy(
             status = ChatbotStatus.CANCELLED,
+            interruption = null,
             toolActivities = state.toolActivities.withUnresolvedToolActivities(
                 ChatbotToolActivityStatus.CANCELLED,
+            ),
+        )
+        is AgentEvent.Interrupted -> {
+            val messages = event.state.messages.map { it.toChatbotMessageSnapshot() }
+            state.copy(
+                messages = messages,
+                status = ChatbotStatus.INTERRUPTED,
+                failure = null,
+                interruption = event.interruption.toChatbotInterruption(),
+                usage = event.state.usage.toChatbotUsage(),
+                latestRequestUsage = event.state.latestRequestUsage.toChatbotUsage(),
+                contextManagement = event.state.contextManagement
+                    .toChatbotContextManagementSnapshot(),
+                toolActivities = reconcileToolActivities(
+                    messages = messages,
+                    previous = state.toolActivities,
+                    terminalUnresolvedStatus = ChatbotToolActivityStatus.INTERRUPTED,
+                ),
+            )
+        }
+        is AgentEvent.RecoveryBlocked -> state.copy(
+            status = ChatbotStatus.RECOVERY_BLOCKED,
+            failure = ChatbotFailure.RECOVERY_BLOCKED,
+            toolActivities = state.toolActivities.withUnresolvedToolActivities(
+                ChatbotToolActivityStatus.INTERRUPTED,
             ),
         )
     }

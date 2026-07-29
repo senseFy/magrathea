@@ -16,6 +16,7 @@
 |---|---|
 | [Context management](context-management.md) | Token budgets, semantic compaction, and overflow recovery |
 | [Timeouts](timeouts.md) | Provider, Tool, and whole-run deadlines |
+| [Interruption and recovery](recovery.md) | Backgrounding, process loss, resume, and Tool replay safety |
 | [MCP](mcp.md) | Tool discovery, transports, policy, security, and lifecycle |
 | [Web Search](web-search.md) | Portable search Tool contract and citation boundary |
 | [X Search](x-search.md) | Cross-model X Search Tool and xAI hosted wire |

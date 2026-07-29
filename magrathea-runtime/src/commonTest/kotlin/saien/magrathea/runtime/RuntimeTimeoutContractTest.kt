@@ -16,6 +16,7 @@ import kotlinx.serialization.json.buildJsonObject
 import saien.magrathea.core.AgentEngineConfig
 import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentFailureCode
+import saien.magrathea.core.AgentInterruptionReason
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentRequest
 import saien.magrathea.core.MessageRole
@@ -47,7 +48,7 @@ class RuntimeTimeoutContractTest {
             .run(request(provider.key, configured))
             .toList()
 
-        assertEquals(AgentFailureCode.TIMEOUT, events.singleFailure())
+        assertEquals(AgentInterruptionReason.PROVIDER_TIMEOUT, events.singleInterruption())
         assertEquals(configured, provider.requests.single().timeouts)
     }
 
@@ -63,7 +64,7 @@ class RuntimeTimeoutContractTest {
             .run(request(provider.key, providerTimeouts(idle = 100)))
             .toList()
 
-        assertEquals(AgentFailureCode.TIMEOUT, events.singleFailure())
+        assertEquals(AgentInterruptionReason.PROVIDER_TIMEOUT, events.singleInterruption())
         assertTrue(events.filterIsInstance<AgentEvent.MessageEmitted>().isNotEmpty())
     }
 
@@ -81,7 +82,7 @@ class RuntimeTimeoutContractTest {
             .run(request(provider.key, providerTimeouts(first = 100, idle = 100, call = 250)))
             .toList()
 
-        assertEquals(AgentFailureCode.TIMEOUT, events.singleFailure())
+        assertEquals(AgentInterruptionReason.PROVIDER_TIMEOUT, events.singleInterruption())
     }
 
     @Test
@@ -166,8 +167,7 @@ class RuntimeTimeoutContractTest {
     ) = DefaultAgentRunner(
         providerRegistry = InMemoryProviderRegistry(listOf(provider)),
         toolRegistry = InMemoryToolRegistry(listOfNotNull(tool)),
-        sessionStore = InMemorySessionStore(),
-        checkpointStore = InMemoryCheckpointStore(),
+        persistence = InMemoryAgentPersistence(),
         dispatcher = dispatcher,
     )
 
@@ -198,6 +198,9 @@ class RuntimeTimeoutContractTest {
 
     private fun List<AgentEvent>.singleFailure(): AgentFailureCode =
         filterIsInstance<AgentEvent.Failed>().single().code
+
+    private fun List<AgentEvent>.singleInterruption(): AgentInterruptionReason =
+        filterIsInstance<AgentEvent.Interrupted>().single().interruption.reason
 
     private class DelayedProvider(
         override val key: String,

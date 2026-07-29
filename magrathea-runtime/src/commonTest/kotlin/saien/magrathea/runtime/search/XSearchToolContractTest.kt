@@ -12,10 +12,12 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentSessionId
+import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.Citation
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolExecutionRequest
+import saien.magrathea.core.ToolRecoveryPolicy
 import saien.magrathea.core.citations
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -54,6 +56,7 @@ class XSearchToolContractTest {
         )
 
         assertEquals(XSearchTool.NAME, tool.definition.name)
+        assertEquals(ToolRecoveryPolicy.REPLAY_SAFE, tool.recoveryPolicy)
         assertEquals(2, tool.definition.maxCallsPerTurn)
         assertEquals(2, tool.definition.maxCallsPerRun)
         assertEquals(4_000, tool.definition.timeoutMs)
@@ -263,6 +266,8 @@ class XSearchToolContractTest {
         )
         return ToolExecutionRequest(
             sessionId = AgentSessionId("x-search-session"),
+            runId = AgentRunId("x-search-run"),
+            executionId = "x-search-run:x-search-call:0",
             assistantMessage = AgentMessage(role = MessageRole.ASSISTANT, parts = listOf(toolCall)),
             toolCall = toolCall,
         )

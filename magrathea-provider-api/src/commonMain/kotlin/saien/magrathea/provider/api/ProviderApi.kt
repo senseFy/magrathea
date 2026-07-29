@@ -33,10 +33,23 @@ import saien.magrathea.core.ToolCallLifecycle
 import saien.magrathea.core.ToolDefinition
 import saien.magrathea.core.ToolResultPart
 
+/** How a Provider resumes an invocation interrupted while its model response was pending. */
+enum class ProviderInvocationResumeMode {
+    /** Start another physical Provider attempt under the same logical Agent run. */
+    NEW_ATTEMPT,
+
+    /** Reuse the invocation identity to reattach to a durable remote stream. */
+    REATTACH,
+}
+
 /** Converts one Provider wire protocol into the canonical Magrathea event lifecycle. */
 interface ProviderAdapter {
     /** Runtime routing key and credential namespace for this configured Provider instance. */
     val key: String
+
+    /** Invocation identity behavior when Runtime resumes a pending model response. */
+    val invocationResumeMode: ProviderInvocationResumeMode
+        get() = ProviderInvocationResumeMode.NEW_ATTEMPT
 
     /** Typed configuration family consumed by this adapter, independent from [key]. */
     val optionsFamily: String?

@@ -74,8 +74,7 @@ class RuntimeUsageContractTest {
     private fun runner(provider: ProviderAdapter) = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
             dispatcher = Dispatchers.Unconfined,
         )
 

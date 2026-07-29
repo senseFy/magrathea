@@ -6,7 +6,7 @@ import kotlin.test.assertEquals
 class PlatformPrimitivesContractTest {
     @Test
     fun agentModelFactory_usesInjectedIdGeneratorAndClock() {
-        val ids = ArrayDeque(listOf("session-id", "message-id"))
+        val ids = ArrayDeque(listOf("session-id", "message-id", "run-id"))
         val factory = AgentModelFactory(
             idGenerator = IdGenerator { ids.removeFirst() },
             clock = EpochClock { 1_700_000_000_123 },
@@ -24,12 +24,14 @@ class PlatformPrimitivesContractTest {
         )
         val snapshot = factory.createSessionSnapshot(
             sessionId = sessionId,
+            runId = factory.createRunId(),
             request = request,
             state = AgentStateSnapshot(messages = listOf(message)),
         )
 
         assertEquals("session-id", sessionId.value)
         assertEquals("message-id", message.id)
+        assertEquals("run-id", snapshot.runId.value)
         assertEquals(1_700_000_000_123, message.createdAtEpochMs)
         assertEquals(1_700_000_000_123, snapshot.updatedAtEpochMs)
     }

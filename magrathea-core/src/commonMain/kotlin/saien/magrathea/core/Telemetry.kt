@@ -27,10 +27,8 @@ enum class TelemetryOutcome {
 }
 
 enum class TelemetryStoreOperation {
-    LOAD_SESSION,
-    SAVE_SESSION,
-    LOAD_CHECKPOINT,
-    SAVE_CHECKPOINT,
+    LOAD_STATE,
+    COMMIT_STATE,
 }
 
 sealed interface TelemetryEvent {

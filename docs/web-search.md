@@ -124,8 +124,7 @@ val search = WebSearchTool(
 val runner = DefaultAgentRunner(
     providerRegistry = providers,
     toolRegistry = InMemoryToolRegistry(listOf(search)),
-    sessionStore = sessions,
-    checkpointStore = checkpoints,
+    persistence = persistence,
     credentialProvider = providerCredentials,
 )
 
@@ -134,8 +133,7 @@ val chatbot = createChatbotClient(
     requestFactory = DefaultChatbotRequestFactory(
         tools = listOf(search.definition),
     ),
-    sessionStore = sessions,
-    checkpointStore = checkpoints,
+    persistence = persistence,
     closeResources = { closeApplicationResources() },
 )
 ```

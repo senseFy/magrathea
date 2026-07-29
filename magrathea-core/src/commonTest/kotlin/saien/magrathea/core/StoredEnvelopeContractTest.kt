@@ -35,7 +35,7 @@ class StoredEnvelopeContractTest {
     @Test
     fun checkpointCodec_roundTripsCurrentVersionedEnvelope() {
         val snapshot = snapshot()
-        val expected = AgentCheckpoint(snapshot.sessionId, turn = 3, state = snapshot.state.copy(turn = 3))
+        val expected = checkpoint(snapshot, turn = 3)
 
         val encoded = checkpointCodec.encode(expected)
         val envelope = json.parseToJsonElement(encoded).jsonObject
@@ -59,7 +59,7 @@ class StoredEnvelopeContractTest {
         assertFailsWith<SerializationException> { sessionCodec.decode(missingUsage) }
         assertFailsWith<SerializationException> { sessionCodec.decode(missingTools) }
 
-        val checkpoint = AgentCheckpoint(snapshot().sessionId, turn = 0, state = snapshot().state)
+        val checkpoint = checkpoint(snapshot(), turn = 0)
         val encodedCheckpoint = checkpointCodec.encode(checkpoint)
         val missingRetryCount = encodedCheckpoint.replace(",\"retryCount\":0", "")
         assertTrue(missingRetryCount != encodedCheckpoint)
@@ -75,6 +75,7 @@ class StoredEnvelopeContractTest {
         )
         val snapshot = AgentSessionSnapshot(
             sessionId = request.sessionId,
+            runId = AgentRunId("run-generated"),
             request = request,
             state = AgentStateSnapshot(messages = request.messages),
         )
@@ -103,7 +104,7 @@ class StoredEnvelopeContractTest {
     @Test
     fun sessionCodec_rejectsUnsupportedSchemaVersion() {
         val unsupported = sessionCodec.encode(snapshot())
-            .replaceFirst("\"schemaVersion\":3", "\"schemaVersion\":4")
+            .replaceFirst("\"schemaVersion\":4", "\"schemaVersion\":5")
 
         assertFailsWith<SerializationException> {
             sessionCodec.decode(unsupported)
@@ -127,7 +128,7 @@ class StoredEnvelopeContractTest {
     @Test
     fun codecs_rejectCorruptJson() {
         assertFailsWith<SerializationException> {
-            sessionCodec.decode("{\"schemaVersion\":3")
+            sessionCodec.decode("{\"schemaVersion\":4")
         }
         assertFailsWith<SerializationException> {
             checkpointCodec.decode("not-json")
@@ -136,10 +137,8 @@ class StoredEnvelopeContractTest {
 
     @Test
     fun sessionCodec_rejectsMismatchedSnapshotIdentityOnEncodeAndDecode() {
-        val mismatched = snapshot(requestSessionId = AgentSessionId("different-request-session"))
-
-        assertFailsWith<SerializationException> {
-            sessionCodec.encode(mismatched)
+        assertFailsWith<IllegalArgumentException> {
+            snapshot(requestSessionId = AgentSessionId("different-request-session"))
         }
 
         val encoded = sessionCodec.encode(snapshot())
@@ -152,10 +151,16 @@ class StoredEnvelopeContractTest {
     @Test
     fun checkpointCodec_rejectsMismatchedAndNegativeTurnsOnEncodeAndDecode() {
         val snapshot = snapshot()
-        val mismatched = AgentCheckpoint(snapshot.sessionId, turn = 2, state = snapshot.state.copy(turn = 1))
-        assertFailsWith<SerializationException> { checkpointCodec.encode(mismatched) }
+        assertFailsWith<IllegalArgumentException> {
+            AgentCheckpoint(
+                sessionId = snapshot.sessionId,
+                runId = snapshot.runId,
+                cursor = AgentResumeCursor(2, AgentResumePhase.MODEL_PENDING),
+                state = snapshot.state.copy(turn = 1),
+            )
+        }
 
-        val valid = AgentCheckpoint(snapshot.sessionId, turn = 1, state = snapshot.state.copy(turn = 1))
+        val valid = checkpoint(snapshot, turn = 1)
         val corrupt = checkpointCodec.encode(valid).replaceFirst("\"turn\":1", "\"turn\":-1")
         assertFailsWith<SerializationException> { checkpointCodec.decode(corrupt) }
     }
@@ -177,9 +182,20 @@ class StoredEnvelopeContractTest {
         )
         return AgentSessionSnapshot(
             sessionId = sessionId,
+            runId = AgentRunId("run-contract"),
             request = request,
             state = AgentStateSnapshot(messages = listOf(message)),
             updatedAtEpochMs = 2L,
         )
     }
+
+    private fun checkpoint(
+        snapshot: AgentSessionSnapshot,
+        turn: Int,
+    ): AgentCheckpoint = AgentCheckpoint(
+        sessionId = snapshot.sessionId,
+        runId = snapshot.runId,
+        cursor = AgentResumeCursor(turn, AgentResumePhase.MODEL_PENDING),
+        state = snapshot.state.copy(turn = turn),
+    )
 }

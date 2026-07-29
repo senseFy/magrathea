@@ -12,6 +12,8 @@ import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentFailureCode
 import saien.magrathea.core.AgentCheckpoint
 import saien.magrathea.core.AgentMessage
+import saien.magrathea.core.AgentResumeCursor
+import saien.magrathea.core.AgentResumePhase
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.ContextCompaction
@@ -40,7 +42,7 @@ class ChatbotEventReducerTest {
             configuration = testChatbotConfiguration(),
             messages = listOf(user.toChatbotMessageSnapshot()),
         )
-        state = reducer.reduce(state, AgentEvent.Started(sessionId))
+        state = reducer.reduce(state, AgentEvent.Started(sessionId, TEST_RUN_ID))
         state = reducer.reduce(state, AgentEvent.MessageEmitted(sessionId, partial))
         state = reducer.reduce(state, AgentEvent.MessageEmitted(sessionId, final))
 
@@ -90,11 +92,19 @@ class ChatbotEventReducerTest {
         val agentState = AgentStateSnapshot(
             messages = emptyList(),
             contextManagement = contextManagement,
+            turn = 3,
         )
 
         val checkpointed = reducer.reduce(
             ChatbotSnapshot(configuration = testChatbotConfiguration()),
-            AgentEvent.CheckpointSaved(AgentCheckpoint(sessionId, turn = 3, state = agentState)),
+            AgentEvent.CheckpointSaved(
+                AgentCheckpoint(
+                    sessionId,
+                    TEST_RUN_ID,
+                    AgentResumeCursor(3, AgentResumePhase.MODEL_PENDING),
+                    agentState,
+                ),
+            ),
         )
 
         assertEquals(2, checkpointed.contextManagement.compactionGeneration)

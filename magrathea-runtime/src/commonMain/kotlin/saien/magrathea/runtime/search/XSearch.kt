@@ -13,6 +13,7 @@ import saien.magrathea.core.ToolDefinition
 import saien.magrathea.core.ToolExecutionRequest
 import saien.magrathea.core.ToolExecutionResult
 import saien.magrathea.core.ToolExecutor
+import saien.magrathea.core.ToolRecoveryPolicy
 
 /**
  * Host-owned policy for one portable X Search Tool instance.
@@ -119,6 +120,8 @@ class XSearchTool(
     requiresPermission: String? = null,
     requiresApproval: Boolean = false,
 ) : ToolExecutor {
+    override val recoveryPolicy: ToolRecoveryPolicy = ToolRecoveryPolicy.REPLAY_SAFE
+
     val policy: XSearchPolicy = policy.copy(
         allowedHandles = policy.allowedHandles.toList(),
         excludedHandles = policy.excludedHandles.toList(),

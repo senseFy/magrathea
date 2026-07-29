@@ -29,6 +29,8 @@ class AgentModelFactory(
 ) {
     fun createSessionId(): AgentSessionId = AgentSessionId(idGenerator.nextId())
 
+    fun createRunId(): AgentRunId = AgentRunId.create(idGenerator)
+
     fun createMessage(
         role: MessageRole,
         parts: List<MessagePart>,
@@ -45,12 +47,16 @@ class AgentModelFactory(
 
     fun createSessionSnapshot(
         sessionId: AgentSessionId,
+        runId: AgentRunId,
         request: AgentRequest,
         state: AgentStateSnapshot,
+        interruption: AgentInterruption? = null,
     ): AgentSessionSnapshot = AgentSessionSnapshot(
         sessionId = sessionId,
+        runId = runId,
         request = request,
         state = state,
+        interruption = interruption,
         updatedAtEpochMs = clock.nowEpochMs(),
     )
 }

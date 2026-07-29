@@ -24,7 +24,7 @@ navigation aid, not a substitute for the public API or the tests themselves.
 | R-002 | Unknown tools, permission denial, and approval denial fail closed | Runtime and Policy contracts |
 | R-003 | Cancellation remains cancellation and is not converted to retry or a generic failure | Runtime, socket, and Chatbot contracts |
 | R-004 | Retry handles only stable retryable failures and is bounded by attempts, backoff, and `Retry-After` | Retry and chaos contracts |
-| R-005 | Checkpoints are written at stable boundaries; resume validates session identity and pending tool state | Checkpoint and resume contracts |
+| R-005 | Snapshot and checkpoint commit atomically with matching session/run identity; resume starts from an exact phase, creating a new direct-Provider attempt or reattaching through an adapter that explicitly supports durable replay | Persistence, checkpoint, and resume contracts |
 | R-006 | Turns, messages, queues, attachments, tool results, and backpressure have hard limits | Limit and stress contracts |
 | R-007 | Telemetry is disabled by default and accepts no prompt, message, reasoning, tool payload, credential, or endpoint | Telemetry canary contracts |
 | R-008 | Per-turn Tool-call limits use the stricter registered/request definition; independent per-run counters persist across turns, injected user messages, checkpoints, and resume; excess parallel or sequential calls are rejected without execution | Runtime Tool-limit contracts |
@@ -35,15 +35,16 @@ navigation aid, not a substitute for the public API or the tests themselves.
 | R-013 | MCP annotation values remain untrusted hints; host policy controls enablement, permissions, approval, timeout, and call budgets | MCP policy contracts |
 | R-014 | Remote MCP endpoints require HTTPS except for loopback, reject URL userinfo credentials and transport-owned headers, and resolve credential headers only when connecting | MCP transport security contracts |
 | R-015 | JVM MCP stdio starts only an explicitly configured process shape, passes only explicitly supplied environment entries, and completes initialization/discovery/call over real child-process streams | MCP stdio process and integration contracts |
-| R-016 | Connection, first Provider event, canonical stream idle, Provider call, Tool execution, and complete Agent run have independent deadlines; timeout remains distinct from network failure and cancellation while preserving processed partial output | Transport and Runtime timeout contracts |
-| R-017 | Full history remains authoritative while the Provider receives a token-budgeted cumulative summary plus recent raw messages; Provider usage is preferred over estimation, Tool call/result boundaries are atomic, history edits invalidate stale state, and only a pre-output context-limit failure may force one retry | Context-management unit and Runtime integration contracts |
+| R-016 | Connection, first Provider event, canonical stream idle, Provider call, Tool execution, and complete Agent run have independent deadlines; Provider timeout is recoverable and rolls provisional output back, while Tool and whole-run deadlines retain their own terminal semantics | Transport and Runtime timeout contracts |
+| R-017 | Host interruption and orphaned process state are resumable; Tool recovery reuses completed results, executes pending calls, and blocks unknown started side effects unless the executor declares replay safety | Runtime recovery contracts |
+| R-018 | Full history remains authoritative while the Provider receives a token-budgeted cumulative summary plus recent raw messages; Provider usage is preferred over estimation, Tool call/result boundaries are atomic, history edits invalidate stale state, and only a pre-output context-limit failure may force one retry | Context-management unit and Runtime integration contracts |
 
 ## Chatbot, storage, and credentials
 
 | ID | Invariant | Nearest verification boundary |
 |---|---|---|
 | S-001 | Chatbot snapshots are reduced from Agent events and terminal state matches the persisted session | Chatbot contracts |
-| S-002 | Session and checkpoint codecs accept only the committed strict schema-v3 envelope, including persistent context-management and run-level Tool-counter state | Serialization fixtures |
+| S-002 | Session and checkpoint codecs accept only the committed strict schema-v4 envelope, including run identity, exact resume cursor, interruption metadata, context state, and Tool journal | Serialization fixtures |
 | S-003 | A corrupt Room row is isolated and produces a content-free report | Room JVM, Android, and iOS contracts |
 | S-004 | Store handles and facade close operations are idempotent; closed resources reject further use | Ownership contracts |
 | S-005 | Android credentials use Keystore AES-GCM and no-backup ciphertext | Android host and device fixture |
@@ -58,7 +59,7 @@ navigation aid, not a substitute for the public API or the tests themselves.
 |---|---|---|
 | W-001 | Browser requests cannot carry vendor credentials, upstream endpoints, or arbitrary Provider headers | Gateway Provider negative contracts |
 | W-002 | Gateway `exact-v1` validates version, owner, tenant, request, session, stream, and idempotency identity | Protocol and server contracts |
-| W-003 | SSE sequence is continuous, replay is bounded, disconnect is recoverable, and terminal streams are immutable | Server, Provider, and browser E2E |
+| W-003 | SSE sequence is continuous, replay is bounded, disconnect and Runtime resume reattach by stable invocation identity, and terminal streams are immutable | Server, Provider, and browser E2E |
 | W-004 | Client cancellation performs best-effort remote cancellation while preserving local cancellation | Real-HTTP JS/Wasm sample |
 | W-005 | Attachments use pre-uploaded, re-authorized references | Gateway attachment contracts |
 | W-006 | Cookie/bearer authentication, CSRF, quota, and audit execute through injected server ports | Gateway server security contracts |

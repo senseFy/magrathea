@@ -40,8 +40,7 @@ import saien.magrathea.provider.api.ProviderEvent
 import saien.magrathea.provider.api.ProviderRequest
 import saien.magrathea.provider.api.ProviderUsage
 import saien.magrathea.runtime.DefaultAgentRunner
-import saien.magrathea.runtime.InMemoryCheckpointStore
-import saien.magrathea.runtime.InMemorySessionStore
+import saien.magrathea.runtime.InMemoryAgentPersistence
 import saien.magrathea.runtime.InMemoryToolRegistry
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -50,8 +49,7 @@ class ChatbotScriptContractTest {
     fun commonScriptReachesEquivalentFinalStateAndResumeDoesNotRepeatSideEffects() = runTest {
         val tool = WeatherTool()
         val provider = ScriptedProvider(tool.definition.name)
-        val sessionStore = InMemorySessionStore()
-        val checkpointStore = InMemoryCheckpointStore()
+        val persistence = InMemoryAgentPersistence()
         val auditLog = InMemoryToolAuditLog()
         val steeringMessage = AgentMessage(
             id = "steering-tone",
@@ -76,8 +74,7 @@ class ChatbotScriptContractTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(listOf(tool)),
-            sessionStore = sessionStore,
-            checkpointStore = checkpointStore,
+            persistence = persistence,
             approvalGateway = policy,
             steeringMessageProvider = SteeringMessageProvider { context ->
                 if (context.state.messages.any { it.id == steeringMessage.id }) emptyList()

@@ -34,15 +34,13 @@ class JvmChatbotPlatformCompositionTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = stores.sessionStore,
-            checkpointStore = stores.checkpointStore,
+            persistence = stores.persistence,
             credentialProvider = credentials,
         )
         val client = createChatbotClient(
             runner = runner,
             requestFactory = DefaultChatbotRequestFactory(),
-            sessionStore = stores.sessionStore,
-            checkpointStore = stores.checkpointStore,
+            persistence = stores.persistence,
             closeResources = {
                 try {
                     provider.close()

@@ -11,7 +11,7 @@ Chatbot, Provider, Tool, persistence, and browser layers they need.
 |---|---|
 | Requests and events | `AgentRequest`, `AgentMessage`, `MessagePart`, `ModelDescriptor`, `AgentEvent` |
 | Execution | `AgentRunner`, `ToolRegistry`, approval and permission gateways |
-| State | `SessionStore`, `CheckpointStore`, strict snapshot and checkpoint codecs |
+| State | `AgentPersistence`, strict snapshot and checkpoint codecs |
 | Credentials | `CredentialRef`, `CredentialProvider`, transient `ProviderCredential` |
 | Infrastructure | Injectable IDs, epoch and monotonic clocks, telemetry |
 
@@ -23,6 +23,7 @@ and UI.
 `magrathea-provider-api` defines:
 
 - `ProviderAdapter` and `ProviderRegistry`;
+- Provider invocation restart and durable-stream reattachment semantics;
 - canonical `ProviderEvent` values and typed failures;
 - `HttpTransport` and portable transport configuration;
 - strict typed options for Gemini, OpenAI, and Anthropic protocol families.
@@ -41,14 +42,14 @@ See [Providers](providers.md) for endpoint and authentication configuration, and
 
 - Provider turns and canonical streaming;
 - Tool execution and approval;
-- retry, cancellation, checkpoints, and resume;
+- retry, explicit cancellation, recoverable interruption, checkpoints, and resume;
 - semantic context compaction and context-limit recovery;
 - Provider, Tool, and whole-run deadlines;
 - hard limits and telemetry.
 
-Its constructor accepts Core ports explicitly. `InMemorySessionStore`, `InMemoryCheckpointStore`,
-and `InMemoryToolRegistry` are suitable for tests, previews, and intentionally ephemeral hosts;
-persistent products should provide platform stores.
+Its constructor accepts Core ports explicitly. `InMemoryAgentPersistence` and
+`InMemoryToolRegistry` are suitable for tests, previews, and intentionally ephemeral hosts;
+persistent products should use a platform `AgentPersistence`.
 
 Capability contracts:
 
@@ -73,13 +74,13 @@ local stdio processes. See [MCP](mcp.md).
 | API | Purpose |
 |---|---|
 | `ChatbotClient` | Create, resume, list, delete, and close sessions |
-| `ChatbotSession` | Observe, send, regenerate, cancel, resume, and update configuration |
+| `ChatbotSession` | Observe, send, regenerate, cancel, interrupt, resume, and update configuration |
 | `ChatbotSessionConfiguration` | Conversation-owned Provider, model, and non-secret credential profile |
 | `ChatbotSnapshot` | Immutable product-facing messages, status, usage, context, failures, and Tool activity |
 | `ChatbotRequestFactory` | Map session state to an `AgentRequest` and apply host defaults |
 
-Create it with `createChatbotClient`, using the same Session and Checkpoint stores as the Runner.
-Pass `closeResources` when the composition owns Provider transports or platform stores.
+Create it with `createChatbotClient`, using the same `AgentPersistence` as the Runner. Pass
+`closeResources` when the composition owns Provider transports or platform stores.
 
 `ChatbotSnapshot.toolActivities` derives Tool lifecycle from canonical messages and live events
 while using the canonical persisted state.
@@ -88,8 +89,8 @@ while using the canonical persisted state.
 
 | Module | Boundary |
 |---|---|
-| `magrathea-storage-room` | Owned Room stores for Android, JVM, and iOS |
-| `magrathea-storage-web` | Owned IndexedDB stores for browser JS/Wasm |
+| `magrathea-storage-room` | Atomic Room persistence for Android, JVM, and iOS |
+| `magrathea-storage-web` | Atomic IndexedDB persistence for browser JS/Wasm |
 | `magrathea-credentials` | Android Keystore and iOS Keychain adapters |
 
 JVM credentials remain host-owned. Store handles and clients close idempotently and reject

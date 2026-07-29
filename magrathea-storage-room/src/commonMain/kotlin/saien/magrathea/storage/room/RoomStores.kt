@@ -1,18 +1,22 @@
 package saien.magrathea.storage.room
 
 import androidx.room.RoomDatabase
+import androidx.room.deferredTransaction
+import androidx.room.immediateTransaction
+import androidx.room.useReaderConnection
+import androidx.room.useWriterConnection
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
+import saien.magrathea.core.AgentPersistence
+import saien.magrathea.core.AgentPersistenceRecord
 import saien.magrathea.core.AgentCheckpoint
 import saien.magrathea.core.AgentCheckpointCodec
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentSessionSnapshotCodec
-import saien.magrathea.core.CheckpointStore
-import saien.magrathea.core.SessionStore
 
 enum class StoredRecordKind {
     SESSION,
@@ -41,14 +45,13 @@ class StoredRecordCorruptionException(
     "Stored ${corruption.kind.name.lowercase()} record is corrupt (${corruption.reason.name.lowercase()})",
 )
 
-/** Owns one Room database together with its Session and Checkpoint store views. */
+/** Owns one Room database and its atomic Agent persistence boundary. */
 class MagratheaRoomStoreHandle internal constructor(
     private val database: MagratheaDatabase,
     reporter: StoredRecordCorruptionReporter,
     json: Json = Json,
 ) {
-    val sessionStore: SessionStore = RoomSessionStore(database.sessionDao(), reporter, json)
-    val checkpointStore: CheckpointStore = RoomCheckpointStore(database.checkpointDao(), reporter, json)
+    val persistence: AgentPersistence = RoomAgentPersistence(database, reporter, json)
 
     private val closeMutex = Mutex()
     private var closed = false
@@ -80,32 +83,77 @@ internal fun buildMagratheaRoomDatabase(
         .build()
 }
 
-internal class RoomSessionStore(
-    private val dao: AgentSessionDao,
+internal class RoomAgentPersistence(
+    private val database: MagratheaDatabase,
     private val reporter: StoredRecordCorruptionReporter,
     json: Json = Json,
-) : SessionStore {
+) : AgentPersistence {
     private val snapshotCodec = AgentSessionSnapshotCodec(json)
+    private val checkpointCodec = AgentCheckpointCodec(json)
+    private val sessionDao = database.sessionDao()
+    private val checkpointDao = database.checkpointDao()
 
-    override suspend fun saveSession(snapshot: AgentSessionSnapshot) {
-        dao.upsert(
-            AgentSessionEntity(
-                sessionId = snapshot.sessionId.value,
-                payload = snapshotCodec.encode(snapshot),
-                updatedAtEpochMs = snapshot.updatedAtEpochMs,
-            ),
+    override suspend fun commit(
+        snapshot: AgentSessionSnapshot,
+        checkpoint: AgentCheckpoint?,
+    ) {
+        val record = AgentPersistenceRecord(snapshot, checkpoint)
+        val sessionEntity = AgentSessionEntity(
+            sessionId = snapshot.sessionId.value,
+            payload = snapshotCodec.encode(snapshot),
+            updatedAtEpochMs = snapshot.updatedAtEpochMs,
         )
+        val checkpointEntity = checkpoint?.let {
+            AgentCheckpointEntity(
+                sessionId = it.sessionId.value,
+                payload = checkpointCodec.encode(it),
+                turn = it.turn,
+            )
+        }
+        database.useWriterConnection { connection ->
+            connection.immediateTransaction {
+                sessionDao.upsert(sessionEntity)
+                if (record.checkpoint == null) {
+                    checkpointDao.deleteById(snapshot.sessionId.value)
+                } else {
+                    checkpointDao.upsert(requireNotNull(checkpointEntity))
+                }
+            }
+        }
     }
 
-    override suspend fun loadSession(sessionId: AgentSessionId): AgentSessionSnapshot? {
-        val entity = dao.findById(sessionId.value) ?: return null
-        return decode(entity)
+    override suspend fun load(sessionId: AgentSessionId): AgentPersistenceRecord? {
+        val entities: Pair<AgentSessionEntity, AgentCheckpointEntity?> =
+            database.useReaderConnection { connection ->
+                connection.deferredTransaction<Pair<AgentSessionEntity, AgentCheckpointEntity?>?> {
+                    val session = sessionDao.findById(sessionId.value)
+                    if (session == null) {
+                        null
+                    } else {
+                        session to checkpointDao.findById(sessionId.value)
+                    }
+                }
+            }
+                ?: return null
+        val snapshot = decodeSession(entities.first)
+        val checkpoint = entities.second?.let(::decodeCheckpoint)
+        if (
+            checkpoint != null &&
+            (checkpoint.sessionId != snapshot.sessionId || checkpoint.runId != snapshot.runId)
+        ) {
+            throw corruption(
+                StoredRecordKind.CHECKPOINT,
+                sessionId.value,
+                StoredRecordCorruptionReason.INDEX_MISMATCH,
+            )
+        }
+        return AgentPersistenceRecord(snapshot, checkpoint)
     }
 
     override suspend fun listSessions(): List<AgentSessionSnapshot> {
-        return dao.listAll().mapNotNull { entity ->
+        return sessionDao.listAll().mapNotNull { entity ->
             try {
-                decode(entity)
+                decodeSession(entity)
             } catch (_: StoredRecordCorruptionException) {
                 null
             }
@@ -113,89 +161,76 @@ internal class RoomSessionStore(
     }
 
     override suspend fun deleteSession(sessionId: AgentSessionId) {
-        dao.deleteById(sessionId.value)
+        database.useWriterConnection { connection ->
+            connection.immediateTransaction {
+                checkpointDao.deleteById(sessionId.value)
+                sessionDao.deleteById(sessionId.value)
+            }
+        }
     }
 
     override suspend fun clear() {
-        dao.deleteAll()
+        database.useWriterConnection { connection ->
+            connection.immediateTransaction {
+                checkpointDao.deleteAll()
+                sessionDao.deleteAll()
+            }
+        }
     }
 
-    private fun decode(entity: AgentSessionEntity): AgentSessionSnapshot {
+    private fun decodeSession(entity: AgentSessionEntity): AgentSessionSnapshot {
         val snapshot = try {
             snapshotCodec.decode(entity.payload)
         } catch (_: Throwable) {
-            throw corruption(entity.sessionId, StoredRecordCorruptionReason.INVALID_PAYLOAD)
+            throw corruption(
+                StoredRecordKind.SESSION,
+                entity.sessionId,
+                StoredRecordCorruptionReason.INVALID_PAYLOAD,
+            )
         }
         if (
             snapshot.sessionId.value != entity.sessionId ||
             snapshot.updatedAtEpochMs != entity.updatedAtEpochMs
         ) {
-            throw corruption(entity.sessionId, StoredRecordCorruptionReason.INDEX_MISMATCH)
+            throw corruption(
+                StoredRecordKind.SESSION,
+                entity.sessionId,
+                StoredRecordCorruptionReason.INDEX_MISMATCH,
+            )
         }
         return snapshot
     }
 
-    private fun corruption(
-        sessionId: String,
-        reason: StoredRecordCorruptionReason,
-    ): StoredRecordCorruptionException {
-        val corruption = StoredRecordCorruption(StoredRecordKind.SESSION, sessionId, reason)
-        try {
-            reporter.report(corruption)
-        } catch (_: Throwable) {
-            // A diagnostic sink must not turn per-row isolation into a full history read failure.
-        }
-        return StoredRecordCorruptionException(corruption)
-    }
-}
-
-internal class RoomCheckpointStore(
-    private val dao: AgentCheckpointDao,
-    private val reporter: StoredRecordCorruptionReporter,
-    json: Json = Json,
-) : CheckpointStore {
-    private val checkpointCodec = AgentCheckpointCodec(json)
-
-    override suspend fun saveCheckpoint(checkpoint: AgentCheckpoint) {
-        dao.upsert(
-            AgentCheckpointEntity(
-                sessionId = checkpoint.sessionId.value,
-                payload = checkpointCodec.encode(checkpoint),
-                turn = checkpoint.turn,
-            ),
-        )
-    }
-
-    override suspend fun loadLatestCheckpoint(sessionId: AgentSessionId): AgentCheckpoint? {
-        val entity = dao.findById(sessionId.value) ?: return null
+    private fun decodeCheckpoint(entity: AgentCheckpointEntity): AgentCheckpoint {
         val checkpoint = try {
             checkpointCodec.decode(entity.payload)
         } catch (_: Throwable) {
-            throw corruption(entity.sessionId, StoredRecordCorruptionReason.INVALID_PAYLOAD)
+            throw corruption(
+                StoredRecordKind.CHECKPOINT,
+                entity.sessionId,
+                StoredRecordCorruptionReason.INVALID_PAYLOAD,
+            )
         }
         if (checkpoint.sessionId.value != entity.sessionId || checkpoint.turn != entity.turn) {
-            throw corruption(entity.sessionId, StoredRecordCorruptionReason.INDEX_MISMATCH)
+            throw corruption(
+                StoredRecordKind.CHECKPOINT,
+                entity.sessionId,
+                StoredRecordCorruptionReason.INDEX_MISMATCH,
+            )
         }
         return checkpoint
     }
 
-    override suspend fun deleteSession(sessionId: AgentSessionId) {
-        dao.deleteById(sessionId.value)
-    }
-
-    override suspend fun clear() {
-        dao.deleteAll()
-    }
-
     private fun corruption(
+        kind: StoredRecordKind,
         sessionId: String,
         reason: StoredRecordCorruptionReason,
     ): StoredRecordCorruptionException {
-        val corruption = StoredRecordCorruption(StoredRecordKind.CHECKPOINT, sessionId, reason)
+        val corruption = StoredRecordCorruption(kind, sessionId, reason)
         try {
             reporter.report(corruption)
         } catch (_: Throwable) {
-            // A diagnostic sink must not replace the stable storage exception.
+            // Diagnostics must not replace the stable storage failure.
         }
         return StoredRecordCorruptionException(corruption)
     }

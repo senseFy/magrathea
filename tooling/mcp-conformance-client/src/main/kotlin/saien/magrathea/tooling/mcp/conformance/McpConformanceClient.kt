@@ -7,6 +7,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import saien.magrathea.core.AgentMessage
+import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ToolCallPart
@@ -43,6 +44,8 @@ fun main(args: Array<String>) = runBlocking {
             val result = executor.execute(
                 ToolExecutionRequest(
                     sessionId = AgentSessionId("mcp-conformance"),
+                    runId = AgentRunId("mcp-conformance-run"),
+                    executionId = "add-numbers-execution",
                     assistantMessage = AgentMessage(
                         role = MessageRole.ASSISTANT,
                         parts = emptyList(),

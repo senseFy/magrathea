@@ -226,8 +226,7 @@ class DefaultAgentRunnerTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(FakeEchoProvider())),
             toolRegistry = InMemoryToolRegistry(listOf(EchoTool())),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
         )
         val events = runner.run(
             AgentRequest(
@@ -244,8 +243,7 @@ class DefaultAgentRunnerTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
         )
         val options = OpenAiTransportConfig(
             protocol = OpenAiWireProtocol.RESPONSES,
@@ -270,8 +268,7 @@ class DefaultAgentRunnerTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(FakeEchoProvider())),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
             contextTransformer = ContextTransformer { messages ->
                 val message = messages.first()
                 listOf(
@@ -299,8 +296,7 @@ class DefaultAgentRunnerTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
         )
 
         val events = runner.run(
@@ -324,8 +320,7 @@ class DefaultAgentRunnerTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(DeltaTextProvider())),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
         )
 
         val events = runner.run(
@@ -352,8 +347,7 @@ class DefaultAgentRunnerTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(PartialToolStreamingProvider())),
             toolRegistry = InMemoryToolRegistry(listOf(tool)),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
         )
 
         val events = runner.run(
@@ -379,8 +373,7 @@ class DefaultAgentRunnerTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(FakeEchoProvider())),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
         )
         val events = runner.run(
             AgentRequest(
@@ -409,8 +402,7 @@ class DefaultAgentRunnerTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(FakeEchoProvider())),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
         )
 
         val labels = runner.run(
@@ -432,8 +424,7 @@ class DefaultAgentRunnerTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(ToolThenDoneProvider())),
             toolRegistry = InMemoryToolRegistry(listOf(tool)),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
         )
 
         val events = runner.run(
@@ -464,7 +455,7 @@ class DefaultAgentRunnerTest {
         val headerCanary = "profile-header-value"
         val ref = CredentialRef(provider = "recording-provider", profile = "work")
         val provider = RecordingProvider()
-        val sessionStore = InMemorySessionStore()
+        val persistence = InMemoryAgentPersistence()
         val request = AgentRequest(
             messages = listOf(AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("hello")))),
             model = ModelDescriptor(provider = "recording-provider", model = "recording-model"),
@@ -473,8 +464,7 @@ class DefaultAgentRunnerTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = sessionStore,
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = persistence,
             credentialProvider = CredentialProvider { requestedRef ->
                 assertEquals(ref, requestedRef)
                 ProviderCredential(
@@ -491,7 +481,7 @@ class DefaultAgentRunnerTest {
         assertEquals(canary, providerRequest.credential?.value)
         assertEquals(endpointCanary, providerRequest.endpoint)
         assertEquals(headerCanary, providerRequest.headers["X-Profile"])
-        val persisted = requireNotNull(sessionStore.loadSession(request.sessionId))
+        val persisted = requireNotNull(persistence.load(request.sessionId)?.snapshot)
         assertEquals(ref, persisted.request.engine.provider.credentialRef)
         assertNull(persisted.request.engine.provider.endpoint)
         assertTrue(persisted.request.engine.provider.headers.isEmpty())
@@ -512,8 +502,7 @@ class DefaultAgentRunnerTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
         )
 
         val events = runner.run(request).toList()
@@ -536,8 +525,7 @@ class DefaultAgentRunnerTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
             credentialProvider = CredentialProvider {
                 resolverCalls += 1
                 ProviderCredential("must-not-be-used")
@@ -557,8 +545,7 @@ class DefaultAgentRunnerTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(ToolThenDoneProvider())),
             toolRegistry = InMemoryToolRegistry(listOf(CitationTool())),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
             approvalGateway = approvalGateway,
         )
 
@@ -589,8 +576,7 @@ class DefaultAgentRunnerTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(ToolThenDoneProvider())),
             toolRegistry = InMemoryToolRegistry(listOf(ApprovalRequiredTool())),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
             approvalGateway = approvalGateway,
         )
 
@@ -620,8 +606,7 @@ class DefaultAgentRunnerTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(FakeEchoProvider())),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
         )
 
         val events = runner.run(

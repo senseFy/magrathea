@@ -1,8 +1,8 @@
 package saien.magrathea.runtime
 
-import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -10,17 +10,17 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.job
 import kotlinx.coroutines.sync.Mutex
@@ -33,17 +33,25 @@ import saien.magrathea.core.AgentCheckpoint
 import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentFailureCode
 import saien.magrathea.core.AgentInterceptor
+import saien.magrathea.core.AgentInterruption
+import saien.magrathea.core.AgentInterruptionReason
 import saien.magrathea.core.AgentMessage
+import saien.magrathea.core.AgentPersistence
+import saien.magrathea.core.AgentPersistenceRecord
+import saien.magrathea.core.AgentRecoveryBlockReason
+import saien.magrathea.core.AgentRecoveryDisposition
+import saien.magrathea.core.AgentRecoveryInfo
 import saien.magrathea.core.AgentRequest
+import saien.magrathea.core.AgentResumeCursor
+import saien.magrathea.core.AgentResumePhase
 import saien.magrathea.core.AgentRunner
+import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.AgentRuntimeContext
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.AgentStatus
 import saien.magrathea.core.AttachmentPart
-import saien.magrathea.core.dataUrlPayload
-import saien.magrathea.core.CheckpointStore
 import saien.magrathea.core.ContextManager
 import saien.magrathea.core.ContextPreparationAction
 import saien.magrathea.core.ContextPreparationReason
@@ -54,19 +62,20 @@ import saien.magrathea.core.ContextSummaryResult
 import saien.magrathea.core.ContextTransformer
 import saien.magrathea.core.CredentialProvider
 import saien.magrathea.core.FollowUpMessageProvider
-import saien.magrathea.core.MessageRole
+import saien.magrathea.core.IdGenerator
 import saien.magrathea.core.MagratheaTelemetry
+import saien.magrathea.core.MessageRole
 import saien.magrathea.core.MonotonicClock
-import saien.magrathea.core.NoopRetryPolicy
 import saien.magrathea.core.NoopMagratheaTelemetry
+import saien.magrathea.core.NoopRetryPolicy
+import saien.magrathea.core.ProviderTimeoutConfig
 import saien.magrathea.core.ReplayPolicy
 import saien.magrathea.core.ReasoningPart
-import saien.magrathea.core.RuntimeConfig
-import saien.magrathea.core.ProviderTimeoutConfig
 import saien.magrathea.core.RetryPolicy
-import saien.magrathea.core.SessionStore
+import saien.magrathea.core.RuntimeConfig
 import saien.magrathea.core.SteeringMessageProvider
 import saien.magrathea.core.StopReason
+import saien.magrathea.core.SystemIdGenerator
 import saien.magrathea.core.SystemMonotonicClock
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.TelemetryEvent
@@ -77,39 +86,44 @@ import saien.magrathea.core.ToolApprovalDecision
 import saien.magrathea.core.ToolApprovalGateway
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolExecutionMode
+import saien.magrathea.core.ToolExecutionRecord
 import saien.magrathea.core.ToolExecutionRequest
 import saien.magrathea.core.ToolExecutionResult
-import saien.magrathea.core.ToolResultPart
-import saien.magrathea.core.outputText
-import saien.magrathea.core.toMessagePart
-import saien.magrathea.core.ToolRuntimeContext
+import saien.magrathea.core.ToolExecutionState
 import saien.magrathea.core.ToolPermissionGateway
+import saien.magrathea.core.ToolRecoveryPolicy
 import saien.magrathea.core.ToolRegistry
+import saien.magrathea.core.ToolResultPart
+import saien.magrathea.core.ToolRuntimeContext
+import saien.magrathea.core.dataUrlPayload
+import saien.magrathea.core.outputText
 import saien.magrathea.core.plus
+import saien.magrathea.core.toMessagePart
+import saien.magrathea.provider.api.AnthropicTransportConfig
+import saien.magrathea.provider.api.DefaultReplayPolicy
+import saien.magrathea.provider.api.GeminiTransportConfig
+import saien.magrathea.provider.api.OpenAiTransportConfig
 import saien.magrathea.provider.api.ProviderAdapter
 import saien.magrathea.provider.api.ProviderAuthException
 import saien.magrathea.provider.api.ProviderClientException
 import saien.magrathea.provider.api.ProviderChunk
 import saien.magrathea.provider.api.ProviderContextLimitException
 import saien.magrathea.provider.api.ProviderEvent
-import saien.magrathea.provider.api.ProviderException
-import saien.magrathea.provider.api.ProviderNetworkException
-import saien.magrathea.provider.api.ProviderUsage
-import saien.magrathea.provider.api.DefaultReplayPolicy
-import saien.magrathea.provider.api.ToolCallAssembler
 import saien.magrathea.provider.api.ProviderEventAssembler
+import saien.magrathea.provider.api.ProviderException
 import saien.magrathea.provider.api.ProviderInvocation
-import saien.magrathea.provider.api.ProviderRegistry
-import saien.magrathea.provider.api.ProviderRequest
+import saien.magrathea.provider.api.ProviderInvocationResumeMode
+import saien.magrathea.provider.api.ProviderNetworkException
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRateLimitException
+import saien.magrathea.provider.api.ProviderRegistry
+import saien.magrathea.provider.api.ProviderRequest
 import saien.magrathea.provider.api.ProviderServerException
 import saien.magrathea.provider.api.ProviderTimeoutException
 import saien.magrathea.provider.api.ProviderTimeoutPhase
-import saien.magrathea.provider.api.AnthropicTransportConfig
-import saien.magrathea.provider.api.GeminiTransportConfig
-import saien.magrathea.provider.api.OpenAiTransportConfig
 import saien.magrathea.provider.api.ProviderTransportConfig
+import saien.magrathea.provider.api.ProviderUsage
+import saien.magrathea.provider.api.ToolCallAssembler
 import saien.magrathea.provider.api.compileProviderTransportConfig
 import saien.magrathea.provider.api.validateSemantics
 
@@ -117,14 +131,13 @@ import saien.magrathea.provider.api.validateSemantics
  * Default [AgentRunner] implementation for Provider calls, Tool execution, checkpoints, retry,
  * cancellation, resume, limits, and telemetry.
  *
- * The supplied stores and registries define the authoritative state and capability boundaries.
+ * The supplied persistence and registries define the authoritative state and capability boundaries.
  * This class does not own or close them.
  */
 class DefaultAgentRunner(
     private val providerRegistry: ProviderRegistry,
     private val toolRegistry: ToolRegistry,
-    private val sessionStore: SessionStore,
-    private val checkpointStore: CheckpointStore,
+    private val persistence: AgentPersistence,
     private val interceptors: List<AgentInterceptor> = emptyList(),
     private val approvalGateway: ToolApprovalGateway? = null,
     private val permissionGateway: ToolPermissionGateway? = null,
@@ -138,10 +151,11 @@ class DefaultAgentRunner(
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val telemetry: MagratheaTelemetry = NoopMagratheaTelemetry,
     private val monotonicClock: MonotonicClock = SystemMonotonicClock,
+    private val idGenerator: IdGenerator = SystemIdGenerator,
 ) : AgentRunner {
     private val activeRuns = LinkedHashMap<String, ActiveRun>()
     private val mutex = Mutex()
-    private var nextRunId: Long = 0
+    private var nextRegistrationToken: Long = 0
     private val providerEventAssembler = ProviderEventAssembler()
     private val toolCallAssembler = ToolCallAssembler()
     private val effectiveContextManager = contextManager ?: TokenAwareContextManager(
@@ -151,15 +165,16 @@ class DefaultAgentRunner(
 
     override fun run(request: AgentRequest): Flow<AgentEvent> = flow {
         val previousState = try {
-            measureStoreOperation(request.sessionId, TelemetryStoreOperation.LOAD_SESSION) {
-                sessionStore.loadSession(request.sessionId)
-            }?.state
+            measureStoreOperation(request.sessionId, TelemetryStoreOperation.LOAD_STATE) {
+                persistence.load(request.sessionId)
+            }?.snapshot?.state
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Throwable) {
             emitAll(resumeFailureFlow(request.sessionId, AgentFailureCode.STORAGE))
             return@flow
         }
+        val runId = AgentRunId.create(idGenerator)
         val initialState = AgentStateSnapshot(
             messages = request.messages,
             status = AgentStatus.RUNNING,
@@ -168,26 +183,36 @@ class DefaultAgentRunner(
             contextManagement = previousState?.contextManagement
                 ?: saien.magrathea.core.ContextManagementState(),
         )
+        val checkpoint = AgentCheckpoint(
+            sessionId = request.sessionId,
+            runId = runId,
+            cursor = AgentResumeCursor(
+                turn = 0,
+                phase = AgentResumePhase.TURN_PREPARING,
+            ),
+            state = initialState,
+        )
         emitAll(
             runFromState(
                 request = request,
-                initialState = initialState,
-                initialTurn = 0,
+                runId = runId,
+                initialCheckpoint = checkpoint,
                 resumed = false,
             ),
         )
     }
 
     override suspend fun resume(sessionId: AgentSessionId): Flow<AgentEvent> {
-        val snapshot = try {
-            measureStoreOperation(sessionId, TelemetryStoreOperation.LOAD_SESSION) {
-                sessionStore.loadSession(sessionId)
+        val record = try {
+            measureStoreOperation(sessionId, TelemetryStoreOperation.LOAD_STATE) {
+                persistence.load(sessionId)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Throwable) {
             return resumeFailureFlow(sessionId, AgentFailureCode.STORAGE)
         } ?: return resumeFailureFlow(sessionId, AgentFailureCode.NOT_FOUND)
+        val snapshot = record.snapshot
         validateResumeState(snapshot.request, snapshot.state)?.let {
             return resumeFailureFlow(sessionId, it)
         }
@@ -195,51 +220,69 @@ class DefaultAgentRunner(
             recordTerminalResume(sessionId, snapshot.state)
             return it
         }
-        val checkpoint = try {
-            measureStoreOperation(sessionId, TelemetryStoreOperation.LOAD_CHECKPOINT) {
-                checkpointStore.loadLatestCheckpoint(sessionId)
-            }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Throwable) {
-            return resumeFailureFlow(sessionId, AgentFailureCode.STORAGE, snapshot.state)
+        val recovery = recoveryInfo(record)
+        if (recovery.disposition == AgentRecoveryDisposition.BLOCKED) {
+            return flowOf(
+                AgentEvent.RecoveryBlocked(
+                    sessionId = sessionId,
+                    runId = snapshot.runId,
+                    reason = requireNotNull(recovery.blockedReason),
+                ),
+            )
         }
-        val restoredState = checkpoint?.state ?: snapshot.state
+        val checkpoint = record.checkpoint
+            ?: return flowOf(
+                AgentEvent.RecoveryBlocked(
+                    sessionId = sessionId,
+                    runId = snapshot.runId,
+                    reason = AgentRecoveryBlockReason.CHECKPOINT_MISMATCH,
+                ),
+            )
+        val restoredState = checkpoint.state
         validateResumeState(snapshot.request, restoredState)?.let {
             return resumeFailureFlow(sessionId, it)
         }
-        terminalResumeFlow(sessionId, restoredState)?.let { terminalFlow ->
-            if (checkpoint != null) {
-                saveResumeSession(snapshot.request.copy(messages = restoredState.messages), restoredState)?.let {
-                    return resumeFailureFlow(sessionId, it, restoredState)
-                }
-            }
-            recordTerminalResume(sessionId, restoredState)
-            return terminalFlow
-        }
-        if (
-            restoredState.stopReason == StopReason.COMPLETED ||
-            restoredState.stopReason == StopReason.MAX_TURNS ||
-            restoredState.stopReason == StopReason.MAX_TOKENS
-        ) {
-            val completedState = restoredState.copy(status = AgentStatus.COMPLETED)
-            saveResumeSession(snapshot.request.copy(messages = completedState.messages), completedState)?.let {
-                return resumeFailureFlow(sessionId, it, completedState)
-            }
-            recordTerminalResume(sessionId, completedState)
-            return flowOf(AgentEvent.Completed(sessionId, completedState))
-        }
-        return if (restoredState.pendingToolCalls.isNotEmpty()) {
-            resumeFailureFlow(sessionId, AgentFailureCode.INVALID_STATE, restoredState)
-        } else {
-            val initialTurn = checkpoint?.turn?.plus(1) ?: restoredState.turn
-            runFromState(
-                request = snapshot.request.copy(messages = restoredState.messages),
-                initialState = restoredState.copy(status = AgentStatus.RUNNING),
-                initialTurn = initialTurn,
-                resumed = true,
+        val resumedCursor = when (checkpoint.cursor.phase) {
+            AgentResumePhase.MODEL_PENDING -> checkpoint.cursor.copy(
+                providerAttempt = checkpoint.cursor.providerAttempt +
+                    providerAttemptIncrement(snapshot.request),
             )
+            AgentResumePhase.TURN_COMMITTED -> AgentResumeCursor(
+                turn = checkpoint.cursor.turn + 1,
+                phase = AgentResumePhase.TURN_PREPARING,
+            )
+            AgentResumePhase.TURN_PREPARING,
+            AgentResumePhase.TOOLS_PENDING,
+            -> checkpoint.cursor
         }
+        val resumedState = restoredState.copy(
+            turn = resumedCursor.turn,
+            status = if (resumedCursor.phase == AgentResumePhase.TOOLS_PENDING) {
+                AgentStatus.WAITING_FOR_TOOLS
+            } else {
+                AgentStatus.RUNNING
+            },
+            stopReason = restoredState.stopReason.takeUnless { it == StopReason.INTERRUPTED },
+        )
+        return runFromState(
+            request = snapshot.request.copy(messages = resumedState.messages),
+            runId = snapshot.runId,
+            initialCheckpoint = checkpoint.copy(
+                cursor = resumedCursor,
+                state = resumedState,
+                toolExecutions = if (resumedCursor.phase == AgentResumePhase.TURN_PREPARING) {
+                    emptyList()
+                } else {
+                    checkpoint.toolExecutions
+                },
+            ),
+            resumed = true,
+        )
+    }
+
+    private fun providerAttemptIncrement(request: AgentRequest): Int {
+        val provider = providerRegistry.get(request.model.provider)
+        return if (provider?.invocationResumeMode == ProviderInvocationResumeMode.REATTACH) 0 else 1
     }
 
     private fun terminalResumeFlow(
@@ -294,49 +337,303 @@ class DefaultAgentRunner(
     }
 
     override suspend fun cancel(sessionId: AgentSessionId) {
+        val active = mutex.withLock {
+            activeRuns[sessionId.value]?.also { it.stopIntent = StopIntent.CANCEL }
+        }
+        if (active != null) {
+            active.job.cancelAndJoin()
+        } else {
+            markPersistedCancelled(sessionId)
+        }
+    }
+
+    override suspend fun interrupt(sessionId: AgentSessionId): AgentRecoveryInfo {
+        val active = mutex.withLock {
+            activeRuns[sessionId.value]?.also { it.stopIntent = StopIntent.INTERRUPT }
+        }
+        if (active != null) {
+            active.job.cancelAndJoin()
+        } else {
+            markOrphanInterrupted(sessionId)
+        }
+        return inspectRecovery(sessionId)
+    }
+
+    override suspend fun inspectRecovery(sessionId: AgentSessionId): AgentRecoveryInfo {
         val active = mutex.withLock { activeRuns[sessionId.value] }
-        active?.job?.cancelAndJoin()
+        if (active != null) {
+            return AgentRecoveryInfo(
+                sessionId = sessionId,
+                runId = active.runId,
+                disposition = AgentRecoveryDisposition.ACTIVE,
+                status = AgentStatus.RUNNING,
+            )
+        }
+        val record = measureStoreOperation(sessionId, TelemetryStoreOperation.LOAD_STATE) {
+            persistence.load(sessionId)
+        } ?: return AgentRecoveryInfo(
+            sessionId = sessionId,
+            disposition = AgentRecoveryDisposition.NOT_FOUND,
+        )
+        return recoveryInfo(record)
+    }
+
+    private fun recoveryInfo(record: AgentPersistenceRecord): AgentRecoveryInfo {
+        val snapshot = record.snapshot
+        if (snapshot.statusIsTerminal()) {
+            return AgentRecoveryInfo(
+                sessionId = snapshot.sessionId,
+                runId = snapshot.runId,
+                disposition = AgentRecoveryDisposition.TERMINAL,
+                status = snapshot.state.status,
+                state = snapshot.state,
+                interruption = snapshot.interruption,
+            )
+        }
+        val checkpoint = record.checkpoint
+        if (
+            checkpoint == null ||
+            checkpoint.sessionId != snapshot.sessionId ||
+            checkpoint.runId != snapshot.runId ||
+            !checkpoint.hasValidRecoveryShape()
+        ) {
+            return AgentRecoveryInfo(
+                sessionId = snapshot.sessionId,
+                runId = snapshot.runId,
+                disposition = AgentRecoveryDisposition.BLOCKED,
+                status = snapshot.state.status,
+                state = snapshot.state,
+                interruption = snapshot.interruption,
+                blockedReason = AgentRecoveryBlockReason.CHECKPOINT_MISMATCH,
+            )
+        }
+        val unknownUnsafeTool = checkpoint.toolExecutions.any { execution ->
+            execution.state == ToolExecutionState.STARTED &&
+                toolRegistry.find(execution.toolName)?.recoveryPolicy !=
+                ToolRecoveryPolicy.REPLAY_SAFE
+        }
+        if (unknownUnsafeTool) {
+            return AgentRecoveryInfo(
+                sessionId = snapshot.sessionId,
+                runId = snapshot.runId,
+                disposition = AgentRecoveryDisposition.BLOCKED,
+                status = snapshot.state.status,
+                state = snapshot.state,
+                cursor = checkpoint.cursor,
+                interruption = snapshot.interruption,
+                blockedReason = AgentRecoveryBlockReason.TOOL_OUTCOME_UNKNOWN,
+            )
+        }
+        val interruption = snapshot.interruption ?: AgentInterruption(
+            reason = AgentInterruptionReason.ORPHANED,
+        )
+        return AgentRecoveryInfo(
+            sessionId = snapshot.sessionId,
+            runId = snapshot.runId,
+            disposition = AgentRecoveryDisposition.RESUMABLE,
+            status = snapshot.state.status,
+            state = snapshot.state,
+            cursor = checkpoint.cursor,
+            interruption = interruption,
+        )
+    }
+
+    private suspend fun markOrphanInterrupted(sessionId: AgentSessionId) {
+        val record = measureStoreOperation(sessionId, TelemetryStoreOperation.LOAD_STATE) {
+            persistence.load(sessionId)
+        } ?: return
+        if (
+            record.snapshot.state.status != AgentStatus.RUNNING &&
+            record.snapshot.state.status != AgentStatus.WAITING_FOR_TOOLS
+        ) {
+            return
+        }
+        val checkpoint = record.checkpoint ?: return
+        if (
+            checkpoint.sessionId != record.snapshot.sessionId ||
+            checkpoint.runId != record.snapshot.runId
+        ) {
+            return
+        }
+        val interruption = AgentInterruption(AgentInterruptionReason.ORPHANED)
+        val interruptedState = checkpoint.state.copy(
+            status = AgentStatus.INTERRUPTED,
+            stopReason = StopReason.INTERRUPTED,
+        )
+        commitState(
+            request = record.snapshot.request.copy(messages = interruptedState.messages),
+            runId = record.snapshot.runId,
+            state = interruptedState,
+            checkpoint = checkpoint,
+            interruption = interruption,
+        )
+    }
+
+    private suspend fun markPersistedCancelled(sessionId: AgentSessionId) {
+        val record = measureStoreOperation(sessionId, TelemetryStoreOperation.LOAD_STATE) {
+            persistence.load(sessionId)
+        } ?: return
+        if (record.snapshot.statusIsTerminal()) return
+        val cancelledState = record.snapshot.state.copy(
+            status = AgentStatus.CANCELLED,
+            stopReason = StopReason.CANCELLED,
+        )
+        commitState(
+            request = record.snapshot.request.copy(messages = cancelledState.messages),
+            runId = record.snapshot.runId,
+            state = cancelledState,
+            checkpoint = null,
+        )
     }
 
     private fun runFromState(
         request: AgentRequest,
-        initialState: AgentStateSnapshot,
-        initialTurn: Int,
+        runId: AgentRunId,
+        initialCheckpoint: AgentCheckpoint,
         resumed: Boolean,
     ): Flow<AgentEvent> = channelFlow {
-        require(initialTurn >= 0) { "initialTurn must not be negative" }
-        val runId = register(request.sessionId, currentCoroutineContext().job)
-        val runState = RunState(initialState)
-        var activeRequest = request.copy(messages = initialState.messages)
+        require(initialCheckpoint.sessionId == request.sessionId)
+        require(initialCheckpoint.runId == runId)
+        val registrationToken = register(request.sessionId, runId, currentCoroutineContext().job)
+        val runState = RunState(initialCheckpoint.state)
+        var activeRequest = request.copy(messages = initialCheckpoint.state.messages)
+        var safeCheckpoint = initialCheckpoint
         var terminalStatePersisted = false
         try {
             val completedWithinDeadline = withContext(dispatcher) {
                 withTimeoutOrNull(request.engine.runtime.runTimeoutMillis) {
                     validateRuntimePayloads(activeRequest, runState.value)
                     recordTelemetry(TelemetryEvent.SessionStarted(request.sessionId, resumed))
-                    send(AgentEvent.Started(request.sessionId))
-                    saveSession(activeRequest, runState.value)
-                    var turn = initialTurn
+                    commitState(activeRequest, runId, runState.value, safeCheckpoint)
+                    send(AgentEvent.Started(request.sessionId, runId))
+                    send(AgentEvent.CheckpointSaved(safeCheckpoint))
+                    var cursor = safeCheckpoint.cursor
                     var completedNormally = false
-                    while (turn < activeRequest.engine.runtime.maxTurns) {
-                        recordTelemetry(TelemetryEvent.TurnStarted(request.sessionId, turn))
-                        send(AgentEvent.TurnStarted(request.sessionId, turn))
-                        runState.value = runState.value.copy(turn = turn, status = AgentStatus.RUNNING)
-                        runState.value = appendSteeringMessages(activeRequest, runState.value, turn, ::send)
-                        val beforeRequest = activeRequest.copy(messages = runState.value.messages)
-                        val beforeState = runState.value
-                        var runtimeContext = AgentRuntimeContext(beforeRequest, beforeState, turn)
-                        interceptors.forEach { runtimeContext = it.beforeModelCall(runtimeContext) }
-                        runtimeContext = normalizeBeforeModelContext(
-                            sessionId = request.sessionId,
-                            turn = turn,
-                            beforeRequest = beforeRequest,
-                            beforeState = beforeState,
-                            transformed = runtimeContext,
-                        )
-                        validateRuntimePayloads(runtimeContext.request, runtimeContext.state)
-                        activeRequest = runtimeContext.request
-                        runState.value = runtimeContext.state
+                    while (cursor.turn < activeRequest.engine.runtime.maxTurns) {
+                        val turn = cursor.turn
+                        if (cursor.phase != AgentResumePhase.TOOLS_PENDING) {
+                            recordTelemetry(TelemetryEvent.TurnStarted(request.sessionId, turn))
+                            send(AgentEvent.TurnStarted(request.sessionId, turn))
+                        }
+
+                        if (cursor.phase == AgentResumePhase.TOOLS_PENDING) {
+                            val pendingCalls = runState.value.pendingToolCalls
+                            val assistant = runState.value.messages.lastOrNull {
+                                message -> message.role == MessageRole.ASSISTANT
+                            } ?: throw AgentRuntimeFailure(AgentFailureCode.INVALID_STATE)
+                            val journalMutex = Mutex()
+                            var journal = safeCheckpoint.toolExecutions
+                            val persistRecord: suspend (ToolExecutionRecord) -> Unit = { record ->
+                                journalMutex.withLock {
+                                    journal = journal.replace(record)
+                                    safeCheckpoint = safeCheckpoint.copy(toolExecutions = journal)
+                                    commitState(
+                                        activeRequest,
+                                        runId,
+                                        runState.value,
+                                        safeCheckpoint,
+                                    )
+                                }
+                            }
+                            val toolResults = executeToolCalls(
+                                request = activeRequest,
+                                runId = runId,
+                                assistantMessage = assistant,
+                                toolCalls = pendingCalls,
+                                previousRunCalls = runState.value.toolCallCounts,
+                                turn = turn,
+                                journal = journal,
+                                persistRecord = persistRecord,
+                                emit = ::send,
+                            )
+                            runState.value = runState.value.copy(
+                                toolCallCounts = runState.value.toolCallCounts.incrementedBy(
+                                    pendingCalls,
+                                    activeRequest.tools.mapTo(mutableSetOf()) { it.name },
+                                ),
+                                messages = runState.value.messages + AgentMessage(
+                                    role = MessageRole.TOOL,
+                                    parts = toolResults.map { it.toMessagePart() },
+                                    stopReason = StopReason.TOOL_CALLS,
+                                ),
+                                pendingToolCalls = emptyList(),
+                                status = AgentStatus.RUNNING,
+                                stopReason = StopReason.TOOL_CALLS,
+                            )
+                            send(
+                                AgentEvent.MessageEmitted(
+                                    request.sessionId,
+                                    runState.value.messages.last(),
+                                ),
+                            )
+                            val followUp =
+                                appendFollowUpMessages(activeRequest, runState.value, turn, ::send)
+                            runState.value = followUp.state
+                            cursor = AgentResumeCursor(turn, AgentResumePhase.TURN_COMMITTED)
+                            safeCheckpoint = AgentCheckpoint(
+                                sessionId = request.sessionId,
+                                runId = runId,
+                                cursor = cursor,
+                                state = runState.value,
+                                toolExecutions = journal,
+                            )
+                            commitState(activeRequest, runId, runState.value, safeCheckpoint)
+                            send(AgentEvent.CheckpointSaved(safeCheckpoint))
+                            val nextTurn = turn + 1
+                            if (nextTurn >= activeRequest.engine.runtime.maxTurns) break
+                            runState.value = runState.value.copy(turn = nextTurn)
+                            cursor = AgentResumeCursor(
+                                nextTurn,
+                                AgentResumePhase.TURN_PREPARING,
+                            )
+                            safeCheckpoint = AgentCheckpoint(
+                                request.sessionId,
+                                runId,
+                                cursor,
+                                runState.value,
+                            )
+                            commitState(activeRequest, runId, runState.value, safeCheckpoint)
+                            send(AgentEvent.CheckpointSaved(safeCheckpoint))
+                            continue
+                        }
+
+                        if (cursor.phase == AgentResumePhase.TURN_PREPARING) {
+                            runState.value =
+                                runState.value.copy(turn = turn, status = AgentStatus.RUNNING)
+                            runState.value =
+                                appendSteeringMessages(activeRequest, runState.value, turn, ::send)
+                            val beforeRequest =
+                                activeRequest.copy(messages = runState.value.messages)
+                            val beforeState = runState.value
+                            var runtimeContext =
+                                AgentRuntimeContext(beforeRequest, beforeState, turn)
+                            interceptors.forEach {
+                                runtimeContext = it.beforeModelCall(runtimeContext)
+                            }
+                            runtimeContext = normalizeBeforeModelContext(
+                                sessionId = request.sessionId,
+                                turn = turn,
+                                beforeRequest = beforeRequest,
+                                beforeState = beforeState,
+                                transformed = runtimeContext,
+                            )
+                            validateRuntimePayloads(
+                                runtimeContext.request,
+                                runtimeContext.state,
+                            )
+                            activeRequest = runtimeContext.request
+                            runState.value = runtimeContext.state
+                            cursor = cursor.copy(phase = AgentResumePhase.MODEL_PENDING)
+                            safeCheckpoint = AgentCheckpoint(
+                                request.sessionId,
+                                runId,
+                                cursor,
+                                runState.value,
+                            )
+                            commitState(activeRequest, runId, runState.value, safeCheckpoint)
+                            send(AgentEvent.CheckpointSaved(safeCheckpoint))
+                        }
+
                         val provider = providerRegistry.get(activeRequest.model.provider)
                             ?: throw AgentRuntimeFailure(AgentFailureCode.PROVIDER_NOT_FOUND)
                         val resolvedProviderConfig = resolveProviderConfig(activeRequest)
@@ -377,11 +674,19 @@ class DefaultAgentRunner(
                                 throw AgentRuntimeFailure(AgentFailureCode.CONTEXT_LIMIT)
                             }
                             if (preparation.action == ContextPreparationAction.COMPACTED) {
-                                val compactionCheckpoint =
-                                    AgentCheckpoint(request.sessionId, turn, runState.value)
-                                saveCheckpoint(activeRequest, compactionCheckpoint)
-                                send(AgentEvent.CheckpointSaved(compactionCheckpoint))
-                                saveSession(activeRequest, runState.value)
+                                safeCheckpoint = AgentCheckpoint(
+                                    request.sessionId,
+                                    runId,
+                                    cursor,
+                                    runState.value,
+                                )
+                                commitState(
+                                    activeRequest,
+                                    runId,
+                                    runState.value,
+                                    safeCheckpoint,
+                                )
+                                send(AgentEvent.CheckpointSaved(safeCheckpoint))
                             }
 
                             val providerMessages =
@@ -409,13 +714,14 @@ class DefaultAgentRunner(
                                 ::send,
                             )
                             val inputAnchorId = runState.value.messages.lastOrNull()?.id
-                            val invocationAnchorId = inputAnchorId ?: request.sessionId.value
                             val providerRequest = ProviderRequest(
                                 invocation = ProviderInvocation(
                                     requestId = buildString {
-                                        append(invocationAnchorId)
+                                        append(runId.value)
                                         append(':')
                                         append(turn)
+                                        append(':')
+                                        append(cursor.providerAttempt)
                                         if (overflowRetries > 0) {
                                             append(":context-retry-")
                                             append(overflowRetries)
@@ -470,17 +776,69 @@ class DefaultAgentRunner(
                             }
                         }
                         runState.value = turnResult.state
+                        if (runState.value.pendingToolCalls.isNotEmpty()) {
+                            val journal = runState.value.pendingToolCalls
+                                .withCallOrdinals()
+                                .map { indexed ->
+                                    ToolExecutionRecord(
+                                        executionId = toolExecutionId(
+                                            runId,
+                                            turn,
+                                            indexed.ordinal,
+                                            indexed.toolCall,
+                                        ),
+                                        toolCallId = indexed.toolCall.toolCallId,
+                                        toolName = indexed.toolCall.toolName,
+                                        callOrdinal = indexed.ordinal,
+                                        state = ToolExecutionState.PENDING,
+                                    )
+                                }
+                            cursor = AgentResumeCursor(
+                                turn = turn,
+                                phase = AgentResumePhase.TOOLS_PENDING,
+                                providerAttempt = cursor.providerAttempt,
+                            )
+                            safeCheckpoint = AgentCheckpoint(
+                                request.sessionId,
+                                runId,
+                                cursor,
+                                runState.value,
+                                journal,
+                            )
+                            commitState(activeRequest, runId, runState.value, safeCheckpoint)
+                            send(AgentEvent.CheckpointSaved(safeCheckpoint))
+                            continue
+                        }
                         val followUp = appendFollowUpMessages(activeRequest, runState.value, turn, ::send)
                         runState.value = followUp.state
-                        val checkpoint = AgentCheckpoint(request.sessionId, turn, runState.value)
-                        saveCheckpoint(activeRequest, checkpoint)
-                        send(AgentEvent.CheckpointSaved(checkpoint))
-                        saveSession(activeRequest, runState.value)
                         if (!turnResult.shouldContinue && !followUp.appended) {
                             completedNormally = true
                             break
                         }
-                        turn += 1
+                        cursor = AgentResumeCursor(turn, AgentResumePhase.TURN_COMMITTED)
+                        safeCheckpoint = AgentCheckpoint(
+                            request.sessionId,
+                            runId,
+                            cursor,
+                            runState.value,
+                        )
+                        commitState(activeRequest, runId, runState.value, safeCheckpoint)
+                        send(AgentEvent.CheckpointSaved(safeCheckpoint))
+                        val nextTurn = turn + 1
+                        if (nextTurn >= activeRequest.engine.runtime.maxTurns) break
+                        runState.value = runState.value.copy(turn = nextTurn)
+                        cursor = AgentResumeCursor(
+                            nextTurn,
+                            AgentResumePhase.TURN_PREPARING,
+                        )
+                        safeCheckpoint = AgentCheckpoint(
+                            request.sessionId,
+                            runId,
+                            cursor,
+                            runState.value,
+                        )
+                        commitState(activeRequest, runId, runState.value, safeCheckpoint)
+                        send(AgentEvent.CheckpointSaved(safeCheckpoint))
                     }
                     val finalStopReason = if (completedNormally) {
                         runState.value.stopReason ?: StopReason.COMPLETED
@@ -488,7 +846,7 @@ class DefaultAgentRunner(
                         StopReason.MAX_TURNS
                     }
                     runState.value = runState.value.copy(status = AgentStatus.COMPLETED, stopReason = finalStopReason)
-                    saveSession(activeRequest, runState.value)
+                    commitState(activeRequest, runId, runState.value, checkpoint = null)
                     terminalStatePersisted = true
                     recordTelemetry(
                         TelemetryEvent.SessionFinished(
@@ -508,29 +866,100 @@ class DefaultAgentRunner(
             }
         } catch (cancelled: CancellationException) {
             if (!terminalStatePersisted) {
-                runState.value = runState.value.copy(status = AgentStatus.CANCELLED, stopReason = StopReason.CANCELLED)
-                try {
-                    withContext(NonCancellable) { saveSession(activeRequest, runState.value) }
-                } catch (_: AgentRuntimeFailure) {
-                    // Cancellation remains authoritative even when its best-effort persistence fails.
+                when (stopIntent(request.sessionId, registrationToken)) {
+                    StopIntent.CANCEL -> {
+                        runState.value = runState.value.copy(
+                            status = AgentStatus.CANCELLED,
+                            stopReason = StopReason.CANCELLED,
+                        )
+                        try {
+                            withContext(NonCancellable) {
+                                commitState(
+                                    activeRequest,
+                                    runId,
+                                    runState.value,
+                                    checkpoint = null,
+                                )
+                            }
+                        } catch (_: AgentRuntimeFailure) {
+                            // The explicit cancellation remains authoritative for the active flow.
+                        }
+                        trySend(AgentEvent.Cancelled(request.sessionId))
+                        recordTelemetry(
+                            TelemetryEvent.SessionFinished(
+                                sessionId = request.sessionId,
+                                turn = runState.value.turn,
+                                outcome = TelemetryOutcome.CANCELLED,
+                                failureCode = null,
+                                usage = runState.value.usage,
+                            ),
+                        )
+                    }
+                    StopIntent.INTERRUPT -> {
+                        val interruption =
+                            AgentInterruption(AgentInterruptionReason.HOST_REQUESTED)
+                        val interruptedState = safeCheckpoint.state.copy(
+                            status = AgentStatus.INTERRUPTED,
+                            stopReason = StopReason.INTERRUPTED,
+                        )
+                        withContext(NonCancellable) {
+                            commitState(
+                                activeRequest,
+                                runId,
+                                interruptedState,
+                                safeCheckpoint,
+                                interruption,
+                            )
+                        }
+                        trySend(
+                            AgentEvent.Interrupted(
+                                request.sessionId,
+                                runId,
+                                interruption,
+                                interruptedState,
+                            ),
+                        )
+                    }
                 }
-                trySend(AgentEvent.Cancelled(request.sessionId))
-                recordTelemetry(
-                    TelemetryEvent.SessionFinished(
-                        sessionId = request.sessionId,
-                        turn = runState.value.turn,
-                        outcome = TelemetryOutcome.CANCELLED,
-                        failureCode = null,
-                        usage = runState.value.usage,
-                    ),
-                )
             }
             throw cancelled
         } catch (t: Throwable) {
-            runState.value = runState.value.copy(status = AgentStatus.FAILED, retryCount = runState.value.retryCount + 1, stopReason = StopReason.ERROR)
+            if (t is ProviderNetworkException || t is ProviderTimeoutException) {
+                val reason = if (t is ProviderTimeoutException) {
+                    AgentInterruptionReason.PROVIDER_TIMEOUT
+                } else {
+                    AgentInterruptionReason.PROVIDER_NETWORK
+                }
+                val interruption = AgentInterruption(reason)
+                val interruptedState = safeCheckpoint.state.copy(
+                    status = AgentStatus.INTERRUPTED,
+                    stopReason = StopReason.INTERRUPTED,
+                )
+                commitState(
+                    activeRequest,
+                    runId,
+                    interruptedState,
+                    safeCheckpoint,
+                    interruption,
+                )
+                send(
+                    AgentEvent.Interrupted(
+                        request.sessionId,
+                        runId,
+                        interruption,
+                        interruptedState,
+                    ),
+                )
+                return@channelFlow
+            }
+            runState.value = runState.value.copy(
+                status = AgentStatus.FAILED,
+                retryCount = runState.value.retryCount + 1,
+                stopReason = StopReason.ERROR,
+            )
             var failureCode = t.toAgentFailureCode()
             try {
-                saveSession(activeRequest, runState.value)
+                commitState(activeRequest, runId, runState.value, checkpoint = null)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: AgentRuntimeFailure) {
@@ -551,7 +980,9 @@ class DefaultAgentRunner(
             )
             send(AgentEvent.Failed(request.sessionId, failureCode))
         } finally {
-            withContext(NonCancellable) { unregister(request.sessionId, runId) }
+            withContext(NonCancellable) {
+                unregister(request.sessionId, registrationToken)
+            }
         }
     }.buffer(capacity = 0)
 
@@ -733,35 +1164,13 @@ class DefaultAgentRunner(
                 finishProviderRequest(TelemetryOutcome.SUCCESS, failureCode = null)
                 val toolCalls = assistant?.parts?.filterIsInstance<ToolCallPart>().orEmpty()
                 if (toolCalls.isNotEmpty()) {
-                    updateState(state.copy(pendingToolCalls = mergePartialToolCalls(toolCalls), status = AgentStatus.WAITING_FOR_TOOLS, stopReason = StopReason.TOOL_CALLS))
-                    val pendingToolCheckpoint = AgentCheckpoint(request.sessionId, turn, state)
-                    saveCheckpoint(request, pendingToolCheckpoint)
-                    emit(AgentEvent.CheckpointSaved(pendingToolCheckpoint))
-                    val toolResults = executeToolCalls(
-                        request,
-                        assistant ?: return TurnResult(state, false),
-                        state.pendingToolCalls,
-                        state.toolCallCounts,
-                        turn,
-                        emit,
-                    )
                     updateState(
                         state.copy(
-                            toolCallCounts = state.toolCallCounts.incrementedBy(
-                                state.pendingToolCalls,
-                                request.tools.mapTo(mutableSetOf()) { it.name },
-                            ),
+                            pendingToolCalls = mergePartialToolCalls(toolCalls),
+                            status = AgentStatus.WAITING_FOR_TOOLS,
+                            stopReason = StopReason.TOOL_CALLS,
                         ),
                     )
-                    if (toolResults.isNotEmpty()) {
-                        val toolMessage = AgentMessage(
-                            role = MessageRole.TOOL,
-                            parts = toolResults.map { it.toMessagePart() },
-                            stopReason = StopReason.TOOL_CALLS,
-                        )
-                        emit(AgentEvent.MessageEmitted(request.sessionId, toolMessage))
-                        updateState(state.copy(messages = state.messages + toolMessage, pendingToolCalls = emptyList(), status = AgentStatus.RUNNING, stopReason = StopReason.TOOL_CALLS))
-                    }
                     return TurnResult(state, true)
                 }
                 return TurnResult(state.copy(stopReason = assistant?.stopReason ?: StopReason.COMPLETED), false)
@@ -824,47 +1233,71 @@ class DefaultAgentRunner(
 
     private suspend fun executeToolCalls(
         request: AgentRequest,
+        runId: AgentRunId,
         assistantMessage: AgentMessage,
         toolCalls: List<ToolCallPart>,
         previousRunCalls: Map<String, Int>,
         turn: Int,
+        journal: List<ToolExecutionRecord>,
+        persistRecord: suspend (ToolExecutionRecord) -> Unit,
         emit: suspend (AgentEvent) -> Unit,
     ): List<ToolExecutionResult> {
         if (toolCalls.isEmpty()) return emptyList()
         val indexedToolCalls = toolCalls.withCallOrdinals()
+        val executions = indexedToolCalls.map { indexed ->
+            val record = journal.singleOrNull {
+                it.toolCallId == indexed.toolCall.toolCallId &&
+                    it.toolName == indexed.toolCall.toolName &&
+                    it.callOrdinal == indexed.ordinal
+            } ?: throw AgentRuntimeFailure(AgentFailureCode.INVALID_STATE)
+            JournaledToolCall(indexed, record)
+        }
+
+        suspend fun execute(entry: JournaledToolCall): ToolExecutionResult {
+            val completed = entry.record.result
+            if (completed != null) return completed
+            if (entry.record.state == ToolExecutionState.STARTED) {
+                val executor = toolRegistry.find(entry.indexed.toolCall.toolName)
+                if (executor?.recoveryPolicy != ToolRecoveryPolicy.REPLAY_SAFE) {
+                    throw AgentRuntimeFailure(AgentFailureCode.INVALID_STATE)
+                }
+            }
+            val started = entry.record.copy(state = ToolExecutionState.STARTED)
+            persistRecord(started)
+            val result = executeMeasuredToolCall(
+                request = request,
+                runId = runId,
+                executionId = entry.record.executionId,
+                assistantMessage = assistantMessage,
+                toolCall = entry.indexed.toolCall,
+                callOrdinal = entry.indexed.ordinal,
+                previousRunCalls = previousRunCalls[entry.indexed.toolCall.toolName] ?: 0,
+                turn = turn,
+            )
+            persistRecord(
+                started.copy(
+                    state = ToolExecutionState.COMPLETED,
+                    result = result,
+                ),
+            )
+            return result
+        }
+
         return if (request.engine.runtime.toolExecutionMode == ToolExecutionMode.PARALLEL) {
             toolCalls.forEach { emit(AgentEvent.ToolRequested(request.sessionId, it)) }
-            val results =
-            coroutineScope {
-                indexedToolCalls.map { indexedToolCall ->
-                    async {
-                        executeMeasuredToolCall(
-                            request = request,
-                            assistantMessage = assistantMessage,
-                            toolCall = indexedToolCall.toolCall,
-                            callOrdinal = indexedToolCall.ordinal,
-                            previousRunCalls = previousRunCalls[indexedToolCall.toolCall.toolName]
-                                ?: 0,
-                            turn = turn,
-                        )
-                    }
+            val results = coroutineScope {
+                executions.map { entry ->
+                    async { execute(entry) }
                 }.awaitAll()
             }
             results.forEach { emit(AgentEvent.ToolCompleted(request.sessionId, it)) }
             results
         } else {
             buildList {
-                indexedToolCalls.forEach { indexedToolCall ->
-                    val toolCall = indexedToolCall.toolCall
+                executions.forEach { entry ->
+                    val toolCall = entry.indexed.toolCall
                     emit(AgentEvent.ToolRequested(request.sessionId, toolCall))
-                    val result = executeMeasuredToolCall(
-                        request = request,
-                        assistantMessage = assistantMessage,
-                        toolCall = toolCall,
-                        callOrdinal = indexedToolCall.ordinal,
-                        previousRunCalls = previousRunCalls[toolCall.toolName] ?: 0,
-                        turn = turn,
-                    )
+                    val result = execute(entry)
                     emit(AgentEvent.ToolCompleted(request.sessionId, result))
                     add(result)
                 }
@@ -874,6 +1307,8 @@ class DefaultAgentRunner(
 
     private suspend fun executeMeasuredToolCall(
         request: AgentRequest,
+        runId: AgentRunId,
+        executionId: String,
         assistantMessage: AgentMessage,
         toolCall: ToolCallPart,
         callOrdinal: Int,
@@ -884,6 +1319,8 @@ class DefaultAgentRunner(
         return try {
             val result = executeSingleToolCall(
                 request,
+                runId,
+                executionId,
                 assistantMessage,
                 toolCall,
                 callOrdinal,
@@ -926,6 +1363,8 @@ class DefaultAgentRunner(
 
     private suspend fun executeSingleToolCall(
         request: AgentRequest,
+        runId: AgentRunId,
+        executionId: String,
         assistantMessage: AgentMessage,
         toolCall: ToolCallPart,
         callOrdinal: Int,
@@ -991,6 +1430,8 @@ class DefaultAgentRunner(
             }
             val executionRequest = ToolExecutionRequest(
                 sessionId = request.sessionId,
+                runId = runId,
+                executionId = executionId,
                 assistantMessage = context.assistantMessage,
                 toolCall = context.toolCall,
             )
@@ -1061,26 +1502,35 @@ class DefaultAgentRunner(
         )
     }
 
-    private suspend fun saveSession(request: AgentRequest, state: AgentStateSnapshot) {
+    private suspend fun commitState(
+        request: AgentRequest,
+        runId: AgentRunId,
+        state: AgentStateSnapshot,
+        checkpoint: AgentCheckpoint?,
+        interruption: AgentInterruption? = null,
+    ) {
         validateRuntimePayloads(request, state)
-        try {
-            measureStoreOperation(request.sessionId, TelemetryStoreOperation.SAVE_SESSION) {
-                sessionStore.saveSession(
-                    AgentSessionSnapshot(request.sessionId, request.copy(messages = state.messages), state),
-                )
-            }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (failure: Throwable) {
-            throw AgentRuntimeFailure(AgentFailureCode.STORAGE, failure)
+        require(checkpoint == null || checkpoint.sessionId == request.sessionId)
+        require(checkpoint == null || checkpoint.runId == runId)
+        checkpoint?.let {
+            validateMessages(
+                it.state.messages,
+                request.engine.runtime,
+                AgentFailureCode.INVALID_STATE,
+            )
         }
-    }
-
-    private suspend fun saveCheckpoint(request: AgentRequest, checkpoint: AgentCheckpoint) {
-        validateMessages(checkpoint.state.messages, request.engine.runtime, AgentFailureCode.INVALID_STATE)
         try {
-            measureStoreOperation(request.sessionId, TelemetryStoreOperation.SAVE_CHECKPOINT) {
-                checkpointStore.saveCheckpoint(checkpoint)
+            measureStoreOperation(request.sessionId, TelemetryStoreOperation.COMMIT_STATE) {
+                persistence.commit(
+                    snapshot = AgentSessionSnapshot(
+                        sessionId = request.sessionId,
+                        runId = runId,
+                        request = request.copy(messages = state.messages),
+                        state = state,
+                        interruption = interruption,
+                    ),
+                    checkpoint = checkpoint,
+                )
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -1153,20 +1603,6 @@ class DefaultAgentRunner(
             failure.code
         } catch (_: Throwable) {
             AgentFailureCode.INTERNAL
-        }
-    }
-
-    private suspend fun saveResumeSession(
-        request: AgentRequest,
-        state: AgentStateSnapshot,
-    ): AgentFailureCode? {
-        return try {
-            saveSession(request, state)
-            null
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (failure: Throwable) {
-            failure.toAgentFailureCode()
         }
     }
 
@@ -1305,20 +1741,40 @@ class DefaultAgentRunner(
         return toolCallAssembler.merge(toolCalls)
     }
 
-    private suspend fun register(sessionId: AgentSessionId, job: Job): Long {
+    private suspend fun register(
+        sessionId: AgentSessionId,
+        runId: AgentRunId,
+        job: Job,
+    ): Long {
         return mutex.withLock {
             check(activeRuns[sessionId.value] == null) { "Session ${sessionId.value} is already running" }
-            nextRunId += 1
-            nextRunId.also { runId -> activeRuns[sessionId.value] = ActiveRun(runId, job) }
+            nextRegistrationToken += 1
+            nextRegistrationToken.also { token ->
+                activeRuns[sessionId.value] = ActiveRun(
+                    registrationToken = token,
+                    runId = runId,
+                    job = job,
+                )
+            }
         }
     }
 
-    private suspend fun unregister(sessionId: AgentSessionId, runId: Long) {
+    private suspend fun unregister(sessionId: AgentSessionId, registrationToken: Long) {
         mutex.withLock {
-            if (activeRuns[sessionId.value]?.runId == runId) {
+            if (activeRuns[sessionId.value]?.registrationToken == registrationToken) {
                 activeRuns.remove(sessionId.value)
             }
         }
+    }
+
+    private suspend fun stopIntent(
+        sessionId: AgentSessionId,
+        registrationToken: Long,
+    ): StopIntent = mutex.withLock {
+        activeRuns[sessionId.value]
+            ?.takeIf { it.registrationToken == registrationToken }
+            ?.stopIntent
+            ?: StopIntent.INTERRUPT
     }
 
     internal suspend fun isSessionActive(sessionId: AgentSessionId): Boolean {
@@ -1340,9 +1796,16 @@ class DefaultAgentRunner(
     )
 
     private data class ActiveRun(
-        val runId: Long,
+        val registrationToken: Long,
+        val runId: AgentRunId,
         val job: Job,
+        var stopIntent: StopIntent = StopIntent.INTERRUPT,
     )
+
+    private enum class StopIntent {
+        CANCEL,
+        INTERRUPT,
+    }
 
     private data class ResolvedProviderConfig(
         val credential: saien.magrathea.core.ProviderCredential?,
@@ -1491,6 +1954,11 @@ private data class IndexedToolCall(
     val ordinal: Int,
 )
 
+private data class JournaledToolCall(
+    val indexed: IndexedToolCall,
+    val record: ToolExecutionRecord,
+)
+
 private fun List<ToolCallPart>.withCallOrdinals(): List<IndexedToolCall> {
     val counts = mutableMapOf<String, Int>()
     return map { toolCall ->
@@ -1498,6 +1966,79 @@ private fun List<ToolCallPart>.withCallOrdinals(): List<IndexedToolCall> {
         counts[toolCall.toolName] = ordinal
         IndexedToolCall(toolCall, ordinal)
     }
+}
+
+private fun List<ToolExecutionRecord>.replace(
+    replacement: ToolExecutionRecord,
+): List<ToolExecutionRecord> {
+    val index = indexOfFirst { it.executionId == replacement.executionId }
+    require(index >= 0) { "Tool execution journal entry is missing" }
+    return toMutableList().apply { this[index] = replacement }
+}
+
+private fun AgentCheckpoint.hasValidRecoveryShape(): Boolean {
+    return when (cursor.phase) {
+        AgentResumePhase.TURN_PREPARING,
+        AgentResumePhase.MODEL_PENDING,
+        -> state.status == AgentStatus.RUNNING &&
+            state.pendingToolCalls.isEmpty() &&
+            toolExecutions.isEmpty()
+        AgentResumePhase.TOOLS_PENDING -> {
+            if (
+                state.status != AgentStatus.WAITING_FOR_TOOLS ||
+                state.pendingToolCalls.isEmpty() ||
+                toolExecutions.size != state.pendingToolCalls.size
+            ) {
+                false
+            } else {
+                val expected = state.pendingToolCalls.withCallOrdinals().map { indexed ->
+                    Triple(
+                        indexed.toolCall.toolCallId,
+                        indexed.toolCall.toolName,
+                        indexed.ordinal,
+                    )
+                }
+                val actual = toolExecutions.map { execution ->
+                    Triple(
+                        execution.toolCallId,
+                        execution.toolName,
+                        execution.callOrdinal,
+                    )
+                }
+                expected == actual
+            }
+        }
+        AgentResumePhase.TURN_COMMITTED -> state.status == AgentStatus.RUNNING &&
+            state.pendingToolCalls.isEmpty() &&
+            toolExecutions.all { it.state == ToolExecutionState.COMPLETED }
+    }
+}
+
+private fun toolExecutionId(
+    runId: AgentRunId,
+    turn: Int,
+    ordinal: Int,
+    toolCall: ToolCallPart,
+): String = buildString {
+    append(runId.value)
+    append(':')
+    append(turn)
+    append(':')
+    append(ordinal)
+    append(':')
+    append(toolCall.toolCallId)
+}
+
+private fun AgentSessionSnapshot.statusIsTerminal(): Boolean = when (state.status) {
+    AgentStatus.COMPLETED,
+    AgentStatus.FAILED,
+    AgentStatus.CANCELLED,
+    -> true
+    AgentStatus.IDLE,
+    AgentStatus.RUNNING,
+    AgentStatus.WAITING_FOR_TOOLS,
+    AgentStatus.INTERRUPTED,
+    -> false
 }
 
 private fun List<AgentMessage>.withSystemPrompt(systemPrompt: String): List<AgentMessage> {
@@ -1717,53 +2258,33 @@ private fun Throwable.toAgentFailureCode(): AgentFailureCode = when (this) {
     else -> AgentFailureCode.INTERNAL
 }
 
-class InMemorySessionStore : SessionStore {
+class InMemoryAgentPersistence : AgentPersistence {
     private val mutex = Mutex()
-    private val sessions = LinkedHashMap<String, AgentSessionSnapshot>()
+    private val records = LinkedHashMap<String, AgentPersistenceRecord>()
 
-    override suspend fun saveSession(snapshot: AgentSessionSnapshot) {
+    override suspend fun commit(
+        snapshot: AgentSessionSnapshot,
+        checkpoint: AgentCheckpoint?,
+    ) {
         mutex.withLock {
-            sessions[snapshot.sessionId.value] = snapshot
+            records[snapshot.sessionId.value] = AgentPersistenceRecord(snapshot, checkpoint)
         }
     }
 
-    override suspend fun loadSession(sessionId: AgentSessionId): AgentSessionSnapshot? = mutex.withLock {
-        sessions[sessionId.value]
+    override suspend fun load(sessionId: AgentSessionId): AgentPersistenceRecord? = mutex.withLock {
+        records[sessionId.value]
     }
 
     override suspend fun listSessions(): List<AgentSessionSnapshot> = mutex.withLock {
-        sessions.values.toList()
+        records.values.map(AgentPersistenceRecord::snapshot)
     }
 
     override suspend fun deleteSession(sessionId: AgentSessionId) {
-        mutex.withLock { sessions.remove(sessionId.value) }
+        mutex.withLock { records.remove(sessionId.value) }
     }
 
     override suspend fun clear() {
-        mutex.withLock { sessions.clear() }
-    }
-}
-
-class InMemoryCheckpointStore : CheckpointStore {
-    private val mutex = Mutex()
-    private val checkpoints = LinkedHashMap<String, AgentCheckpoint>()
-
-    override suspend fun saveCheckpoint(checkpoint: AgentCheckpoint) {
-        mutex.withLock {
-            checkpoints[checkpoint.sessionId.value] = checkpoint
-        }
-    }
-
-    override suspend fun loadLatestCheckpoint(sessionId: AgentSessionId): AgentCheckpoint? = mutex.withLock {
-        checkpoints[sessionId.value]
-    }
-
-    override suspend fun deleteSession(sessionId: AgentSessionId) {
-        mutex.withLock { checkpoints.remove(sessionId.value) }
-    }
-
-    override suspend fun clear() {
-        mutex.withLock { checkpoints.clear() }
+        mutex.withLock { records.clear() }
     }
 }
 

@@ -31,8 +31,12 @@ import saien.magrathea.chatbot.ChatbotSessionConfiguration
 import saien.magrathea.chatbot.ChatbotSnapshot
 import saien.magrathea.chatbot.ChatbotStateObserver
 import saien.magrathea.chatbot.ChatbotStatus
+import saien.magrathea.core.AgentCheckpoint
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentRequest
+import saien.magrathea.core.AgentResumeCursor
+import saien.magrathea.core.AgentResumePhase
+import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentSessionSnapshotCodec
@@ -98,7 +102,6 @@ class WebChatbotBrowserContractTest {
             assertEquals(ChatbotStatus.COMPLETED, snapshot.status)
             assertEquals("gateway answer", snapshot.messages.last().text)
             val create = transport.createRequests.single()
-            assertEquals("${snapshot.messages.first().id}:0", create.requestId)
             assertEquals("gemini", create.model.provider)
             assertEquals("gemini-test", create.model.model)
             val post = transport.executeRequests.single { it.method == HttpMethod.POST }
@@ -106,7 +109,10 @@ class WebChatbotBrowserContractTest {
             assertFalse(assertNotNull(post.body).contains(authorization))
             assertFalse(post.body!!.contains("credential", ignoreCase = true))
 
-            val persisted = assertNotNull(store.sessionStore.loadSession(AgentSessionId(assertNotNull(snapshot.sessionId))))
+            val persisted = assertNotNull(
+                store.persistence.load(AgentSessionId(assertNotNull(snapshot.sessionId)))?.snapshot,
+            )
+            assertEquals("${persisted.runId.value}:0:0", create.requestId)
             val encoded = AgentSessionSnapshotCodec().encode(persisted)
             assertFalse(encoded.contains(authorization))
             assertEquals(null, persisted.request.engine.provider.credentialRef)
@@ -133,7 +139,7 @@ class WebChatbotBrowserContractTest {
             composition.client.close()
             assertEquals(1, transport.closeCount)
             val closed = assertFailsWith<WebStorageException> {
-                store.sessionStore.loadSession(persisted.sessionId)
+                store.persistence.load(persisted.sessionId)
             }
             assertEquals(WebStorageFailure.CLOSED, closed.failure)
         }
@@ -155,16 +161,25 @@ class WebChatbotBrowserContractTest {
                 messages = listOf(user),
                 model = ModelDescriptor("gemini", "gemini-test", supportsStreaming = true),
             )
-            store.sessionStore.saveSession(
-                AgentSessionSnapshot(
+            val runId = AgentRunId("refresh-run")
+            val state = AgentStateSnapshot(
+                messages = listOf(user),
+                turn = 0,
+                status = AgentStatus.RUNNING,
+            )
+            store.persistence.commit(
+                snapshot = AgentSessionSnapshot(
                     sessionId = sessionId,
+                    runId = runId,
                     request = request,
-                    state = AgentStateSnapshot(
-                        messages = listOf(user),
-                        turn = 0,
-                        status = AgentStatus.RUNNING,
-                    ),
+                    state = state,
                     updatedAtEpochMs = 2L,
+                ),
+                checkpoint = AgentCheckpoint(
+                    sessionId = sessionId,
+                    runId = runId,
+                    cursor = AgentResumeCursor(0, AgentResumePhase.MODEL_PENDING),
+                    state = state,
                 ),
             )
             val transport = ScriptedGatewayTransport(StreamBehavior.COMPLETE)
@@ -190,7 +205,7 @@ class WebChatbotBrowserContractTest {
             terminal.await()
 
             assertEquals(ChatbotStatus.COMPLETED, resumed.snapshot().status)
-            assertEquals("refresh-user:0", transport.createRequests.single().requestId)
+            assertEquals("refresh-run:0:0", transport.createRequests.single().requestId)
             composition.client.close()
         }
     }

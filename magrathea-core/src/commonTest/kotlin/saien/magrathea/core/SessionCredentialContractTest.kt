@@ -102,6 +102,11 @@ class SessionCredentialContractTest {
             model = ModelDescriptor(provider = "test-provider", model = "test-model"),
             engine = AgentEngineConfig(provider = providerConfig),
         )
-        return AgentSessionSnapshot(sessionId, request, AgentStateSnapshot(messages = request.messages))
+        return AgentSessionSnapshot(
+            sessionId = sessionId,
+            runId = AgentRunId("credential-contract-run"),
+            request = request,
+            state = AgentStateSnapshot(messages = request.messages),
+        )
     }
 }

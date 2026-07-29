@@ -68,12 +68,7 @@ class RuntimeTelemetryContractTest {
         assertEquals(1, telemetry.events.filterIsInstance<TelemetryEvent.RetryScheduled>().size)
         assertTrue(
             telemetry.events.filterIsInstance<TelemetryEvent.StoreOperationFinished>().any {
-                it.operation == TelemetryStoreOperation.SAVE_SESSION
-            },
-        )
-        assertTrue(
-            telemetry.events.filterIsInstance<TelemetryEvent.StoreOperationFinished>().any {
-                it.operation == TelemetryStoreOperation.SAVE_CHECKPOINT
+                it.operation == TelemetryStoreOperation.COMMIT_STATE
             },
         )
         val finished = telemetry.events.filterIsInstance<TelemetryEvent.SessionFinished>().single()
@@ -109,8 +104,7 @@ class RuntimeTelemetryContractTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
             telemetry = { error("telemetry sink failed") },
             monotonicClock = IncrementingClock(),
         )
@@ -154,8 +148,7 @@ class RuntimeTelemetryContractTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
             telemetry = telemetry,
             monotonicClock = IncrementingClock(),
         )
@@ -165,7 +158,7 @@ class RuntimeTelemetryContractTest {
 
         assertEquals(AgentFailureCode.NOT_FOUND, events.filterIsInstance<AgentEvent.Failed>().single().code)
         val store = telemetry.events.filterIsInstance<TelemetryEvent.StoreOperationFinished>().single()
-        assertEquals(TelemetryStoreOperation.LOAD_SESSION, store.operation)
+        assertEquals(TelemetryStoreOperation.LOAD_STATE, store.operation)
         assertEquals(TelemetryOutcome.SUCCESS, store.outcome)
         val finished = telemetry.events.filterIsInstance<TelemetryEvent.SessionFinished>().single()
         assertEquals(TelemetryOutcome.FAILURE, finished.outcome)
@@ -180,8 +173,7 @@ class RuntimeTelemetryContractTest {
     ) = DefaultAgentRunner(
         providerRegistry = InMemoryProviderRegistry(listOf(provider)),
         toolRegistry = InMemoryToolRegistry(tools),
-        sessionStore = InMemorySessionStore(),
-        checkpointStore = InMemoryCheckpointStore(),
+        persistence = InMemoryAgentPersistence(),
         retryPolicy = retryPolicy,
         telemetry = telemetry,
         monotonicClock = IncrementingClock(),

@@ -34,7 +34,7 @@ class ChatbotControllerTest {
                 stopReason = StopReason.COMPLETED,
             )
             listOf(
-                AgentEvent.Started(request.sessionId),
+                AgentEvent.Started(request.sessionId, TEST_RUN_ID),
                 AgentEvent.MessageEmitted(request.sessionId, assistant),
                 AgentEvent.Completed(
                     request.sessionId,
@@ -66,7 +66,7 @@ class ChatbotControllerTest {
     @Test
     fun cancelShouldCancelActiveSessionAndState() = runTest {
         val runner = ScriptedAgentRunner(runScript = { request ->
-            listOf(AgentEvent.Started(request.sessionId))
+            listOf(AgentEvent.Started(request.sessionId, TEST_RUN_ID))
         }, suspendAfterRunScript = true)
         val controller = ChatbotController(
             runner = runner,
@@ -97,7 +97,7 @@ class ChatbotControllerTest {
         val runner = ScriptedAgentRunner(
             resumeScript = {
                 listOf(
-                    AgentEvent.Started(sessionId),
+                    AgentEvent.Started(sessionId, TEST_RUN_ID),
                     AgentEvent.Completed(
                         sessionId,
                         AgentStateSnapshot(messages = listOf(assistant), stopReason = StopReason.COMPLETED),
@@ -130,7 +130,7 @@ class ChatbotControllerTest {
                 stopReason = StopReason.COMPLETED,
             )
             listOf(
-                AgentEvent.Started(request.sessionId),
+                AgentEvent.Started(request.sessionId, TEST_RUN_ID),
                 AgentEvent.Completed(
                     request.sessionId,
                     AgentStateSnapshot(messages = request.messages + assistant, stopReason = StopReason.COMPLETED),
@@ -162,7 +162,7 @@ class ChatbotControllerTest {
         private val runScript: (AgentRequest) -> List<AgentEvent> = { emptyList() },
         private val resumeScript: (AgentSessionId) -> List<AgentEvent> = { emptyList() },
         private val suspendAfterRunScript: Boolean = false,
-    ) : AgentRunner {
+    ) : TestAgentRunner() {
         val requests = mutableListOf<AgentRequest>()
         val cancelled = mutableListOf<AgentSessionId>()
         val resumed = mutableListOf<AgentSessionId>()

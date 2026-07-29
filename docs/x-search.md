@@ -124,8 +124,7 @@ val xSearch = XSearchTool(
 val runner = DefaultAgentRunner(
     providerRegistry = mainModelProviders,
     toolRegistry = InMemoryToolRegistry(listOf(xSearch)),
-    sessionStore = sessions,
-    checkpointStore = checkpoints,
+    persistence = persistence,
     credentialProvider = mainModelCredentials,
 )
 ```

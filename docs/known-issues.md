@@ -11,8 +11,8 @@ line.
 - The direct KMP facade supports text, attachments, metadata, and regenerate. The JavaScript/
   TypeScript convenience wrapper currently exposes text send only; attachment upload UX and host
   tool registration remain composition-level work.
-- The minified browser entry point is 1,242,531 bytes and exceeds Webpack's default performance
-  recommendation. The package gate enforces a 1,250,000-byte ceiling; browser hosts should load the
+- The minified browser entry point is 1,285,759 bytes and exceeds Webpack's default performance
+  recommendation. The package gate enforces a 1,300,000-byte ceiling; browser hosts should load the
   client on demand, and the budget should be reduced before a production release.
 - Thirteen mobile KMP modules publish Android, JVM, `iosArm64`, and `iosSimulatorArm64`; eight also
   publish JS/Wasm, and two additional modules are Web-only. Wasm is experimental. macOS Native,

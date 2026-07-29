@@ -9,6 +9,7 @@ import org.junit.Test
 import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentFailureCode
 import saien.magrathea.core.AgentMessage
+import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.MessageRole
@@ -201,7 +202,7 @@ class ProviderLiveHarnessConfigTest {
         assertThrows(IllegalStateException::class.java) {
             requireSuccessfulProviderLiveEvent(AgentEvent.Cancelled(sessionId))
         }
-        requireSuccessfulProviderLiveEvent(AgentEvent.Started(sessionId))
+        requireSuccessfulProviderLiveEvent(AgentEvent.Started(sessionId, AgentRunId("harness-run")))
     }
 
     @Test

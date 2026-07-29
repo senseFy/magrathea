@@ -18,10 +18,15 @@ import kotlin.test.fail
 import kotlin.test.Test
 import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentMessage
+import saien.magrathea.core.AgentInterruption
+import saien.magrathea.core.AgentInterruptionReason
+import saien.magrathea.core.AgentRecoveryDisposition
+import saien.magrathea.core.AgentRecoveryInfo
 import saien.magrathea.core.AgentRequest
 import saien.magrathea.core.AgentRunner
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentStateSnapshot
+import saien.magrathea.core.AgentStatus
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.StopReason
@@ -108,6 +113,30 @@ class ChatbotControllerContractTest {
 
         assertEquals(ChatbotStatus.CANCELLED, controller.state.value.status)
         assertEquals(ChatbotToolActivityStatus.CANCELLED, controller.state.value.toolActivities.single().status)
+    }
+
+    @Test
+    fun cancel_terminallyAbandonsAnInactiveInterruptedRun() = runTest {
+        val runner = ImmediateRunner()
+        val sessionId = AgentSessionId("inactive-interrupted")
+        val controller = controller(runner, this)
+        controller.loadHistory(
+            messages = listOf(
+                AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("recover me"))),
+            ),
+            sessionId = sessionId,
+            status = ChatbotStatus.INTERRUPTED,
+            interruption = ChatbotInterruption(
+                reason = ChatbotInterruptionReason.PROVIDER_NETWORK,
+                occurredAtEpochMs = 1L,
+            ),
+        )
+
+        controller.cancel()
+
+        assertEquals(listOf(sessionId), runner.cancelled)
+        assertEquals(ChatbotStatus.CANCELLED, controller.state.value.status)
+        assertEquals(null, controller.state.value.interruption)
     }
 
     @Test
@@ -254,7 +283,7 @@ class ChatbotControllerContractTest {
     }
 
     @Test
-    fun close_cancelsActiveRunner_isIdempotentAndRejectsFurtherCommands() = runTest {
+    fun close_interruptsActiveRunner_isIdempotentAndRejectsFurtherCommands() = runTest {
         val runner = ReplacementRunner()
         val controller = controller(runner, this)
         controller.sendMessage("hello")
@@ -264,14 +293,48 @@ class ChatbotControllerContractTest {
         controller.close()
         controller.close()
 
-        assertEquals(listOf(sessionId), runner.cancelled)
-        assertEquals(ChatbotStatus.CANCELLED, controller.state.value.status)
+        assertEquals(listOf(sessionId), runner.interrupted)
+        assertEquals(ChatbotStatus.INTERRUPTED, controller.state.value.status)
         try {
             controller.sendMessage("after-close")
             fail("Expected closed controller to reject commands")
         } catch (error: IllegalStateException) {
             assertEquals("ChatbotController is closed", error.message)
         }
+    }
+
+    @Test
+    fun interruptWaitsUntilANewRunHasEnteredTheRunner() = runTest {
+        val runner = ReplacementRunner()
+        val controller = controller(runner, this)
+        controller.sendMessage("hello")
+
+        controller.interrupt()
+
+        assertEquals(1, runner.requests.size)
+        assertEquals(listOf(runner.requests.single().sessionId), runner.interrupted)
+        assertEquals(ChatbotStatus.INTERRUPTED, controller.state.value.status)
+    }
+
+    @Test
+    fun interrupt_restoresTheAuthoritativeCheckpointInsteadOfKeepingProvisionalOutput() = runTest {
+        val runner = ProvisionalOutputRunner()
+        val controller = controller(runner, this)
+        controller.sendMessage("hello")
+        runCurrent()
+        assertEquals(2, controller.state.value.messages.size)
+
+        controller.interrupt()
+
+        assertEquals(
+            listOf("hello"),
+            controller.state.value.messages.map(ChatbotMessageSnapshot::text),
+        )
+        assertEquals(ChatbotStatus.INTERRUPTED, controller.state.value.status)
+        assertEquals(
+            ChatbotInterruptionReason.HOST_REQUESTED,
+            controller.state.value.interruption?.reason,
+        )
     }
 
     @Test
@@ -316,7 +379,7 @@ class ChatbotControllerContractTest {
         )
     }
 
-    private open class ImmediateRunner : AgentRunner {
+    private open class ImmediateRunner : TestAgentRunner() {
         val requests = mutableListOf<AgentRequest>()
         val cancelled = mutableListOf<AgentSessionId>()
 
@@ -328,7 +391,7 @@ class ChatbotControllerContractTest {
                 parts = listOf(TextPart("reply-${requests.size}")),
                 stopReason = StopReason.COMPLETED,
             )
-            emit(AgentEvent.Started(request.sessionId))
+            emit(AgentEvent.Started(request.sessionId, TEST_RUN_ID))
             emit(
                 AgentEvent.Completed(
                     request.sessionId,
@@ -347,13 +410,14 @@ class ChatbotControllerContractTest {
         }
     }
 
-    private class ReplacementRunner : AgentRunner {
+    private class ReplacementRunner : TestAgentRunner() {
         val requests = mutableListOf<AgentRequest>()
         val cancelled = mutableListOf<AgentSessionId>()
+        val interrupted = mutableListOf<AgentSessionId>()
 
         override fun run(request: AgentRequest): Flow<AgentEvent> = flow {
             requests += request
-            emit(AgentEvent.Started(request.sessionId))
+            emit(AgentEvent.Started(request.sessionId, TEST_RUN_ID))
             if (requests.size == 1) {
                 try {
                     awaitCancellation()
@@ -375,12 +439,22 @@ class ChatbotControllerContractTest {
         override suspend fun cancel(sessionId: AgentSessionId) {
             cancelled += sessionId
         }
+
+        override suspend fun interrupt(sessionId: AgentSessionId): AgentRecoveryInfo {
+            interrupted += sessionId
+            return AgentRecoveryInfo(
+                sessionId = sessionId,
+                runId = TEST_RUN_ID,
+                disposition = AgentRecoveryDisposition.RESUMABLE,
+                interruption = AgentInterruption(AgentInterruptionReason.HOST_REQUESTED),
+            )
+        }
     }
 
-    private class ToolWaitingRunner : AgentRunner {
+    private class ToolWaitingRunner : TestAgentRunner() {
         override fun run(request: AgentRequest): Flow<AgentEvent> = flow {
             val call = ToolCallPart("call-1", "lookup", buildJsonObject { })
-            emit(AgentEvent.Started(request.sessionId))
+            emit(AgentEvent.Started(request.sessionId, TEST_RUN_ID))
             emit(
                 AgentEvent.MessageEmitted(
                     request.sessionId,
@@ -400,11 +474,51 @@ class ChatbotControllerContractTest {
         override suspend fun cancel(sessionId: AgentSessionId) = Unit
     }
 
+    private class ProvisionalOutputRunner : TestAgentRunner() {
+        private lateinit var request: AgentRequest
+
+        override fun run(request: AgentRequest): Flow<AgentEvent> = flow {
+            this@ProvisionalOutputRunner.request = request
+            emit(AgentEvent.Started(request.sessionId, TEST_RUN_ID))
+            emit(
+                AgentEvent.MessageEmitted(
+                    request.sessionId,
+                    AgentMessage(
+                        id = "provisional-assistant",
+                        role = MessageRole.ASSISTANT,
+                        parts = listOf(TextPart("provisional")),
+                    ),
+                ),
+            )
+            awaitCancellation()
+        }
+
+        override suspend fun resume(sessionId: AgentSessionId): Flow<AgentEvent> = flow { }
+
+        override suspend fun cancel(sessionId: AgentSessionId) = Unit
+
+        override suspend fun interrupt(sessionId: AgentSessionId): AgentRecoveryInfo {
+            val state = AgentStateSnapshot(
+                messages = request.messages,
+                status = AgentStatus.INTERRUPTED,
+                stopReason = StopReason.INTERRUPTED,
+            )
+            return AgentRecoveryInfo(
+                sessionId = sessionId,
+                runId = TEST_RUN_ID,
+                disposition = AgentRecoveryDisposition.RESUMABLE,
+                status = state.status,
+                state = state,
+                interruption = AgentInterruption(AgentInterruptionReason.HOST_REQUESTED),
+            )
+        }
+    }
+
     private class ForeignSessionEventRunner(
         private val stale: AgentMessage,
-    ) : AgentRunner {
+    ) : TestAgentRunner() {
         override fun run(request: AgentRequest): Flow<AgentEvent> = flow {
-            emit(AgentEvent.Started(request.sessionId))
+            emit(AgentEvent.Started(request.sessionId, TEST_RUN_ID))
             emit(AgentEvent.MessageEmitted(AgentSessionId("foreign-session"), stale))
         }
 
@@ -413,7 +527,7 @@ class ChatbotControllerContractTest {
         override suspend fun cancel(sessionId: AgentSessionId) = Unit
     }
 
-    private class ThrowingRunner : AgentRunner {
+    private class ThrowingRunner : TestAgentRunner() {
         override fun run(request: AgentRequest): Flow<AgentEvent> = flow {
             error("runner exploded")
         }

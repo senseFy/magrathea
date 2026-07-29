@@ -30,6 +30,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import saien.magrathea.core.AgentMessage
+import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ToolCallPart
@@ -154,6 +155,8 @@ class McpServerConnectionTest {
             val result = executor.execute(
                 ToolExecutionRequest(
                     sessionId = AgentSessionId("session"),
+                    runId = AgentRunId("session-run"),
+                    executionId = "call-1-execution",
                     assistantMessage = AgentMessage(
                         role = MessageRole.ASSISTANT,
                         parts = emptyList(),
@@ -204,6 +207,8 @@ class McpServerConnectionTest {
                 executor.execute(
                     ToolExecutionRequest(
                         sessionId = AgentSessionId("session"),
+                        runId = AgentRunId("session-run"),
+                        executionId = "stale-call-execution",
                         assistantMessage = AgentMessage(
                             role = MessageRole.ASSISTANT,
                             parts = emptyList(),
@@ -304,6 +309,8 @@ class McpServerConnectionTest {
                 executor.execute(
                     ToolExecutionRequest(
                         sessionId = AgentSessionId("limits"),
+                        runId = AgentRunId("limits-run"),
+                        executionId = "large-call-execution",
                         assistantMessage = AgentMessage(
                             role = MessageRole.ASSISTANT,
                             parts = emptyList(),

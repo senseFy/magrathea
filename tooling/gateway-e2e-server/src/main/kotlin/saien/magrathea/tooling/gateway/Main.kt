@@ -92,11 +92,21 @@ fun main() {
             options("/e2e/provider-cancellations") { call.respondE2ePreflight(allowedOrigins) }
             get("/e2e/provider-calls") {
                 if (!call.applyE2eCors(allowedOrigins)) return@get
-                call.respondText(provider.calls(call.request.queryParameters["requestId"].orEmpty()).toString())
+                call.respondText(
+                    provider.calls(
+                        requestId = call.request.queryParameters["requestId"],
+                        sessionId = call.request.queryParameters["sessionId"],
+                    ).toString(),
+                )
             }
             get("/e2e/provider-cancellations") {
                 if (!call.applyE2eCors(allowedOrigins)) return@get
-                call.respondText(provider.cancellations(call.request.queryParameters["requestId"].orEmpty()).toString())
+                call.respondText(
+                    provider.cancellations(
+                        requestId = call.request.queryParameters["requestId"],
+                        sessionId = call.request.queryParameters["sessionId"],
+                    ).toString(),
+                )
             }
         }
         installMagratheaGateway(
@@ -141,14 +151,22 @@ private object NoopQuotaManager : GatewayQuotaManager {
 private class E2eProvider : ProviderAdapter {
     override val key: String = "gateway-e2e"
     private val callsByRequest = ConcurrentHashMap<String, AtomicInteger>()
+    private val callsBySession = ConcurrentHashMap<String, AtomicInteger>()
     private val cancellationsByRequest = ConcurrentHashMap<String, AtomicInteger>()
+    private val cancellationsBySession = ConcurrentHashMap<String, AtomicInteger>()
 
-    fun calls(requestId: String): Int = callsByRequest[requestId]?.get() ?: 0
-    fun cancellations(requestId: String): Int = cancellationsByRequest[requestId]?.get() ?: 0
+    fun calls(requestId: String?, sessionId: String?): Int =
+        metric(callsByRequest, callsBySession, requestId, sessionId)
+
+    fun cancellations(requestId: String?, sessionId: String?): Int =
+        metric(cancellationsByRequest, cancellationsBySession, requestId, sessionId)
 
     override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
-        val requestId = requireNotNull(request.invocation).requestId
+        val invocation = requireNotNull(request.invocation)
+        val requestId = invocation.requestId
+        val sessionId = invocation.sessionId.value
         callsByRequest.computeIfAbsent(requestId) { AtomicInteger() }.incrementAndGet()
+        callsBySession.computeIfAbsent(sessionId) { AtomicInteger() }.incrementAndGet()
         val prompt = request.messages.lastOrNull()?.text().orEmpty()
         try {
             emit(ProviderChunk(events = listOf(ProviderEvent.TextStart())))
@@ -168,8 +186,20 @@ private class E2eProvider : ProviderAdapter {
         } finally {
             if (prompt.contains("hang", ignoreCase = true)) {
                 cancellationsByRequest.computeIfAbsent(requestId) { AtomicInteger() }.incrementAndGet()
+                cancellationsBySession.computeIfAbsent(sessionId) { AtomicInteger() }.incrementAndGet()
             }
         }
+    }
+
+    private fun metric(
+        byRequest: ConcurrentHashMap<String, AtomicInteger>,
+        bySession: ConcurrentHashMap<String, AtomicInteger>,
+        requestId: String?,
+        sessionId: String?,
+    ): Int = when {
+        !requestId.isNullOrBlank() -> byRequest[requestId]?.get() ?: 0
+        !sessionId.isNullOrBlank() -> bySession[sessionId]?.get() ?: 0
+        else -> 0
     }
 }
 

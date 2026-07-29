@@ -1,14 +1,20 @@
 public final class saien/magrathea/core/AgentCheckpoint {
 	public static final field Companion Lsaien/magrathea/core/AgentCheckpoint$Companion;
-	public fun <init> (Lsaien/magrathea/core/AgentSessionId;ILsaien/magrathea/core/AgentStateSnapshot;)V
+	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentResumeCursor;Lsaien/magrathea/core/AgentStateSnapshot;Ljava/util/List;)V
+	public synthetic fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentResumeCursor;Lsaien/magrathea/core/AgentStateSnapshot;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun component2 ()I
-	public final fun component3 ()Lsaien/magrathea/core/AgentStateSnapshot;
-	public final fun copy (Lsaien/magrathea/core/AgentSessionId;ILsaien/magrathea/core/AgentStateSnapshot;)Lsaien/magrathea/core/AgentCheckpoint;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/AgentCheckpoint;Lsaien/magrathea/core/AgentSessionId;ILsaien/magrathea/core/AgentStateSnapshot;ILjava/lang/Object;)Lsaien/magrathea/core/AgentCheckpoint;
+	public final fun component2 ()Lsaien/magrathea/core/AgentRunId;
+	public final fun component3 ()Lsaien/magrathea/core/AgentResumeCursor;
+	public final fun component4 ()Lsaien/magrathea/core/AgentStateSnapshot;
+	public final fun component5 ()Ljava/util/List;
+	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentResumeCursor;Lsaien/magrathea/core/AgentStateSnapshot;Ljava/util/List;)Lsaien/magrathea/core/AgentCheckpoint;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/AgentCheckpoint;Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentResumeCursor;Lsaien/magrathea/core/AgentStateSnapshot;Ljava/util/List;ILjava/lang/Object;)Lsaien/magrathea/core/AgentCheckpoint;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCursor ()Lsaien/magrathea/core/AgentResumeCursor;
+	public final fun getRunId ()Lsaien/magrathea/core/AgentRunId;
 	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
 	public final fun getState ()Lsaien/magrathea/core/AgentStateSnapshot;
+	public final fun getToolExecutions ()Ljava/util/List;
 	public final fun getTurn ()I
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
@@ -250,6 +256,39 @@ public final class saien/magrathea/core/AgentEvent$Failed$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class saien/magrathea/core/AgentEvent$Interrupted : saien/magrathea/core/AgentEvent {
+	public static final field Companion Lsaien/magrathea/core/AgentEvent$Interrupted$Companion;
+	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentInterruption;Lsaien/magrathea/core/AgentStateSnapshot;)V
+	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun component2 ()Lsaien/magrathea/core/AgentRunId;
+	public final fun component3 ()Lsaien/magrathea/core/AgentInterruption;
+	public final fun component4 ()Lsaien/magrathea/core/AgentStateSnapshot;
+	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentInterruption;Lsaien/magrathea/core/AgentStateSnapshot;)Lsaien/magrathea/core/AgentEvent$Interrupted;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/AgentEvent$Interrupted;Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentInterruption;Lsaien/magrathea/core/AgentStateSnapshot;ILjava/lang/Object;)Lsaien/magrathea/core/AgentEvent$Interrupted;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getInterruption ()Lsaien/magrathea/core/AgentInterruption;
+	public final fun getRunId ()Lsaien/magrathea/core/AgentRunId;
+	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun getState ()Lsaien/magrathea/core/AgentStateSnapshot;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/core/AgentEvent$Interrupted$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/core/AgentEvent$Interrupted$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/core/AgentEvent$Interrupted;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/core/AgentEvent$Interrupted;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/core/AgentEvent$Interrupted$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
 public final class saien/magrathea/core/AgentEvent$MessageEmitted : saien/magrathea/core/AgentEvent {
 	public static final field Companion Lsaien/magrathea/core/AgentEvent$MessageEmitted$Companion;
 	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentMessage;)V
@@ -276,6 +315,37 @@ public final synthetic class saien/magrathea/core/AgentEvent$MessageEmitted$$ser
 }
 
 public final class saien/magrathea/core/AgentEvent$MessageEmitted$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/core/AgentEvent$RecoveryBlocked : saien/magrathea/core/AgentEvent {
+	public static final field Companion Lsaien/magrathea/core/AgentEvent$RecoveryBlocked$Companion;
+	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentRecoveryBlockReason;)V
+	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun component2 ()Lsaien/magrathea/core/AgentRunId;
+	public final fun component3 ()Lsaien/magrathea/core/AgentRecoveryBlockReason;
+	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentRecoveryBlockReason;)Lsaien/magrathea/core/AgentEvent$RecoveryBlocked;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/AgentEvent$RecoveryBlocked;Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentRecoveryBlockReason;ILjava/lang/Object;)Lsaien/magrathea/core/AgentEvent$RecoveryBlocked;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Lsaien/magrathea/core/AgentRecoveryBlockReason;
+	public final fun getRunId ()Lsaien/magrathea/core/AgentRunId;
+	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/core/AgentEvent$RecoveryBlocked$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/core/AgentEvent$RecoveryBlocked$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/core/AgentEvent$RecoveryBlocked;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/core/AgentEvent$RecoveryBlocked;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/core/AgentEvent$RecoveryBlocked$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
@@ -312,11 +382,13 @@ public final class saien/magrathea/core/AgentEvent$RetryScheduled$Companion {
 
 public final class saien/magrathea/core/AgentEvent$Started : saien/magrathea/core/AgentEvent {
 	public static final field Companion Lsaien/magrathea/core/AgentEvent$Started$Companion;
-	public fun <init> (Lsaien/magrathea/core/AgentSessionId;)V
+	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;)V
 	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun copy (Lsaien/magrathea/core/AgentSessionId;)Lsaien/magrathea/core/AgentEvent$Started;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/AgentEvent$Started;Lsaien/magrathea/core/AgentSessionId;ILjava/lang/Object;)Lsaien/magrathea/core/AgentEvent$Started;
+	public final fun component2 ()Lsaien/magrathea/core/AgentRunId;
+	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;)Lsaien/magrathea/core/AgentEvent$Started;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/AgentEvent$Started;Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;ILjava/lang/Object;)Lsaien/magrathea/core/AgentEvent$Started;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRunId ()Lsaien/magrathea/core/AgentRunId;
 	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
@@ -465,6 +537,51 @@ public final class saien/magrathea/core/AgentInterceptor$DefaultImpls {
 	public static fun onModelChunk (Lsaien/magrathea/core/AgentInterceptor;Lsaien/magrathea/core/AgentRuntimeContext;Lsaien/magrathea/core/AgentMessage;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
+public final class saien/magrathea/core/AgentInterruption {
+	public static final field Companion Lsaien/magrathea/core/AgentInterruption$Companion;
+	public fun <init> (Lsaien/magrathea/core/AgentInterruptionReason;J)V
+	public synthetic fun <init> (Lsaien/magrathea/core/AgentInterruptionReason;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lsaien/magrathea/core/AgentInterruptionReason;
+	public final fun component2 ()J
+	public final fun copy (Lsaien/magrathea/core/AgentInterruptionReason;J)Lsaien/magrathea/core/AgentInterruption;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/AgentInterruption;Lsaien/magrathea/core/AgentInterruptionReason;JILjava/lang/Object;)Lsaien/magrathea/core/AgentInterruption;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getOccurredAtEpochMs ()J
+	public final fun getReason ()Lsaien/magrathea/core/AgentInterruptionReason;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/core/AgentInterruption$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/core/AgentInterruption$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/core/AgentInterruption;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/core/AgentInterruption;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/core/AgentInterruption$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/core/AgentInterruptionReason : java/lang/Enum {
+	public static final field Companion Lsaien/magrathea/core/AgentInterruptionReason$Companion;
+	public static final field HOST_REQUESTED Lsaien/magrathea/core/AgentInterruptionReason;
+	public static final field ORPHANED Lsaien/magrathea/core/AgentInterruptionReason;
+	public static final field PROVIDER_NETWORK Lsaien/magrathea/core/AgentInterruptionReason;
+	public static final field PROVIDER_TIMEOUT Lsaien/magrathea/core/AgentInterruptionReason;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/core/AgentInterruptionReason;
+	public static fun values ()[Lsaien/magrathea/core/AgentInterruptionReason;
+}
+
+public final class saien/magrathea/core/AgentInterruptionReason$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
 public final class saien/magrathea/core/AgentMessage {
 	public static final field Companion Lsaien/magrathea/core/AgentMessage$Companion;
 	public fun <init> (Ljava/lang/String;Lsaien/magrathea/core/MessageRole;Ljava/util/List;JLkotlinx/serialization/json/JsonObject;Lsaien/magrathea/core/StopReason;)V
@@ -509,8 +626,76 @@ public final class saien/magrathea/core/AgentModelFactory {
 	public synthetic fun <init> (Lsaien/magrathea/core/IdGenerator;Lsaien/magrathea/core/EpochClock;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun createMessage (Lsaien/magrathea/core/MessageRole;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lsaien/magrathea/core/StopReason;)Lsaien/magrathea/core/AgentMessage;
 	public static synthetic fun createMessage$default (Lsaien/magrathea/core/AgentModelFactory;Lsaien/magrathea/core/MessageRole;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lsaien/magrathea/core/StopReason;ILjava/lang/Object;)Lsaien/magrathea/core/AgentMessage;
+	public final fun createRunId ()Lsaien/magrathea/core/AgentRunId;
 	public final fun createSessionId ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun createSessionSnapshot (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentStateSnapshot;)Lsaien/magrathea/core/AgentSessionSnapshot;
+	public final fun createSessionSnapshot (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/core/AgentInterruption;)Lsaien/magrathea/core/AgentSessionSnapshot;
+	public static synthetic fun createSessionSnapshot$default (Lsaien/magrathea/core/AgentModelFactory;Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/core/AgentInterruption;ILjava/lang/Object;)Lsaien/magrathea/core/AgentSessionSnapshot;
+}
+
+public abstract interface class saien/magrathea/core/AgentPersistence {
+	public abstract fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun commit (Lsaien/magrathea/core/AgentSessionSnapshot;Lsaien/magrathea/core/AgentCheckpoint;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun deleteSession (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun listSessions (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun load (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/core/AgentPersistenceRecord {
+	public fun <init> (Lsaien/magrathea/core/AgentSessionSnapshot;Lsaien/magrathea/core/AgentCheckpoint;)V
+	public final fun component1 ()Lsaien/magrathea/core/AgentSessionSnapshot;
+	public final fun component2 ()Lsaien/magrathea/core/AgentCheckpoint;
+	public final fun copy (Lsaien/magrathea/core/AgentSessionSnapshot;Lsaien/magrathea/core/AgentCheckpoint;)Lsaien/magrathea/core/AgentPersistenceRecord;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/AgentPersistenceRecord;Lsaien/magrathea/core/AgentSessionSnapshot;Lsaien/magrathea/core/AgentCheckpoint;ILjava/lang/Object;)Lsaien/magrathea/core/AgentPersistenceRecord;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCheckpoint ()Lsaien/magrathea/core/AgentCheckpoint;
+	public final fun getSnapshot ()Lsaien/magrathea/core/AgentSessionSnapshot;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/core/AgentRecoveryBlockReason : java/lang/Enum {
+	public static final field CHECKPOINT_MISMATCH Lsaien/magrathea/core/AgentRecoveryBlockReason;
+	public static final field TOOL_OUTCOME_UNKNOWN Lsaien/magrathea/core/AgentRecoveryBlockReason;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/core/AgentRecoveryBlockReason;
+	public static fun values ()[Lsaien/magrathea/core/AgentRecoveryBlockReason;
+}
+
+public final class saien/magrathea/core/AgentRecoveryDisposition : java/lang/Enum {
+	public static final field ACTIVE Lsaien/magrathea/core/AgentRecoveryDisposition;
+	public static final field BLOCKED Lsaien/magrathea/core/AgentRecoveryDisposition;
+	public static final field NOT_FOUND Lsaien/magrathea/core/AgentRecoveryDisposition;
+	public static final field RESUMABLE Lsaien/magrathea/core/AgentRecoveryDisposition;
+	public static final field TERMINAL Lsaien/magrathea/core/AgentRecoveryDisposition;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/core/AgentRecoveryDisposition;
+	public static fun values ()[Lsaien/magrathea/core/AgentRecoveryDisposition;
+}
+
+public final class saien/magrathea/core/AgentRecoveryInfo {
+	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentRecoveryDisposition;Lsaien/magrathea/core/AgentStatus;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/core/AgentResumeCursor;Lsaien/magrathea/core/AgentInterruption;Lsaien/magrathea/core/AgentRecoveryBlockReason;)V
+	public synthetic fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentRecoveryDisposition;Lsaien/magrathea/core/AgentStatus;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/core/AgentResumeCursor;Lsaien/magrathea/core/AgentInterruption;Lsaien/magrathea/core/AgentRecoveryBlockReason;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun component2 ()Lsaien/magrathea/core/AgentRunId;
+	public final fun component3 ()Lsaien/magrathea/core/AgentRecoveryDisposition;
+	public final fun component4 ()Lsaien/magrathea/core/AgentStatus;
+	public final fun component5 ()Lsaien/magrathea/core/AgentStateSnapshot;
+	public final fun component6 ()Lsaien/magrathea/core/AgentResumeCursor;
+	public final fun component7 ()Lsaien/magrathea/core/AgentInterruption;
+	public final fun component8 ()Lsaien/magrathea/core/AgentRecoveryBlockReason;
+	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentRecoveryDisposition;Lsaien/magrathea/core/AgentStatus;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/core/AgentResumeCursor;Lsaien/magrathea/core/AgentInterruption;Lsaien/magrathea/core/AgentRecoveryBlockReason;)Lsaien/magrathea/core/AgentRecoveryInfo;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/AgentRecoveryInfo;Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentRecoveryDisposition;Lsaien/magrathea/core/AgentStatus;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/core/AgentResumeCursor;Lsaien/magrathea/core/AgentInterruption;Lsaien/magrathea/core/AgentRecoveryBlockReason;ILjava/lang/Object;)Lsaien/magrathea/core/AgentRecoveryInfo;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBlockedReason ()Lsaien/magrathea/core/AgentRecoveryBlockReason;
+	public final fun getCursor ()Lsaien/magrathea/core/AgentResumeCursor;
+	public final fun getDisposition ()Lsaien/magrathea/core/AgentRecoveryDisposition;
+	public final fun getInterruption ()Lsaien/magrathea/core/AgentInterruption;
+	public final fun getRunId ()Lsaien/magrathea/core/AgentRunId;
+	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun getState ()Lsaien/magrathea/core/AgentStateSnapshot;
+	public final fun getStatus ()Lsaien/magrathea/core/AgentStatus;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class saien/magrathea/core/AgentRequest {
@@ -553,8 +738,86 @@ public final class saien/magrathea/core/AgentRequest$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class saien/magrathea/core/AgentResumeCursor {
+	public static final field Companion Lsaien/magrathea/core/AgentResumeCursor$Companion;
+	public fun <init> (ILsaien/magrathea/core/AgentResumePhase;I)V
+	public synthetic fun <init> (ILsaien/magrathea/core/AgentResumePhase;IILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component2 ()Lsaien/magrathea/core/AgentResumePhase;
+	public final fun component3 ()I
+	public final fun copy (ILsaien/magrathea/core/AgentResumePhase;I)Lsaien/magrathea/core/AgentResumeCursor;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/AgentResumeCursor;ILsaien/magrathea/core/AgentResumePhase;IILjava/lang/Object;)Lsaien/magrathea/core/AgentResumeCursor;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPhase ()Lsaien/magrathea/core/AgentResumePhase;
+	public final fun getProviderAttempt ()I
+	public final fun getTurn ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/core/AgentResumeCursor$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/core/AgentResumeCursor$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/core/AgentResumeCursor;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/core/AgentResumeCursor;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/core/AgentResumeCursor$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/core/AgentResumePhase : java/lang/Enum {
+	public static final field Companion Lsaien/magrathea/core/AgentResumePhase$Companion;
+	public static final field MODEL_PENDING Lsaien/magrathea/core/AgentResumePhase;
+	public static final field TOOLS_PENDING Lsaien/magrathea/core/AgentResumePhase;
+	public static final field TURN_COMMITTED Lsaien/magrathea/core/AgentResumePhase;
+	public static final field TURN_PREPARING Lsaien/magrathea/core/AgentResumePhase;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/core/AgentResumePhase;
+	public static fun values ()[Lsaien/magrathea/core/AgentResumePhase;
+}
+
+public final class saien/magrathea/core/AgentResumePhase$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/core/AgentRunId {
+	public static final field Companion Lsaien/magrathea/core/AgentRunId$Companion;
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lsaien/magrathea/core/AgentRunId;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/AgentRunId;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/core/AgentRunId;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/core/AgentRunId$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/core/AgentRunId$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/core/AgentRunId;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/core/AgentRunId;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/core/AgentRunId$Companion {
+	public final fun create ()Lsaien/magrathea/core/AgentRunId;
+	public final fun create (Lsaien/magrathea/core/IdGenerator;)Lsaien/magrathea/core/AgentRunId;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
 public abstract interface class saien/magrathea/core/AgentRunner {
 	public abstract fun cancel (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun inspectRecovery (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun interrupt (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun resume (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun run (Lsaien/magrathea/core/AgentRequest;)Lkotlinx/coroutines/flow/Flow;
 }
@@ -621,16 +884,20 @@ public final class saien/magrathea/core/AgentSessionId$Companion {
 
 public final class saien/magrathea/core/AgentSessionSnapshot {
 	public static final field Companion Lsaien/magrathea/core/AgentSessionSnapshot$Companion;
-	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentStateSnapshot;J)V
-	public synthetic fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentStateSnapshot;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/core/AgentInterruption;J)V
+	public synthetic fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/core/AgentInterruption;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun component2 ()Lsaien/magrathea/core/AgentRequest;
-	public final fun component3 ()Lsaien/magrathea/core/AgentStateSnapshot;
-	public final fun component4 ()J
-	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentStateSnapshot;J)Lsaien/magrathea/core/AgentSessionSnapshot;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/AgentSessionSnapshot;Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentStateSnapshot;JILjava/lang/Object;)Lsaien/magrathea/core/AgentSessionSnapshot;
+	public final fun component2 ()Lsaien/magrathea/core/AgentRunId;
+	public final fun component3 ()Lsaien/magrathea/core/AgentRequest;
+	public final fun component4 ()Lsaien/magrathea/core/AgentStateSnapshot;
+	public final fun component5 ()Lsaien/magrathea/core/AgentInterruption;
+	public final fun component6 ()J
+	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/core/AgentInterruption;J)Lsaien/magrathea/core/AgentSessionSnapshot;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/AgentSessionSnapshot;Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/core/AgentInterruption;JILjava/lang/Object;)Lsaien/magrathea/core/AgentSessionSnapshot;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getInterruption ()Lsaien/magrathea/core/AgentInterruption;
 	public final fun getRequest ()Lsaien/magrathea/core/AgentRequest;
+	public final fun getRunId ()Lsaien/magrathea/core/AgentRunId;
 	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
 	public final fun getState ()Lsaien/magrathea/core/AgentStateSnapshot;
 	public final fun getUpdatedAtEpochMs ()J
@@ -715,6 +982,7 @@ public final class saien/magrathea/core/AgentStatus : java/lang/Enum {
 	public static final field Companion Lsaien/magrathea/core/AgentStatus$Companion;
 	public static final field FAILED Lsaien/magrathea/core/AgentStatus;
 	public static final field IDLE Lsaien/magrathea/core/AgentStatus;
+	public static final field INTERRUPTED Lsaien/magrathea/core/AgentStatus;
 	public static final field RUNNING Lsaien/magrathea/core/AgentStatus;
 	public static final field WAITING_FOR_TOOLS Lsaien/magrathea/core/AgentStatus;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
@@ -771,13 +1039,6 @@ public final synthetic class saien/magrathea/core/AttachmentPart$$serializer : k
 
 public final class saien/magrathea/core/AttachmentPart$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
-}
-
-public abstract interface class saien/magrathea/core/CheckpointStore {
-	public abstract fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun deleteSession (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun loadLatestCheckpoint (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun saveCheckpoint (Lsaien/magrathea/core/AgentCheckpoint;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class saien/magrathea/core/Citation {
@@ -1500,14 +1761,6 @@ public final class saien/magrathea/core/RuntimeConfig$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
-public abstract interface class saien/magrathea/core/SessionStore {
-	public abstract fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun deleteSession (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun listSessions (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun loadSession (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun saveSession (Lsaien/magrathea/core/AgentSessionSnapshot;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
 public abstract interface class saien/magrathea/core/SteeringMessageProvider {
 	public abstract fun nextMessages (Lsaien/magrathea/core/AgentRuntimeContext;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
@@ -1517,6 +1770,7 @@ public final class saien/magrathea/core/StopReason : java/lang/Enum {
 	public static final field COMPLETED Lsaien/magrathea/core/StopReason;
 	public static final field Companion Lsaien/magrathea/core/StopReason$Companion;
 	public static final field ERROR Lsaien/magrathea/core/StopReason;
+	public static final field INTERRUPTED Lsaien/magrathea/core/StopReason;
 	public static final field MAX_TOKENS Lsaien/magrathea/core/StopReason;
 	public static final field MAX_TURNS Lsaien/magrathea/core/StopReason;
 	public static final field RETRY Lsaien/magrathea/core/StopReason;
@@ -1773,10 +2027,8 @@ public final class saien/magrathea/core/TelemetryOutcome : java/lang/Enum {
 }
 
 public final class saien/magrathea/core/TelemetryStoreOperation : java/lang/Enum {
-	public static final field LOAD_CHECKPOINT Lsaien/magrathea/core/TelemetryStoreOperation;
-	public static final field LOAD_SESSION Lsaien/magrathea/core/TelemetryStoreOperation;
-	public static final field SAVE_CHECKPOINT Lsaien/magrathea/core/TelemetryStoreOperation;
-	public static final field SAVE_SESSION Lsaien/magrathea/core/TelemetryStoreOperation;
+	public static final field COMMIT_STATE Lsaien/magrathea/core/TelemetryStoreOperation;
+	public static final field LOAD_STATE Lsaien/magrathea/core/TelemetryStoreOperation;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/core/TelemetryStoreOperation;
 	public static fun values ()[Lsaien/magrathea/core/TelemetryStoreOperation;
@@ -2039,16 +2291,58 @@ public final class saien/magrathea/core/ToolExecutionMode$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class saien/magrathea/core/ToolExecutionRecord {
+	public static final field Companion Lsaien/magrathea/core/ToolExecutionRecord$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILsaien/magrathea/core/ToolExecutionState;Lsaien/magrathea/core/ToolExecutionResult;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILsaien/magrathea/core/ToolExecutionState;Lsaien/magrathea/core/ToolExecutionResult;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()I
+	public final fun component5 ()Lsaien/magrathea/core/ToolExecutionState;
+	public final fun component6 ()Lsaien/magrathea/core/ToolExecutionResult;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILsaien/magrathea/core/ToolExecutionState;Lsaien/magrathea/core/ToolExecutionResult;)Lsaien/magrathea/core/ToolExecutionRecord;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/ToolExecutionRecord;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILsaien/magrathea/core/ToolExecutionState;Lsaien/magrathea/core/ToolExecutionResult;ILjava/lang/Object;)Lsaien/magrathea/core/ToolExecutionRecord;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCallOrdinal ()I
+	public final fun getExecutionId ()Ljava/lang/String;
+	public final fun getResult ()Lsaien/magrathea/core/ToolExecutionResult;
+	public final fun getState ()Lsaien/magrathea/core/ToolExecutionState;
+	public final fun getToolCallId ()Ljava/lang/String;
+	public final fun getToolName ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/core/ToolExecutionRecord$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/core/ToolExecutionRecord$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/core/ToolExecutionRecord;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/core/ToolExecutionRecord;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/core/ToolExecutionRecord$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
 public final class saien/magrathea/core/ToolExecutionRequest {
 	public static final field Companion Lsaien/magrathea/core/ToolExecutionRequest$Companion;
-	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentMessage;Lsaien/magrathea/core/ToolCallPart;)V
+	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Ljava/lang/String;Lsaien/magrathea/core/AgentMessage;Lsaien/magrathea/core/ToolCallPart;)V
 	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun component2 ()Lsaien/magrathea/core/AgentMessage;
-	public final fun component3 ()Lsaien/magrathea/core/ToolCallPart;
-	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentMessage;Lsaien/magrathea/core/ToolCallPart;)Lsaien/magrathea/core/ToolExecutionRequest;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/ToolExecutionRequest;Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentMessage;Lsaien/magrathea/core/ToolCallPart;ILjava/lang/Object;)Lsaien/magrathea/core/ToolExecutionRequest;
+	public final fun component2 ()Lsaien/magrathea/core/AgentRunId;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Lsaien/magrathea/core/AgentMessage;
+	public final fun component5 ()Lsaien/magrathea/core/ToolCallPart;
+	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Ljava/lang/String;Lsaien/magrathea/core/AgentMessage;Lsaien/magrathea/core/ToolCallPart;)Lsaien/magrathea/core/ToolExecutionRequest;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/ToolExecutionRequest;Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Ljava/lang/String;Lsaien/magrathea/core/AgentMessage;Lsaien/magrathea/core/ToolCallPart;ILjava/lang/Object;)Lsaien/magrathea/core/ToolExecutionRequest;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAssistantMessage ()Lsaien/magrathea/core/AgentMessage;
+	public final fun getExecutionId ()Ljava/lang/String;
+	public final fun getRunId ()Lsaien/magrathea/core/AgentRunId;
 	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
 	public final fun getToolCall ()Lsaien/magrathea/core/ToolCallPart;
 	public fun hashCode ()I
@@ -2108,13 +2402,40 @@ public final class saien/magrathea/core/ToolExecutionResult$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class saien/magrathea/core/ToolExecutionState : java/lang/Enum {
+	public static final field COMPLETED Lsaien/magrathea/core/ToolExecutionState;
+	public static final field Companion Lsaien/magrathea/core/ToolExecutionState$Companion;
+	public static final field PENDING Lsaien/magrathea/core/ToolExecutionState;
+	public static final field STARTED Lsaien/magrathea/core/ToolExecutionState;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/core/ToolExecutionState;
+	public static fun values ()[Lsaien/magrathea/core/ToolExecutionState;
+}
+
+public final class saien/magrathea/core/ToolExecutionState$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
 public abstract interface class saien/magrathea/core/ToolExecutor {
 	public abstract fun execute (Lsaien/magrathea/core/ToolExecutionRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun getDefinition ()Lsaien/magrathea/core/ToolDefinition;
+	public fun getRecoveryPolicy ()Lsaien/magrathea/core/ToolRecoveryPolicy;
+}
+
+public final class saien/magrathea/core/ToolExecutor$DefaultImpls {
+	public static fun getRecoveryPolicy (Lsaien/magrathea/core/ToolExecutor;)Lsaien/magrathea/core/ToolRecoveryPolicy;
 }
 
 public abstract interface class saien/magrathea/core/ToolPermissionGateway {
 	public abstract fun ensurePermission (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/core/ToolRecoveryPolicy : java/lang/Enum {
+	public static final field FAIL_CLOSED Lsaien/magrathea/core/ToolRecoveryPolicy;
+	public static final field REPLAY_SAFE Lsaien/magrathea/core/ToolRecoveryPolicy;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/core/ToolRecoveryPolicy;
+	public static fun values ()[Lsaien/magrathea/core/ToolRecoveryPolicy;
 }
 
 public abstract interface class saien/magrathea/core/ToolRegistry {
@@ -2201,5 +2522,6 @@ public abstract class saien/magrathea/core/TypedTool : saien/magrathea/core/Tool
 	public final fun execute (Lsaien/magrathea/core/ToolExecutionRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	protected abstract fun executeTyped (Lsaien/magrathea/core/ToolExecutionRequest;Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	protected final fun getJson ()Lkotlinx/serialization/json/Json;
+	public fun getRecoveryPolicy ()Lsaien/magrathea/core/ToolRecoveryPolicy;
 }
 

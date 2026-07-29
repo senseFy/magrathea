@@ -131,8 +131,7 @@ val registry = CompositeToolRegistry {
 val runner = DefaultAgentRunner(
     providerRegistry = providers,
     toolRegistry = registry,
-    sessionStore = sessions,
-    checkpointStore = checkpoints,
+    persistence = persistence,
     credentialProvider = credentials,
 )
 ```

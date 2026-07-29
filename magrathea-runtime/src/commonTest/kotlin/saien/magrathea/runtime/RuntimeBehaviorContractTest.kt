@@ -25,6 +25,9 @@ import saien.magrathea.core.AgentFailureCode
 import saien.magrathea.core.AgentInterceptor
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentRequest
+import saien.magrathea.core.AgentResumeCursor
+import saien.magrathea.core.AgentResumePhase
+import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentStateSnapshot
@@ -56,7 +59,7 @@ class RuntimeBehaviorContractTest {
     fun beforeModelCallAppliesRequestAndState() = runTest {
         val original = RecordingProvider("original")
         val selected = RecordingProvider("selected")
-        val sessionStore = InMemorySessionStore()
+        val persistence = InMemoryAgentPersistence()
         val interceptor = object : AgentInterceptor {
             override suspend fun beforeModelCall(context: saien.magrathea.core.AgentRuntimeContext) = context.copy(
                 request = context.request.copy(
@@ -70,7 +73,7 @@ class RuntimeBehaviorContractTest {
         }
         val runner = runner(
             providers = listOf(original, selected),
-            sessionStore = sessionStore,
+            persistence = persistence,
             interceptors = listOf(interceptor),
         )
         val request = request(provider = original.key, text = "original-history")
@@ -84,7 +87,7 @@ class RuntimeBehaviorContractTest {
             .filterIsInstance<TextPart>()
             .map { it.text }
         assertEquals(listOf("intercepted-system", "intercepted-history"), outboundText)
-        val persisted = requireNotNull(sessionStore.loadSession(request.sessionId))
+        val persisted = requireNotNull(persistence.load(request.sessionId)?.snapshot)
         assertEquals("selected", persisted.request.model.provider)
         assertTrue(persisted.state.messages.any { messageText(it) == "intercepted-history" })
         assertFalse(persisted.state.messages.any { messageText(it) == "original-history" })
@@ -195,7 +198,7 @@ class RuntimeBehaviorContractTest {
     }
 
     @Test
-    fun providerInvocationIdentityIsStableForRefreshAndDistinctForEachUserMessage() = runTest {
+    fun providerInvocationIdentityIsDistinctForEachLogicalRun() = runTest {
         val provider = RecordingProvider("invocation-identity")
         val runner = runner(listOf(provider))
         val sessionId = AgentSessionId("shared-chat-session")
@@ -210,10 +213,9 @@ class RuntimeBehaviorContractTest {
         runner.run(second).toList()
         runner.run(second).toList()
 
-        assertEquals(
-            listOf("user-message-1:0", "user-message-2:0", "user-message-2:0"),
-            provider.requests.map { requireNotNull(it.invocation).requestId },
-        )
+        val requestIds = provider.requests.map { requireNotNull(it.invocation).requestId }
+        assertEquals(3, requestIds.distinct().size)
+        assertTrue(requestIds.all { it.endsWith(":0:0") })
         assertTrue(provider.requests.all { it.invocation?.sessionId == sessionId })
     }
 
@@ -420,8 +422,7 @@ class RuntimeBehaviorContractTest {
 
     @Test
     fun inMemoryStoresPreserveAllConcurrentWrites() = runTest {
-        val sessions = InMemorySessionStore()
-        val checkpoints = InMemoryCheckpointStore()
+        val persistence = InMemoryAgentPersistence()
         val total = 1_000
 
         withContext(Dispatchers.Default) {
@@ -431,32 +432,38 @@ class RuntimeBehaviorContractTest {
                         val sessionId = AgentSessionId("concurrent-$index")
                         val request = request(provider = "unused", sessionId = sessionId)
                         val state = AgentStateSnapshot(messages = request.messages, turn = index)
-                        sessions.saveSession(AgentSessionSnapshot(sessionId, request, state))
-                        checkpoints.saveCheckpoint(AgentCheckpoint(sessionId, index, state))
+                        val runId = AgentRunId("concurrent-run-$index")
+                        persistence.commit(
+                            AgentSessionSnapshot(sessionId, runId, request, state),
+                            AgentCheckpoint(
+                                sessionId = sessionId,
+                                runId = runId,
+                                cursor = AgentResumeCursor(index, AgentResumePhase.MODEL_PENDING),
+                                state = state,
+                            ),
+                        )
                     }
                 }.awaitAll()
             }
         }
 
-        assertEquals(total, sessions.listSessions().size)
+        assertEquals(total, persistence.listSessions().size)
         assertTrue((0 until total).all { index ->
-            checkpoints.loadLatestCheckpoint(AgentSessionId("concurrent-$index"))?.turn == index
+            persistence.load(AgentSessionId("concurrent-$index"))?.checkpoint?.turn == index
         })
     }
 
     private fun runner(
         providers: List<ProviderAdapter>,
         tools: List<ToolExecutor> = emptyList(),
-        sessionStore: InMemorySessionStore = InMemorySessionStore(),
-        checkpointStore: InMemoryCheckpointStore = InMemoryCheckpointStore(),
+        persistence: InMemoryAgentPersistence = InMemoryAgentPersistence(),
         interceptors: List<AgentInterceptor> = emptyList(),
         approvalGateway: ToolApprovalGateway? = null,
         followUpMessageProvider: FollowUpMessageProvider = FollowUpMessageProvider { emptyList() },
     ) = DefaultAgentRunner(
         providerRegistry = InMemoryProviderRegistry(providers),
         toolRegistry = InMemoryToolRegistry(tools),
-        sessionStore = sessionStore,
-        checkpointStore = checkpointStore,
+        persistence = persistence,
         interceptors = interceptors,
         approvalGateway = approvalGateway,
         followUpMessageProvider = followUpMessageProvider,

@@ -18,15 +18,14 @@ class IosRoomDatabaseIntegrationTest {
         val reporter = StoredRecordCorruptionReporter { error("Unexpected corruption: $it") }
 
         val first = IosMagratheaRoom.open(databasePath, reporter)
-        first.sessionStore.saveSession(session)
-        first.checkpointStore.saveCheckpoint(checkpoint)
+        first.persistence.commit(session, checkpoint)
         first.close()
         first.close()
 
         val reopened = IosMagratheaRoom.open(databasePath, reporter)
-        assertEquals(session, reopened.sessionStore.loadSession(session.sessionId))
-        assertEquals(listOf(session), reopened.sessionStore.listSessions())
-        assertEquals(checkpoint, reopened.checkpointStore.loadLatestCheckpoint(session.sessionId))
+        assertEquals(session, reopened.persistence.load(session.sessionId)?.snapshot)
+        assertEquals(listOf(session), reopened.persistence.listSessions())
+        assertEquals(checkpoint, reopened.persistence.load(session.sessionId)?.checkpoint)
         reopened.close()
 
         NSFileManager.defaultManager.removeItemAtPath(databasePath, error = null)

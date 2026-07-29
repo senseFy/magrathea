@@ -134,8 +134,7 @@ internal fun composeWebChatbot(
     val runner = DefaultAgentRunner(
         providerRegistry = GatewayRoutingProviderRegistry(provider),
         toolRegistry = toolRegistry,
-        sessionStore = store.sessionStore,
-        checkpointStore = store.checkpointStore,
+        persistence = store.persistence,
         approvalGateway = approvalGateway,
         permissionGateway = permissionGateway,
     )
@@ -160,8 +159,7 @@ internal fun composeWebChatbot(
     val client = createChatbotClient(
         runner = runner,
         requestFactory = requestFactory,
-        sessionStore = store.sessionStore,
-        checkpointStore = store.checkpointStore,
+        persistence = store.persistence,
         sessionDispatcher = sessionDispatcher,
         closeResources = {
             try {
@@ -188,6 +186,9 @@ private class GatewayRoute(
     override val key: String,
     private val gateway: GatewayProviderAdapter,
 ) : ProviderAdapter {
+    override val invocationResumeMode
+        get() = gateway.invocationResumeMode
+
     override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> {
         if (request.model.provider != key) {
             throw ProviderProtocolException("Gateway route does not match the requested Provider")

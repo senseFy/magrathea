@@ -44,21 +44,18 @@ val credentials = CredentialProvider { ref ->
     require(ref == credentialRef)
     ProviderCredential(loadApiKey())
 }
-val sessions = InMemorySessionStore()
-val checkpoints = InMemoryCheckpointStore()
+val persistence = InMemoryAgentPersistence()
 val provider = OpenAiProviderAdapter(OpenAiProviderProfile.openAi())
 val runner = DefaultAgentRunner(
     providerRegistry = InMemoryProviderRegistry(listOf(provider)),
     toolRegistry = InMemoryToolRegistry(),
-    sessionStore = sessions,
-    checkpointStore = checkpoints,
+    persistence = persistence,
     credentialProvider = credentials,
 )
 val client = createChatbotClient(
     runner = runner,
     requestFactory = DefaultChatbotRequestFactory(),
-    sessionStore = sessions,
-    checkpointStore = checkpoints,
+    persistence = persistence,
     closeResources = { provider.close() },
 )
 val session = client.createSession(
@@ -73,7 +70,7 @@ val session = client.createSession(
 )
 ```
 
-The Runner and Chatbot client must share the same Session and Checkpoint stores. A
+The Runner and Chatbot client must share the same `AgentPersistence` instance. A
 `ChatbotSessionConfiguration` owns the conversation's Provider, model, and non-secret
 `CredentialRef`; the host resolves the secret only when a request runs. Headless compositions can
 use `DefaultAgentRunner` directly.

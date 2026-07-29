@@ -108,7 +108,7 @@ class ChatbotLifecycleContractTest {
         assertTrue(runner.cancelledByTerminal)
     }
 
-    private class PostTerminalRunner : AgentRunner {
+    private class PostTerminalRunner : TestAgentRunner() {
         var reachedCodeAfterTerminal = false
         var cancelledByTerminal = false
 

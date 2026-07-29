@@ -22,8 +22,7 @@ import saien.magrathea.provider.api.InMemoryProviderRegistry
 import saien.magrathea.provider.api.ProviderAdapter
 import saien.magrathea.provider.api.ProviderChunk
 import saien.magrathea.runtime.DefaultAgentRunner
-import saien.magrathea.runtime.InMemoryCheckpointStore
-import saien.magrathea.runtime.InMemorySessionStore
+import saien.magrathea.runtime.InMemoryAgentPersistence
 import saien.magrathea.runtime.InMemoryToolRegistry
 import saien.magrathea.runtime.providerChunk
 import kotlin.test.Test
@@ -46,8 +45,7 @@ class WebSearchRuntimeContractTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(listOf(search)),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
         )
 
         val events = runner.run(

@@ -38,8 +38,7 @@ import saien.magrathea.provider.api.ProviderChunk
 import saien.magrathea.provider.api.ProviderEvent
 import saien.magrathea.provider.api.ProviderRequest
 import saien.magrathea.runtime.DefaultAgentRunner
-import saien.magrathea.runtime.InMemoryCheckpointStore
-import saien.magrathea.runtime.InMemorySessionStore
+import saien.magrathea.runtime.InMemoryAgentPersistence
 import saien.magrathea.runtime.InMemoryToolRegistry
 
 data class SampleReport(
@@ -63,12 +62,11 @@ suspend fun runDeterministicSample(): SampleReport {
     val weatherTool = WeatherTool()
     val scriptedProvider = ScriptedWeatherProvider()
     val blockingProvider = BlockingProvider()
-    val sessionStore = InMemorySessionStore()
+    val persistence = InMemoryAgentPersistence()
     val runner = DefaultAgentRunner(
         providerRegistry = InMemoryProviderRegistry(listOf(scriptedProvider, blockingProvider)),
         toolRegistry = InMemoryToolRegistry(listOf(weatherTool)),
-        sessionStore = sessionStore,
-        checkpointStore = InMemoryCheckpointStore(),
+        persistence = persistence,
     )
 
     val chatSessionId = AgentSessionId("jvm-sample-chat")
@@ -125,10 +123,10 @@ suspend fun runDeterministicSample(): SampleReport {
     runner.cancel(cancelSessionId)
     joinAll(collector)
     val cancelledStatePersisted =
-        sessionStore.loadSession(cancelSessionId)?.state?.status == AgentStatus.CANCELLED
+        persistence.load(cancelSessionId)?.snapshot?.state?.status == AgentStatus.CANCELLED
     check(cancelledStatePersisted)
 
-    val historySessionIds = sessionStore.listSessions().map { it.sessionId.value }.sorted()
+    val historySessionIds = persistence.listSessions().map { it.sessionId.value }.sorted()
     check(historySessionIds == listOf(cancelSessionId.value, chatSessionId.value).sorted())
 
     return SampleReport(
@@ -144,21 +142,18 @@ suspend fun runDeterministicSample(): SampleReport {
 suspend fun runProviderNeutralFacadeSample(): ProviderNeutralFacadeReport {
     val weatherTool = WeatherTool()
     val provider = ScriptedWeatherProvider()
-    val sessions = InMemorySessionStore()
-    val checkpoints = InMemoryCheckpointStore()
+    val persistence = InMemoryAgentPersistence()
     val runner = DefaultAgentRunner(
         providerRegistry = InMemoryProviderRegistry(listOf(provider)),
         toolRegistry = InMemoryToolRegistry(listOf(weatherTool)),
-        sessionStore = sessions,
-        checkpointStore = checkpoints,
+        persistence = persistence,
     )
     val client = createChatbotClient(
         runner = runner,
         requestFactory = DefaultChatbotRequestFactory(
             tools = listOf(weatherTool.definition),
         ),
-        sessionStore = sessions,
-        checkpointStore = checkpoints,
+        persistence = persistence,
         closeResources = { provider.close() },
     )
     val session = client.createSession(

@@ -20,12 +20,17 @@ internal data class WebRawRecord(
     val payload: String?,
 )
 
+internal data class WebRawPersistenceRecord(
+    val session: WebRawRecord,
+    val checkpoint: WebRawRecord?,
+)
+
 internal interface WebRecordDatabase {
-    suspend fun put(kind: WebStoredRecordKind, key: String, payload: String)
-    suspend fun get(kind: WebStoredRecordKind, key: String): WebRawRecord?
-    suspend fun getAll(kind: WebStoredRecordKind): List<WebRawRecord>
-    suspend fun delete(kind: WebStoredRecordKind, key: String)
-    suspend fun clear(kind: WebStoredRecordKind)
+    suspend fun commit(key: String, sessionPayload: String, checkpointPayload: String?)
+    suspend fun get(key: String): WebRawPersistenceRecord?
+    suspend fun getAllSessions(): List<WebRawRecord>
+    suspend fun delete(key: String)
+    suspend fun clear()
 }
 
 internal class IndexedDbRecordDatabase(
@@ -33,44 +38,61 @@ internal class IndexedDbRecordDatabase(
 ) : WebRecordDatabase {
     private val json = Json { ignoreUnknownKeys = false }
 
-    override suspend fun put(kind: WebStoredRecordKind, key: String, payload: String) {
-        execute(operation = "put", kind = kind, key = key, value = payload)
+    override suspend fun commit(
+        key: String,
+        sessionPayload: String,
+        checkpointPayload: String?,
+    ) {
+        execute(
+            operation = if (checkpointPayload == null) "commit" else "commit_with_checkpoint",
+            key = key,
+            value = sessionPayload,
+            secondaryValue = checkpointPayload.orEmpty(),
+        )
     }
 
-    override suspend fun get(kind: WebStoredRecordKind, key: String): WebRawRecord? {
-        val payload = execute(operation = "get", kind = kind, key = key, value = "")
+    override suspend fun get(key: String): WebRawPersistenceRecord? {
+        val payload = execute(operation = "get", key = key, value = "")
             ?: throw WebStorageException(WebStorageFailure.OPERATION_FAILED)
-        val result = decodeBridgePayload<BridgeLookup>(payload)
-        return if (result.found) WebRawRecord(key, result.value) else null
+        val result = decodeBridgePayload<BridgePersistenceLookup>(payload)
+        if (!result.found) return null
+        return WebRawPersistenceRecord(
+            session = WebRawRecord(key, result.sessionValue),
+            checkpoint = if (result.checkpointFound) {
+                WebRawRecord(key, result.checkpointValue)
+            } else {
+                null
+            },
+        )
     }
 
-    override suspend fun getAll(kind: WebStoredRecordKind): List<WebRawRecord> {
-        val payload = execute(operation = "get_all", kind = kind, key = "", value = "")
+    override suspend fun getAllSessions(): List<WebRawRecord> {
+        val payload = execute(operation = "get_all_sessions", key = "", value = "")
             ?: throw WebStorageException(WebStorageFailure.OPERATION_FAILED)
         return decodeBridgePayload<List<BridgeRecord>>(payload).map { WebRawRecord(it.key, it.value) }
     }
 
-    override suspend fun delete(kind: WebStoredRecordKind, key: String) {
-        execute(operation = "delete", kind = kind, key = key, value = "")
+    override suspend fun delete(key: String) {
+        execute(operation = "delete", key = key, value = "")
     }
 
-    override suspend fun clear(kind: WebStoredRecordKind) {
-        execute(operation = "clear", kind = kind, key = "", value = "")
+    override suspend fun clear() {
+        execute(operation = "clear", key = "", value = "")
     }
 
     private suspend fun execute(
         operation: String,
-        kind: WebStoredRecordKind,
         key: String,
         value: String,
+        secondaryValue: String = "",
     ): String? {
         val rawResponse = try {
             val operationPromise = runIndexedDbOperation(
                 databaseName = databaseName,
                 operation = operation,
-                storeName = kind.storeName,
                 key = key,
                 value = value,
+                secondaryValue = secondaryValue,
             )
             val response = withContext(NonCancellable) { operationPromise.await().toString() }
             currentCoroutineContext().ensureActive()
@@ -96,12 +118,6 @@ internal class IndexedDbRecordDatabase(
     }
 }
 
-private val WebStoredRecordKind.storeName: String
-    get() = when (this) {
-        WebStoredRecordKind.SESSION -> "sessions"
-        WebStoredRecordKind.CHECKPOINT -> "checkpoints"
-    }
-
 private fun String?.toStorageFailure(): WebStorageFailure = when (this) {
     "unavailable" -> WebStorageFailure.UNAVAILABLE
     "blocked" -> WebStorageFailure.BLOCKED
@@ -118,9 +134,11 @@ private data class BridgeResponse(
 )
 
 @Serializable
-private data class BridgeLookup(
+private data class BridgePersistenceLookup(
     val found: Boolean,
-    val value: String? = null,
+    val sessionValue: String? = null,
+    val checkpointFound: Boolean = false,
+    val checkpointValue: String? = null,
 )
 
 @Serializable
@@ -132,9 +150,9 @@ private data class BridgeRecord(
 private fun runIndexedDbOperation(
     databaseName: String,
     operation: String,
-    storeName: String,
     key: String,
     value: String,
+    secondaryValue: String,
 ): Promise<JsString> = js(
     """
     new Promise((resolve) => {
@@ -201,29 +219,60 @@ private fun runIndexedDbOperation(
         let transaction;
         let resultPayload = null;
         try {
-          if (operation === "put") {
-            transaction = database.transaction([storeName], "readwrite", { durability: "strict" });
-            transaction.objectStore(storeName).put(value, key);
+          if (operation === "commit" || operation === "commit_with_checkpoint") {
+            transaction = database.transaction(
+              ["sessions", "checkpoints"],
+              "readwrite",
+              { durability: "strict" }
+            );
+            transaction.objectStore("sessions").put(value, key);
+            if (operation === "commit_with_checkpoint") {
+              transaction.objectStore("checkpoints").put(secondaryValue, key);
+            } else {
+              transaction.objectStore("checkpoints").delete(key);
+            }
           } else if (operation === "delete") {
-            transaction = database.transaction([storeName], "readwrite", { durability: "strict" });
-            transaction.objectStore(storeName).delete(key);
+            transaction = database.transaction(
+              ["sessions", "checkpoints"],
+              "readwrite",
+              { durability: "strict" }
+            );
+            transaction.objectStore("sessions").delete(key);
+            transaction.objectStore("checkpoints").delete(key);
           } else if (operation === "clear") {
-            transaction = database.transaction([storeName], "readwrite", { durability: "strict" });
-            transaction.objectStore(storeName).clear();
+            transaction = database.transaction(
+              ["sessions", "checkpoints"],
+              "readwrite",
+              { durability: "strict" }
+            );
+            transaction.objectStore("sessions").clear();
+            transaction.objectStore("checkpoints").clear();
           } else if (operation === "get") {
-            transaction = database.transaction([storeName], "readonly");
-            const request = transaction.objectStore(storeName).get(key);
-            request.onsuccess = () => {
-              const found = request.result !== undefined;
-              resultPayload = JSON.stringify({
+            transaction = database.transaction(["sessions", "checkpoints"], "readonly");
+            let sessionResult;
+            let checkpointResult;
+            const sessionRequest = transaction.objectStore("sessions").get(key);
+            const checkpointRequest = transaction.objectStore("checkpoints").get(key);
+            sessionRequest.onsuccess = () => { sessionResult = sessionRequest.result; };
+            checkpointRequest.onsuccess = () => { checkpointResult = checkpointRequest.result; };
+            transaction.oncomplete = () => {
+              database.close();
+              const found = sessionResult !== undefined;
+              finish(true, null, JSON.stringify({
                 found: found,
-                value: found && typeof request.result === "string" ? request.result : null
-              });
+                sessionValue:
+                  found && typeof sessionResult === "string" ? sessionResult : null,
+                checkpointFound: checkpointResult !== undefined,
+                checkpointValue:
+                  checkpointResult !== undefined && typeof checkpointResult === "string"
+                    ? checkpointResult
+                    : null
+              }));
             };
-          } else if (operation === "get_all") {
-            transaction = database.transaction([storeName], "readonly");
+          } else if (operation === "get_all_sessions") {
+            transaction = database.transaction(["sessions"], "readonly");
             const records = [];
-            const request = transaction.objectStore(storeName).openCursor();
+            const request = transaction.objectStore("sessions").openCursor();
             request.onsuccess = () => {
               const cursor = request.result;
               if (cursor) {
@@ -246,10 +295,12 @@ private fun runIndexedDbOperation(
           finish(false, classifyError(error), null);
           return;
         }
-        transaction.oncomplete = () => {
-          database.close();
-          finish(true, null, resultPayload);
-        };
+        if (operation !== "get") {
+          transaction.oncomplete = () => {
+            database.close();
+            finish(true, null, resultPayload);
+          };
+        }
         transaction.onerror = () => {
           database.close();
           finish(false, classifyError(transaction.error), null);

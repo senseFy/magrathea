@@ -5,8 +5,7 @@ public final class saien/magrathea/storage/room/JvmMagratheaRoom {
 
 public final class saien/magrathea/storage/room/MagratheaRoomStoreHandle {
 	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun getCheckpointStore ()Lsaien/magrathea/core/CheckpointStore;
-	public final fun getSessionStore ()Lsaien/magrathea/core/SessionStore;
+	public final fun getPersistence ()Lsaien/magrathea/core/AgentPersistence;
 }
 
 public final class saien/magrathea/storage/room/StoredRecordCorruption {

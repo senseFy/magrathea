@@ -14,6 +14,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import saien.magrathea.core.AgentMessage
+import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ToolCallPart
@@ -54,6 +55,8 @@ class JvmMcpStdioProcessTest {
                 assertNotNull(connection.find(definition.name)).execute(
                     ToolExecutionRequest(
                         sessionId = AgentSessionId("stdio-session"),
+                        runId = AgentRunId("stdio-run"),
+                        executionId = "stdio-execution",
                         assistantMessage = AgentMessage(
                             role = MessageRole.ASSISTANT,
                             parts = emptyList(),

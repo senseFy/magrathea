@@ -5,6 +5,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import saien.magrathea.core.AgentFailureCode
+import saien.magrathea.core.AgentInterruption
+import saien.magrathea.core.AgentInterruptionReason
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AttachmentPart
 import saien.magrathea.core.CredentialRef
@@ -31,6 +33,8 @@ enum class ChatbotStatus {
     COMPLETED,
     FAILED,
     CANCELLED,
+    INTERRUPTED,
+    RECOVERY_BLOCKED,
 }
 
 enum class ChatbotMessageRole {
@@ -53,7 +57,20 @@ enum class ChatbotStopReason {
     MAX_TURNS,
     MAX_TOKENS,
     RETRY,
+    INTERRUPTED,
 }
+
+enum class ChatbotInterruptionReason {
+    HOST_REQUESTED,
+    PROVIDER_NETWORK,
+    PROVIDER_TIMEOUT,
+    ORPHANED,
+}
+
+data class ChatbotInterruption(
+    val reason: ChatbotInterruptionReason,
+    val occurredAtEpochMs: Long,
+)
 
 data class ChatbotTextBlock(
     val text: String,
@@ -185,6 +202,7 @@ data class ChatbotSnapshot(
     val messages: List<ChatbotMessageSnapshot> = emptyList(),
     val status: ChatbotStatus = ChatbotStatus.IDLE,
     val failure: ChatbotFailure? = null,
+    val interruption: ChatbotInterruption? = null,
     val usage: ChatbotUsage = ChatbotUsage(),
     val latestRequestUsage: ChatbotUsage = ChatbotUsage(),
     val contextManagement: ChatbotContextManagementSnapshot = ChatbotContextManagementSnapshot(),
@@ -221,6 +239,7 @@ enum class ChatbotFailure {
     PROTOCOL,
     PROVIDER,
     STORAGE,
+    RECOVERY_BLOCKED,
     OPERATION_FAILED,
 }
 
@@ -346,7 +365,23 @@ private fun StopReason.toChatbotStopReason(): ChatbotStopReason = when (this) {
     StopReason.MAX_TURNS -> ChatbotStopReason.MAX_TURNS
     StopReason.MAX_TOKENS -> ChatbotStopReason.MAX_TOKENS
     StopReason.RETRY -> ChatbotStopReason.RETRY
+    StopReason.INTERRUPTED -> ChatbotStopReason.INTERRUPTED
 }
+
+internal fun AgentInterruption.toChatbotInterruption(): ChatbotInterruption =
+    ChatbotInterruption(
+        reason = when (reason) {
+            AgentInterruptionReason.HOST_REQUESTED ->
+                ChatbotInterruptionReason.HOST_REQUESTED
+            AgentInterruptionReason.PROVIDER_NETWORK ->
+                ChatbotInterruptionReason.PROVIDER_NETWORK
+            AgentInterruptionReason.PROVIDER_TIMEOUT ->
+                ChatbotInterruptionReason.PROVIDER_TIMEOUT
+            AgentInterruptionReason.ORPHANED ->
+                ChatbotInterruptionReason.ORPHANED
+        },
+        occurredAtEpochMs = occurredAtEpochMs,
+    )
 
 private fun MessageRole.toChatbotRole(): ChatbotMessageRole = when (this) {
     MessageRole.USER -> ChatbotMessageRole.USER

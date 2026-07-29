@@ -427,6 +427,7 @@ public final class saien/magrathea/provider/api/OpenAiXSearchToolConfig$Companio
 public abstract interface class saien/magrathea/provider/api/ProviderAdapter {
 	public fun close ()V
 	public abstract fun generate (Lsaien/magrathea/provider/api/ProviderRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getInvocationResumeMode ()Lsaien/magrathea/provider/api/ProviderInvocationResumeMode;
 	public abstract fun getKey ()Ljava/lang/String;
 	public fun getOptionsFamily ()Ljava/lang/String;
 	public fun inputCapabilities (Lsaien/magrathea/provider/api/ProviderTransportConfig;)Lsaien/magrathea/provider/api/ProviderInputCapabilities;
@@ -435,6 +436,7 @@ public abstract interface class saien/magrathea/provider/api/ProviderAdapter {
 
 public final class saien/magrathea/provider/api/ProviderAdapter$DefaultImpls {
 	public static fun close (Lsaien/magrathea/provider/api/ProviderAdapter;)V
+	public static fun getInvocationResumeMode (Lsaien/magrathea/provider/api/ProviderAdapter;)Lsaien/magrathea/provider/api/ProviderInvocationResumeMode;
 	public static fun getOptionsFamily (Lsaien/magrathea/provider/api/ProviderAdapter;)Ljava/lang/String;
 	public static fun inputCapabilities (Lsaien/magrathea/provider/api/ProviderAdapter;Lsaien/magrathea/provider/api/ProviderTransportConfig;)Lsaien/magrathea/provider/api/ProviderInputCapabilities;
 	public static synthetic fun inputCapabilities$default (Lsaien/magrathea/provider/api/ProviderAdapter;Lsaien/magrathea/provider/api/ProviderTransportConfig;ILjava/lang/Object;)Lsaien/magrathea/provider/api/ProviderInputCapabilities;
@@ -897,6 +899,14 @@ public final synthetic class saien/magrathea/provider/api/ProviderInvocation$$se
 
 public final class saien/magrathea/provider/api/ProviderInvocation$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/provider/api/ProviderInvocationResumeMode : java/lang/Enum {
+	public static final field NEW_ATTEMPT Lsaien/magrathea/provider/api/ProviderInvocationResumeMode;
+	public static final field REATTACH Lsaien/magrathea/provider/api/ProviderInvocationResumeMode;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/provider/api/ProviderInvocationResumeMode;
+	public static fun values ()[Lsaien/magrathea/provider/api/ProviderInvocationResumeMode;
 }
 
 public class saien/magrathea/provider/api/ProviderNetworkException : saien/magrathea/provider/api/ProviderException {

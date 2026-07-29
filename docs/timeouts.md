@@ -30,16 +30,19 @@ plus Runtime first-event, stream-idle, Provider-call, and whole-run deadlines re
 `connectTimeoutMillis` is applied precisely only when the selected engine supports it. See Ktor's
 [timeout engine matrix](https://ktor.io/docs/client-timeout.html#limitations).
 
-## Failure and cancellation
+## Failure and recovery
 
-A deadline produces `AgentFailureCode.TIMEOUT`, projected as `ChatbotFailure.TIMEOUT`. It is distinct
-from `PROVIDER_NETWORK`. User or host cancellation remains cancellation and is never rewritten as a
-timeout. A Tool execution timeout becomes a normal typed Tool error result so the model can recover
-on a later turn; the whole-run deadline remains authoritative over all Tool activity.
+Connection, first-event, stream-idle, and Provider-call deadlines produce a recoverable
+`PROVIDER_TIMEOUT` interruption. A Tool deadline becomes a typed Tool error result so the model can
+recover on a later turn. The whole-run deadline remains terminal `AgentFailureCode.TIMEOUT` and is
+authoritative over all Tool activity.
 
-Timeouts preserve streaming backpressure: a Provider cannot advance past a chunk until Runtime has
-validated, reduced, emitted, and recorded that chunk. Partial output therefore remains available if
-a later idle or call deadline expires.
+Provider streaming keeps rendezvous backpressure: Runtime validates and emits each chunk before the
+Provider advances. Emitted partial output may be shown provisionally, but a Provider timeout rolls
+durable state back to the last checkpoint before resume.
+
+Explicit user cancellation remains terminal cancellation. Host lifecycle interruption remains
+recoverable interruption; neither is rewritten as a timeout.
 
 ## Configuration
 

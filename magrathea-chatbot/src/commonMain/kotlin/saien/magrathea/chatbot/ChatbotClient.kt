@@ -14,12 +14,13 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import saien.magrathea.core.AgentRequest
+import saien.magrathea.core.AgentPersistence
+import saien.magrathea.core.AgentRecoveryDisposition
+import saien.magrathea.core.AgentRecoveryInfo
 import saien.magrathea.core.AgentRunner
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentStatus
-import saien.magrathea.core.CheckpointStore
-import saien.magrathea.core.SessionStore
 import saien.magrathea.core.SystemEpochClock
 import saien.magrathea.core.text
 
@@ -102,21 +103,57 @@ class ChatbotSession internal constructor(
                 latestRequestUsage = snapshot.state.latestRequestUsage.toChatbotUsage(),
                 contextManagement = snapshot.state.contextManagement
                     .toChatbotContextManagementSnapshot(),
+                status = snapshot.state.status.toChatbotStatus(),
+                interruption = snapshot.interruption?.toChatbotInterruption(),
             )
         }
     }
 
-    internal suspend fun resume() {
+    @Throws(ChatbotException::class, CancellationException::class)
+    suspend fun resume() = facadeOperation {
         lifecycleMutex.withLock {
             ensureOpen()
-            controller.resume(AgentSessionId(requireNotNull(controller.state.value.sessionId)))
+            when (controller.state.value.status) {
+                ChatbotStatus.INTERRUPTED -> Unit
+                ChatbotStatus.RECOVERY_BLOCKED ->
+                    throw ChatbotException(ChatbotFailure.RECOVERY_BLOCKED)
+                ChatbotStatus.RUNNING,
+                ChatbotStatus.WAITING_FOR_TOOL,
+                -> throw ChatbotException(ChatbotFailure.BUSY)
+                ChatbotStatus.IDLE,
+                ChatbotStatus.COMPLETED,
+                ChatbotStatus.FAILED,
+                ChatbotStatus.CANCELLED,
+                -> throw ChatbotException(ChatbotFailure.INVALID_ARGUMENT)
+            }
+            resumeController()
         }
+    }
+
+    internal suspend fun resumePersisted() {
+        lifecycleMutex.withLock {
+            ensureOpen()
+            resumeController()
+        }
+    }
+
+    private suspend fun resumeController() {
+        val sessionId = controller.state.value.sessionId
+            ?: throw ChatbotException(ChatbotFailure.NOT_FOUND)
+        controller.resume(AgentSessionId(sessionId))
     }
 
     @Throws(ChatbotException::class, CancellationException::class)
     suspend fun cancel() = facadeOperation {
         lifecycleMutex.withLock {
             if (!closed) controller.cancel()
+        }
+    }
+
+    @Throws(ChatbotException::class, CancellationException::class)
+    suspend fun interrupt() = facadeOperation {
+        lifecycleMutex.withLock {
+            if (!closed) controller.interrupt()
         }
     }
 
@@ -166,8 +203,8 @@ class ChatbotClient internal constructor(
         ChatbotSessionConfiguration,
         CoroutineScope,
     ) -> ChatbotController,
-    private val sessionStore: SessionStore,
-    private val checkpointStore: CheckpointStore,
+    private val persistence: AgentPersistence,
+    private val inspectRecovery: (suspend (AgentSessionId) -> AgentRecoveryInfo)?,
     private val closeResources: suspend () -> Unit,
     private val sessionDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
@@ -188,12 +225,12 @@ class ChatbotClient internal constructor(
         if (sessionId.isBlank()) throw ChatbotException(ChatbotFailure.INVALID_ARGUMENT)
         mutex.withLock {
             ensureOpen()
-            val snapshot = sessionStore.loadSession(AgentSessionId(sessionId))
+            val snapshot = persistence.load(AgentSessionId(sessionId))?.snapshot
                 ?: throw ChatbotException(ChatbotFailure.NOT_FOUND)
             val session = newSession(snapshot.request.toChatbotSessionConfiguration())
             try {
                 session.restore(snapshot)
-                session.resume()
+                session.resumePersisted()
                 sessions += session
                 session
             } catch (failure: Throwable) {
@@ -213,12 +250,12 @@ class ChatbotClient internal constructor(
     suspend fun history(): List<ChatbotHistoryItem> = facadeOperation {
         mutex.withLock {
             ensureOpen()
-            sessionStore.listSessions().map { snapshot ->
+            persistence.listSessions().map { snapshot ->
                 ChatbotHistoryItem(
                     sessionId = snapshot.sessionId.value,
                     configuration = snapshot.request.toChatbotSessionConfiguration(),
                     updatedAtEpochMs = snapshot.updatedAtEpochMs,
-                    status = snapshot.state.status.toChatbotStatus(),
+                    status = snapshot.historyStatus(),
                     lastMessageText = snapshot.state.messages.lastOrNull()?.text().orEmpty(),
                 )
             }
@@ -244,12 +281,7 @@ class ChatbotClient internal constructor(
                 }
             }
             try {
-                checkpointStore.deleteSession(id)
-            } catch (_: Throwable) {
-                failed = true
-            }
-            try {
-                sessionStore.deleteSession(id)
+                persistence.deleteSession(id)
             } catch (_: Throwable) {
                 failed = true
             }
@@ -273,12 +305,7 @@ class ChatbotClient internal constructor(
                 }
             }
             try {
-                checkpointStore.clear()
-            } catch (_: Throwable) {
-                failed = true
-            }
-            try {
-                sessionStore.clear()
+                persistence.clear()
             } catch (_: Throwable) {
                 failed = true
             }
@@ -335,28 +362,52 @@ class ChatbotClient internal constructor(
     }
 
     private suspend fun persistRequest(sessionId: AgentSessionId, request: AgentRequest) {
-        val snapshot = sessionStore.loadSession(sessionId)
+        val record = persistence.load(sessionId)
             ?: throw ChatbotException(ChatbotFailure.NOT_FOUND)
-        sessionStore.saveSession(
-            snapshot.copy(
+        persistence.commit(
+            snapshot = record.snapshot.copy(
                 request = request,
                 updatedAtEpochMs = SystemEpochClock.nowEpochMs(),
             ),
+            checkpoint = record.checkpoint,
         )
+    }
+
+    private suspend fun AgentSessionSnapshot.historyStatus(): ChatbotStatus {
+        val storedStatus = state.status.toChatbotStatus()
+        if (
+            inspectRecovery == null ||
+            state.status !in setOf(
+                AgentStatus.RUNNING,
+                AgentStatus.WAITING_FOR_TOOLS,
+                AgentStatus.INTERRUPTED,
+            )
+        ) {
+            return storedStatus
+        }
+        val recovery = inspectRecovery(sessionId)
+        return when (recovery.disposition) {
+            AgentRecoveryDisposition.RESUMABLE -> ChatbotStatus.INTERRUPTED
+            AgentRecoveryDisposition.BLOCKED -> ChatbotStatus.RECOVERY_BLOCKED
+            AgentRecoveryDisposition.ACTIVE -> ChatbotStatus.RUNNING
+            AgentRecoveryDisposition.TERMINAL -> recovery.status
+                ?.toChatbotStatus()
+                ?: storedStatus
+            AgentRecoveryDisposition.NOT_FOUND -> storedStatus
+        }
     }
 }
 
 /**
  * Creates a Provider-neutral chatbot facade over an existing [AgentRunner].
  *
- * [sessionStore] and [checkpointStore] must be the same stores used by [runner]. The returned
+ * [persistence] must be the same persistence boundary used by [runner]. The returned
  * client owns its session scopes and invokes [closeResources] exactly once when the client closes.
  */
 fun createChatbotClient(
     runner: AgentRunner,
     requestFactory: ChatbotRequestFactory,
-    sessionStore: SessionStore,
-    checkpointStore: CheckpointStore,
+    persistence: AgentPersistence,
     closeResources: suspend () -> Unit,
     sessionDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ): ChatbotClient = composeChatbotClient(
@@ -364,8 +415,8 @@ fun createChatbotClient(
     controllerFactory = { factory, configuration, scope ->
         ChatbotController(runner, factory, configuration, scope = scope)
     },
-    sessionStore = sessionStore,
-    checkpointStore = checkpointStore,
+    persistence = persistence,
+    inspectRecovery = runner::inspectRecovery,
     closeResources = closeResources,
     sessionDispatcher = sessionDispatcher,
 )
@@ -377,26 +428,27 @@ internal fun composeChatbotClient(
         ChatbotSessionConfiguration,
         CoroutineScope,
     ) -> ChatbotController,
-    sessionStore: SessionStore,
-    checkpointStore: CheckpointStore,
+    persistence: AgentPersistence,
+    inspectRecovery: (suspend (AgentSessionId) -> AgentRecoveryInfo)? = null,
     closeResources: suspend () -> Unit,
     sessionDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ): ChatbotClient = ChatbotClient(
     requestFactory = requestFactory,
     controllerFactory = controllerFactory,
-    sessionStore = sessionStore,
-    checkpointStore = checkpointStore,
+    persistence = persistence,
+    inspectRecovery = inspectRecovery,
     closeResources = closeResources,
     sessionDispatcher = sessionDispatcher,
 )
 
-private fun AgentStatus.toChatbotStatus(): ChatbotStatus = when (this) {
+internal fun AgentStatus.toChatbotStatus(): ChatbotStatus = when (this) {
     AgentStatus.IDLE -> ChatbotStatus.IDLE
     AgentStatus.RUNNING -> ChatbotStatus.RUNNING
     AgentStatus.WAITING_FOR_TOOLS -> ChatbotStatus.WAITING_FOR_TOOL
     AgentStatus.COMPLETED -> ChatbotStatus.COMPLETED
     AgentStatus.FAILED -> ChatbotStatus.FAILED
     AgentStatus.CANCELLED -> ChatbotStatus.CANCELLED
+    AgentStatus.INTERRUPTED -> ChatbotStatus.INTERRUPTED
 }
 
 private fun AgentRequest.toChatbotSessionConfiguration(): ChatbotSessionConfiguration =

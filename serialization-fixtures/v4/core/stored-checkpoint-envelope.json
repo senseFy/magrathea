@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 4,
+  "sdkVersion": "0.1.0-alpha.1",
+  "payload": {
+    "sessionId": {
+      "value": "session-fixture-1"
+    },
+    "runId": {
+      "value": "run-fixture-1"
+    },
+    "cursor": {
+      "turn": 2,
+      "phase": "TURN_COMMITTED",
+      "providerAttempt": 0
+    },
+    "state": {
+      "messages": [
+        {
+          "id": "user-fixture-1",
+          "role": "USER",
+          "parts": [
+            {
+              "type": "text",
+              "text": "hello",
+              "signature": null,
+              "phase": null,
+              "providerMetadata": null
+            }
+          ],
+          "createdAtEpochMs": 1700000000001,
+          "metadata": {},
+          "stopReason": null
+        }
+      ],
+      "pendingToolCalls": [],
+      "toolCallCounts": {},
+      "metadata": {},
+      "turn": 2,
+      "status": "COMPLETED",
+      "retryCount": 0,
+      "stopReason": "COMPLETED",
+      "usage": {
+        "inputTokens": 12,
+        "outputTokens": 4,
+        "reasoningTokens": 2
+      },
+      "latestRequestUsage": {
+        "inputTokens": 9,
+        "outputTokens": 4,
+        "reasoningTokens": 2
+      },
+      "contextManagement": {
+        "compaction": null,
+        "usageObservation": null
+      }
+    },
+    "toolExecutions": []
+  }
+}

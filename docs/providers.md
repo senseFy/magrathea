@@ -4,6 +4,7 @@ A Magrathea Provider adapter translates one wire protocol into canonical Runtime
 
 - `ProviderAdapter.key` is the Runtime routing key and credential namespace;
 - `ProviderAdapter.optionsFamily` selects the typed options schema;
+- `ProviderAdapter.invocationResumeMode` selects restart or durable-stream reattachment;
 - a Provider profile owns protocol defaults, endpoints, and documented dialect behavior.
 
 ## Reference adapters
@@ -139,6 +140,10 @@ An adapter must:
 - declare only attachment MIME types its encoder can represent;
 - map errors to stable Provider failure types without leaking credentials;
 - close any transport it owns.
+
+Adapters default to a new physical Provider attempt when Runtime resumes an interrupted model
+response. Use `ProviderInvocationResumeMode.REATTACH` only when the remote service supports
+idempotent creation and durable stream replay under the same invocation identity.
 
 Register it through a `ProviderRegistry` like a reference adapter. Runtime routes every adapter
 uniformly through the registry.

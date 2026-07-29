@@ -18,27 +18,27 @@ class SerializationGoldenFixtureTest {
     }
 
     @Test
-    fun agentMessage_matchesV3GoldenFixture() {
+    fun agentMessage_matchesV4GoldenFixture() {
         val expected = agentMessageFixture()
-        val fixture = resource("/v3/core/agent-message.json")
+        val fixture = resource("/v4/core/agent-message.json")
 
         assertGolden(fixture, json.encodeToString(AgentMessage.serializer(), expected))
         assertEquals(expected, json.decodeFromString(AgentMessage.serializer(), fixture))
     }
 
     @Test
-    fun agentSessionSnapshot_matchesV3GoldenFixture() {
+    fun agentSessionSnapshot_matchesV4GoldenFixture() {
         val expected = sessionFixture()
-        val fixture = resource("/v3/core/agent-session-snapshot.json")
+        val fixture = resource("/v4/core/agent-session-snapshot.json")
 
         assertGolden(fixture, json.encodeToString(AgentSessionSnapshot.serializer(), expected))
         assertEquals(expected, json.decodeFromString(AgentSessionSnapshot.serializer(), fixture))
     }
 
     @Test
-    fun storedSessionEnvelope_matchesV3GoldenFixture() {
+    fun storedSessionEnvelope_matchesV4GoldenFixture() {
         val expected = sessionFixture()
-        val fixture = resource("/v3/core/stored-session-envelope.json")
+        val fixture = resource("/v4/core/stored-session-envelope.json")
         val codec = AgentSessionSnapshotCodec(json, sdkVersion = "0.1.0-alpha.1")
 
         assertGolden(fixture, codec.encode(expected))
@@ -46,10 +46,18 @@ class SerializationGoldenFixtureTest {
     }
 
     @Test
-    fun storedCheckpointEnvelope_matchesV3GoldenFixture() {
+    fun storedCheckpointEnvelope_matchesV4GoldenFixture() {
         val session = sessionFixture()
-        val expected = AgentCheckpoint(session.sessionId, turn = session.state.turn, state = session.state)
-        val fixture = resource("/v3/core/stored-checkpoint-envelope.json")
+        val expected = AgentCheckpoint(
+            sessionId = session.sessionId,
+            runId = session.runId,
+            cursor = AgentResumeCursor(
+                turn = session.state.turn,
+                phase = AgentResumePhase.TURN_COMMITTED,
+            ),
+            state = session.state,
+        )
+        val fixture = resource("/v4/core/stored-checkpoint-envelope.json")
         val codec = AgentCheckpointCodec(json, sdkVersion = "0.1.0-alpha.1")
 
         assertGolden(fixture, codec.encode(expected))
@@ -58,7 +66,7 @@ class SerializationGoldenFixtureTest {
 
     @Test
     fun corruptStoredSessionEnvelope_isRejected() {
-        val corruptFixture = resource("/v3/core/stored-session-envelope-corrupt.json")
+        val corruptFixture = resource("/v4/core/stored-session-envelope-corrupt.json")
         val codec = AgentSessionSnapshotCodec(json, sdkVersion = "0.1.0-alpha.1")
 
         assertThrows(SerializationException::class.java) {
@@ -120,6 +128,7 @@ class SerializationGoldenFixtureTest {
         )
         return AgentSessionSnapshot(
             sessionId = sessionId,
+            runId = AgentRunId("run-fixture-1"),
             request = request,
             state = AgentStateSnapshot(
                 messages = listOf(user),

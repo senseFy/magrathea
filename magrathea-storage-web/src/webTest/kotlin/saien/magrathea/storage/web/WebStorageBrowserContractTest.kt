@@ -21,13 +21,15 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.await
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import saien.magrathea.core.AgentCheckpoint
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentRequest
+import saien.magrathea.core.AgentResumeCursor
+import saien.magrathea.core.AgentResumePhase
+import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentSessionSnapshotCodec
@@ -44,18 +46,13 @@ class WebStorageBrowserContractTest {
             val first = createMagratheaWebStore(configuration(databaseName))
             val older = testSnapshot("older", updatedAtEpochMs = 10L)
             val newer = testSnapshot("newer", updatedAtEpochMs = 20L)
-            val checkpoint = AgentCheckpoint(
-                sessionId = newer.sessionId,
-                turn = 3,
-                state = newer.state.copy(turn = 3),
-            )
+            val checkpoint = testCheckpoint(newer, turn = 3)
 
-            first.sessionStore.saveSession(older)
-            first.sessionStore.saveSession(newer)
-            first.checkpointStore.saveCheckpoint(checkpoint)
+            first.persistence.commit(older, checkpoint = null)
+            first.persistence.commit(newer, checkpoint)
 
             val raw = assertNotNull(
-                IndexedDbRecordDatabase(databaseName).get(WebStoredRecordKind.SESSION, newer.sessionId.value)?.payload,
+                IndexedDbRecordDatabase(databaseName).get(newer.sessionId.value)?.session?.payload,
             )
             val envelope = Json.parseToJsonElement(raw).jsonObject
             assertEquals(setOf("schemaVersion", "sdkVersion", "payload"), envelope.keys)
@@ -67,10 +64,26 @@ class WebStorageBrowserContractTest {
             first.close()
 
             val reopened = createMagratheaWebStore(configuration(databaseName))
-            assertEquals(newer, reopened.sessionStore.loadSession(newer.sessionId))
-            assertEquals(listOf(newer, older), reopened.sessionStore.listSessions())
-            assertEquals(checkpoint, reopened.checkpointStore.loadLatestCheckpoint(newer.sessionId))
+            assertEquals(newer, reopened.persistence.load(newer.sessionId)?.snapshot)
+            assertEquals(listOf(newer, older), reopened.persistence.listSessions())
+            assertEquals(checkpoint, reopened.persistence.load(newer.sessionId)?.checkpoint)
             reopened.close()
+        }
+    }
+
+    @Test
+    fun terminalCommitAtomicallyRemovesThePreviousCheckpoint() = runTest {
+        withIsolatedDatabase { databaseName ->
+            val store = createMagratheaWebStore(configuration(databaseName))
+            val running = testSnapshot("terminal-replacement")
+            store.persistence.commit(running, testCheckpoint(running, turn = 1))
+
+            val terminal = running.copy(state = running.state.copy(turn = 1))
+            store.persistence.commit(terminal, checkpoint = null)
+
+            assertEquals(terminal, store.persistence.load(running.sessionId)?.snapshot)
+            assertEquals(null, store.persistence.load(running.sessionId)?.checkpoint)
+            store.close()
         }
     }
 
@@ -85,17 +98,14 @@ class WebStorageBrowserContractTest {
             val bravo = testSnapshot("bravo", updatedAtEpochMs = 20L)
             val alpha = testSnapshot("alpha", updatedAtEpochMs = 20L)
             val older = testSnapshot("older", updatedAtEpochMs = 10L)
-            store.sessionStore.saveSession(bravo)
-            store.sessionStore.saveSession(older)
-            store.sessionStore.saveSession(alpha)
+            store.persistence.commit(bravo, checkpoint = null)
+            store.persistence.commit(older, checkpoint = null)
+            store.persistence.commit(alpha, checkpoint = null)
             val secret = "corrupt-payload-canary"
-            IndexedDbRecordDatabase(databaseName).put(
-                WebStoredRecordKind.SESSION,
-                "corrupt",
-                "{\"token\":\"$secret\"}",
-            )
+            IndexedDbRecordDatabase(databaseName)
+                .commit("corrupt", "{\"token\":\"$secret\"}", checkpointPayload = null)
 
-            assertEquals(listOf(alpha, bravo, older), store.sessionStore.listSessions())
+            assertEquals(listOf(alpha, bravo, older), store.persistence.listSessions())
             assertEquals(
                 listOf(
                     WebStoredRecordCorruption(
@@ -116,27 +126,19 @@ class WebStorageBrowserContractTest {
         withIsolatedDatabase { databaseName ->
             val store = createMagratheaWebStore(configuration(databaseName))
             val session = testSnapshot("delete-web")
-            val checkpoint = AgentCheckpoint(session.sessionId, 0, session.state)
-            store.sessionStore.saveSession(session)
-            store.checkpointStore.saveCheckpoint(checkpoint)
+            store.persistence.commit(session, testCheckpoint(session, turn = 0))
 
-            store.sessionStore.deleteSession(session.sessionId)
-            store.checkpointStore.deleteSession(session.sessionId)
-            store.sessionStore.deleteSession(session.sessionId)
-            store.checkpointStore.deleteSession(session.sessionId)
-            assertEquals(null, store.sessionStore.loadSession(session.sessionId))
-            assertEquals(null, store.checkpointStore.loadLatestCheckpoint(session.sessionId))
+            store.persistence.deleteSession(session.sessionId)
+            store.persistence.deleteSession(session.sessionId)
+            assertEquals(null, store.persistence.load(session.sessionId))
 
             val database = IndexedDbRecordDatabase(databaseName)
-            database.put(WebStoredRecordKind.SESSION, "corrupt", "not-json")
-            database.put(WebStoredRecordKind.CHECKPOINT, "corrupt", "not-json")
-            store.sessionStore.clear()
-            store.checkpointStore.clear()
-            store.sessionStore.clear()
-            store.checkpointStore.clear()
+            database.commit("corrupt", "not-json", "not-json")
+            store.persistence.clear()
+            store.persistence.clear()
 
-            assertTrue(database.getAll(WebStoredRecordKind.SESSION).isEmpty())
-            assertTrue(database.getAll(WebStoredRecordKind.CHECKPOINT).isEmpty())
+            assertTrue(database.getAllSessions().isEmpty())
+            assertEquals(null, database.get("corrupt"))
             store.close()
         }
     }
@@ -147,10 +149,10 @@ class WebStorageBrowserContractTest {
             val database = IndexedDbRecordDatabase(databaseName)
             val store = createMagratheaWebStore(configuration(databaseName))
             val secret = "never-surface-persisted-canary"
-            database.put(WebStoredRecordKind.SESSION, "invalid", "{\"secret\":\"$secret\"}")
+            database.commit("invalid", "{\"secret\":\"$secret\"}", checkpointPayload = null)
 
             val invalidError = assertFailsWith<WebStorageException> {
-                store.sessionStore.loadSession(AgentSessionId("invalid"))
+                store.persistence.load(AgentSessionId("invalid"))
             }
             assertEquals(WebStorageFailure.CORRUPT_RECORD, invalidError.failure)
             assertEquals(WebStoredRecordCorruptionReason.INVALID_PAYLOAD, invalidError.corruption?.reason)
@@ -163,20 +165,20 @@ class WebStorageBrowserContractTest {
                     "\"schemaVersion\":$CURRENT_STORAGE_SCHEMA_VERSION",
                     "\"schemaVersion\":${CURRENT_STORAGE_SCHEMA_VERSION + 1}",
                 )
-            database.put(WebStoredRecordKind.SESSION, unknown.sessionId.value, unknownPayload)
+            database.commit(unknown.sessionId.value, unknownPayload, checkpointPayload = null)
             val unknownError = assertFailsWith<WebStorageException> {
-                store.sessionStore.loadSession(unknown.sessionId)
+                store.persistence.load(unknown.sessionId)
             }
             assertEquals(WebStoredRecordCorruptionReason.INVALID_PAYLOAD, unknownError.corruption?.reason)
 
             val payloadIdentity = testSnapshot("payload-id")
-            database.put(
-                WebStoredRecordKind.SESSION,
+            database.commit(
                 "indexed-id",
                 AgentSessionSnapshotCodec().encode(payloadIdentity),
+                checkpointPayload = null,
             )
             val mismatch = assertFailsWith<WebStorageException> {
-                store.sessionStore.loadSession(AgentSessionId("indexed-id"))
+                store.persistence.load(AgentSessionId("indexed-id"))
             }
             assertEquals(WebStoredRecordCorruptionReason.INDEX_MISMATCH, mismatch.corruption?.reason)
             store.close()
@@ -190,7 +192,7 @@ class WebStorageBrowserContractTest {
             val store = createMagratheaWebStore(configuration(databaseName))
 
             val error = assertFailsWith<WebStorageException> {
-                store.sessionStore.listSessions()
+                store.persistence.listSessions()
             }
 
             assertEquals(WebStorageFailure.UNSUPPORTED_DATABASE_VERSION, error.failure)
@@ -207,7 +209,7 @@ class WebStorageBrowserContractTest {
             store.close()
 
             val error = assertFailsWith<WebStorageException> {
-                store.sessionStore.loadSession(AgentSessionId("closed"))
+                store.persistence.load(AgentSessionId("closed"))
             }
 
             assertEquals(WebStorageFailure.CLOSED, error.failure)
@@ -218,24 +220,30 @@ class WebStorageBrowserContractTest {
     fun closeWaitsForAnEnteredStorageOperationAndRejectsAllLaterWork() = runTest {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        var putCalls = 0
+        var commitCalls = 0
         val database = object : WebRecordDatabase {
-            override suspend fun put(kind: WebStoredRecordKind, key: String, payload: String) {
-                putCalls += 1
+            override suspend fun commit(
+                key: String,
+                sessionPayload: String,
+                checkpointPayload: String?,
+            ) {
+                commitCalls += 1
                 entered.complete(Unit)
                 release.await()
             }
 
-            override suspend fun get(kind: WebStoredRecordKind, key: String): WebRawRecord? = null
+            override suspend fun get(key: String): WebRawPersistenceRecord? = null
 
-            override suspend fun getAll(kind: WebStoredRecordKind): List<WebRawRecord> = emptyList()
+            override suspend fun getAllSessions(): List<WebRawRecord> = emptyList()
 
-            override suspend fun delete(kind: WebStoredRecordKind, key: String) = Unit
+            override suspend fun delete(key: String) = Unit
 
-            override suspend fun clear(kind: WebStoredRecordKind) = Unit
+            override suspend fun clear() = Unit
         }
         val store = MagratheaWebStore(database, WebStoredRecordCorruptionReporter { }, Json)
-        val save = async { store.sessionStore.saveSession(testSnapshot("in-flight")) }
+        val save = async {
+            store.persistence.commit(testSnapshot("in-flight"), checkpoint = null)
+        }
         entered.await()
         val close = async { store.close() }
         runCurrent()
@@ -244,13 +252,13 @@ class WebStorageBrowserContractTest {
         release.complete(Unit)
         save.await()
         close.await()
-        assertEquals(1, putCalls)
+        assertEquals(1, commitCalls)
 
         val closed = assertFailsWith<WebStorageException> {
-            store.sessionStore.saveSession(testSnapshot("after-close"))
+            store.persistence.commit(testSnapshot("after-close"), checkpoint = null)
         }
         assertEquals(WebStorageFailure.CLOSED, closed.failure)
-        assertEquals(1, putCalls)
+        assertEquals(1, commitCalls)
     }
 
     @Test
@@ -289,11 +297,22 @@ private fun testSnapshot(
     )
     return AgentSessionSnapshot(
         sessionId = sessionId,
+        runId = AgentRunId("$id-run"),
         request = request,
         state = AgentStateSnapshot(messages = request.messages),
         updatedAtEpochMs = updatedAtEpochMs,
     )
 }
+
+private fun testCheckpoint(
+    snapshot: AgentSessionSnapshot,
+    turn: Int,
+): AgentCheckpoint = AgentCheckpoint(
+    sessionId = snapshot.sessionId,
+    runId = snapshot.runId,
+    cursor = AgentResumeCursor(turn, AgentResumePhase.MODEL_PENDING),
+    state = snapshot.state.copy(turn = turn),
+)
 
 private fun deleteDatabaseForTest(databaseName: String): Promise<JsString> = js(
     """

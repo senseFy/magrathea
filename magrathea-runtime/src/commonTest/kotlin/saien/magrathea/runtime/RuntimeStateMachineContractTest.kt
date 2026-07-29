@@ -30,6 +30,9 @@ import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentFailureCode
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentRequest
+import saien.magrathea.core.AgentResumeCursor
+import saien.magrathea.core.AgentResumePhase
+import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentStateSnapshot
@@ -45,6 +48,7 @@ import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolDefinition
 import saien.magrathea.core.ToolExecutionRequest
 import saien.magrathea.core.ToolExecutionResult
+import saien.magrathea.core.ToolExecutionState
 import saien.magrathea.core.ToolExecutor
 import saien.magrathea.provider.api.InMemoryProviderRegistry
 import saien.magrathea.provider.api.ProviderAdapter
@@ -56,28 +60,28 @@ class RuntimeStateMachineContractTest {
     fun resume_restoresLatestCheckpointTurnAndState() = runTest {
         val sessionId = AgentSessionId("resume-checkpoint-session")
         val request = request(sessionId = sessionId, maxTurns = 6)
-        val sessionStore = InMemorySessionStore()
-        val checkpointStore = InMemoryCheckpointStore()
-        sessionStore.saveSession(
+        val runId = AgentRunId("resume-checkpoint-run")
+        val persistence = InMemoryAgentPersistence()
+        persistence.commit(
             AgentSessionSnapshot(
                 sessionId = sessionId,
+                runId = runId,
                 request = request,
                 state = stateWithText("stale-session-state", turn = 0),
             ),
-        )
-        checkpointStore.saveCheckpoint(
             AgentCheckpoint(
                 sessionId = sessionId,
-                turn = 2,
+                runId = runId,
+                cursor = AgentResumeCursor(2, AgentResumePhase.MODEL_PENDING),
                 state = stateWithText("authoritative-checkpoint-state", turn = 2),
             ),
         )
         val provider = RecordingCompleteProvider()
-        val runner = runner(provider, sessionStore, checkpointStore)
+        val runner = runner(provider, persistence)
 
         val events = runner.resume(sessionId).toList()
 
-        assertEquals(3, events.filterIsInstance<AgentEvent.TurnStarted>().single().turn)
+        assertEquals(2, events.filterIsInstance<AgentEvent.TurnStarted>().single().turn)
         val providerText = provider.requests.single().messages
             .flatMap { it.parts }
             .filterIsInstance<TextPart>()
@@ -94,20 +98,11 @@ class RuntimeStateMachineContractTest {
             status = AgentStatus.COMPLETED,
             stopReason = StopReason.COMPLETED,
         )
-        val sessionStore = InMemorySessionStore().also {
-            it.saveSession(AgentSessionSnapshot(sessionId, request, completed))
-        }
-        val checkpointStore = InMemoryCheckpointStore().also {
-            it.saveCheckpoint(
-                AgentCheckpoint(
-                    sessionId = sessionId,
-                    turn = 0,
-                    state = stateWithText("older-nonterminal-checkpoint", turn = 0),
-                ),
-            )
-        }
+        val runId = AgentRunId("completed-run")
+        val persistence = InMemoryAgentPersistence()
+        persistence.commit(AgentSessionSnapshot(sessionId, runId, request, completed), null)
         val provider = RecordingCompleteProvider()
-        val runner = runner(provider, sessionStore, checkpointStore)
+        val runner = runner(provider, persistence)
 
         val events = runner.resume(sessionId).toList()
 
@@ -119,15 +114,15 @@ class RuntimeStateMachineContractTest {
     fun downstreamStopsAtCompleted_doesNotRewritePersistedSessionAsCancelled() = runTest {
         val sessionId = AgentSessionId("terminal-collector-cancellation")
         val request = request(sessionId = sessionId)
-        val sessionStore = InMemorySessionStore()
+        val persistence = InMemoryAgentPersistence()
         val provider = RecordingCompleteProvider()
-        val runner = runner(provider, sessionStore, InMemoryCheckpointStore())
+        val runner = runner(provider, persistence)
 
         runner.run(request)
             .takeWhile { it !is AgentEvent.Completed }
             .collect()
 
-        val saved = assertNotNull(sessionStore.loadSession(sessionId))
+        val saved = assertNotNull(persistence.load(sessionId)?.snapshot)
         assertEquals(AgentStatus.COMPLETED, saved.state.status)
         assertEquals(StopReason.COMPLETED, saved.state.stopReason)
         val resumed = runner.resume(sessionId).toList()
@@ -136,35 +131,28 @@ class RuntimeStateMachineContractTest {
     }
 
     @Test
-    fun resume_terminalCheckpoint_finalizesWithoutRepeatingProviderCall() = runTest {
-        val sessionId = AgentSessionId("resume-terminal-checkpoint")
+    fun resume_turnCommitted_advancesToTheNextTurn() = runTest {
+        val sessionId = AgentSessionId("resume-turn-committed")
         val request = request(sessionId = sessionId)
-        val sessionStore = InMemorySessionStore().also {
-            it.saveSession(
-                AgentSessionSnapshot(
-                    sessionId,
-                    request,
-                    stateWithText("pre-final-save", turn = 1),
-                ),
-            )
-        }
-        val terminalCheckpointState = stateWithText("provider-already-completed", turn = 1).copy(
-            status = AgentStatus.RUNNING,
-            stopReason = StopReason.COMPLETED,
+        val runId = AgentRunId("turn-committed-run")
+        val committed = stateWithText("committed-turn", turn = 1)
+        val persistence = InMemoryAgentPersistence()
+        persistence.commit(
+            AgentSessionSnapshot(sessionId, runId, request, committed),
+            AgentCheckpoint(
+                sessionId,
+                runId,
+                AgentResumeCursor(1, AgentResumePhase.TURN_COMMITTED),
+                committed,
+            ),
         )
-        val checkpointStore = InMemoryCheckpointStore().also {
-            it.saveCheckpoint(AgentCheckpoint(sessionId, turn = 1, state = terminalCheckpointState))
-        }
         val provider = RecordingCompleteProvider()
-        val runner = runner(provider, sessionStore, checkpointStore)
+        val runner = runner(provider, persistence)
 
         val events = runner.resume(sessionId).toList()
 
-        assertTrue(provider.requests.isEmpty())
-        val completed = events.filterIsInstance<AgentEvent.Completed>().single().state
-        assertEquals(AgentStatus.COMPLETED, completed.status)
-        assertEquals(StopReason.COMPLETED, completed.stopReason)
-        assertEquals("provider-already-completed", completed.messages.single().parts.filterIsInstance<TextPart>().single().text)
+        assertEquals(2, events.filterIsInstance<AgentEvent.TurnStarted>().single().turn)
+        assertEquals(1, provider.requests.size)
     }
 
     @Test
@@ -182,22 +170,24 @@ class RuntimeStateMachineContractTest {
             pendingToolCalls = listOf(pendingCall),
             stopReason = StopReason.TOOL_CALLS,
         )
-        val sessionStore = InMemorySessionStore().also {
-            it.saveSession(AgentSessionSnapshot(sessionId, request, pendingState))
-        }
+        val runId = AgentRunId("pending-tool-run")
+        val persistence = InMemoryAgentPersistence()
+        persistence.commit(
+            AgentSessionSnapshot(sessionId, runId, request, pendingState),
+            null,
+        )
         val provider = RecordingCompleteProvider()
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(listOf(tool)),
-            sessionStore = sessionStore,
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = persistence,
         )
 
         val events = runner.resume(sessionId).toList()
 
         assertTrue(provider.requests.isEmpty())
         assertEquals(0, tool.executionCount)
-        assertEquals(AgentFailureCode.INVALID_STATE, events.filterIsInstance<AgentEvent.Failed>().single().code)
+        assertEquals(1, events.filterIsInstance<AgentEvent.RecoveryBlocked>().size)
     }
 
     @Test
@@ -212,6 +202,7 @@ class RuntimeStateMachineContractTest {
 
         assertEquals(1, provider.callCount)
         assertEquals(1, tool.executionCount)
+        assertEquals(1, events.filterIsInstance<AgentEvent.TurnStarted>().size)
         assertEquals(StopReason.MAX_TURNS, events.filterIsInstance<AgentEvent.Completed>().single().state.stopReason)
     }
 
@@ -233,14 +224,13 @@ class RuntimeStateMachineContractTest {
     @Test
     fun finalizedTool_isCheckpointedBeforeSideEffect() = runTest {
         val provider = AlwaysToolProvider()
-        val checkpointStore = InMemoryCheckpointStore()
-        val tool = CheckpointAssertingTool(checkpointStore)
+        val persistence = InMemoryAgentPersistence()
+        val tool = CheckpointAssertingTool(persistence)
         val request = request(maxTurns = 1, tools = listOf(tool.definition))
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(listOf(tool)),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = checkpointStore,
+            persistence = persistence,
         )
 
         runner.run(request).toList()
@@ -304,8 +294,7 @@ class RuntimeStateMachineContractTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
             retryPolicy = retryPolicy,
         )
 
@@ -327,8 +316,7 @@ class RuntimeStateMachineContractTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
             dispatcher = StandardTestDispatcher(testScheduler),
         )
         val collector = launch {
@@ -355,7 +343,7 @@ class RuntimeStateMachineContractTest {
 
         invalidAttachments.forEachIndexed { index, (attachment, maxBytes) ->
             val provider = RecordingCompleteProvider()
-            val sessionStore = InMemorySessionStore()
+            val persistence = InMemoryAgentPersistence()
             val request = request(
                 sessionId = AgentSessionId("invalid-inline-$index"),
                 messages = listOf(AgentMessage(role = MessageRole.USER, parts = listOf(attachment))),
@@ -364,8 +352,7 @@ class RuntimeStateMachineContractTest {
             val runner = DefaultAgentRunner(
                 providerRegistry = InMemoryProviderRegistry(listOf(provider)),
                 toolRegistry = InMemoryToolRegistry(),
-                sessionStore = sessionStore,
-                checkpointStore = InMemoryCheckpointStore(),
+                persistence = persistence,
             )
 
             val events = runner.run(request).toList()
@@ -375,7 +362,7 @@ class RuntimeStateMachineContractTest {
                 events.filterIsInstance<AgentEvent.Failed>().single().code,
             )
             assertTrue(provider.requests.isEmpty())
-            assertEquals(null, sessionStore.loadSession(request.sessionId))
+            assertEquals(null, persistence.load(request.sessionId))
         }
     }
 
@@ -450,13 +437,12 @@ class RuntimeStateMachineContractTest {
     fun cancelDuringStream_isNeverRetriedAndPersistsCancelledState() = runTest {
         val provider = CancellableProvider()
         val retryPolicy = RecordingAlwaysRetryPolicy()
-        val sessionStore = InMemorySessionStore()
+        val persistence = InMemoryAgentPersistence()
         val request = request(sessionId = AgentSessionId("cancel-stream-session"))
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = sessionStore,
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = persistence,
             retryPolicy = retryPolicy,
         )
         val events = mutableListOf<AgentEvent>()
@@ -474,7 +460,7 @@ class RuntimeStateMachineContractTest {
         assertTrue(provider.cancelled)
         assertEquals(0, retryPolicy.decisionCount)
         assertTrue(events.none { it is AgentEvent.RetryScheduled })
-        val persisted = sessionStore.loadSession(request.sessionId)
+        val persisted = persistence.load(request.sessionId)?.snapshot
         assertNotNull(persisted)
         assertEquals(AgentStatus.CANCELLED, persisted.state.status)
         assertEquals(StopReason.CANCELLED, persisted.state.stopReason)
@@ -484,13 +470,12 @@ class RuntimeStateMachineContractTest {
     fun cancelAfterPartialOutput_persistsObservedStateWithoutRetry() = runTest {
         val provider = PartialCancellableProvider()
         val retryPolicy = RecordingAlwaysRetryPolicy()
-        val sessionStore = InMemorySessionStore()
+        val persistence = InMemoryAgentPersistence()
         val request = request(sessionId = AgentSessionId("cancel-partial-session"))
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = sessionStore,
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = persistence,
             retryPolicy = retryPolicy,
         )
         val collector = launch {
@@ -505,7 +490,7 @@ class RuntimeStateMachineContractTest {
         withTimeout(2_000) { collector.join() }
 
         assertEquals(0, retryPolicy.decisionCount)
-        val persisted = requireNotNull(sessionStore.loadSession(request.sessionId))
+        val persisted = requireNotNull(persistence.load(request.sessionId)?.snapshot)
         val text = persisted.state.messages
             .flatMap { it.parts }
             .filterIsInstance<TextPart>()
@@ -518,7 +503,7 @@ class RuntimeStateMachineContractTest {
     fun cancelDuringTool_propagatesWithoutToolErrorResult() = runTest {
         val provider = AlwaysToolProvider()
         val tool = BlockingTool()
-        val sessionStore = InMemorySessionStore()
+        val persistence = InMemoryAgentPersistence()
         val request = request(
             sessionId = AgentSessionId("cancel-tool-session"),
             tools = listOf(tool.definition),
@@ -526,8 +511,7 @@ class RuntimeStateMachineContractTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(listOf(tool)),
-            sessionStore = sessionStore,
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = persistence,
         )
         val events = mutableListOf<AgentEvent>()
         val collector = launch {
@@ -543,7 +527,7 @@ class RuntimeStateMachineContractTest {
 
         assertTrue(tool.cancelled)
         assertTrue(events.none { it is AgentEvent.ToolCompleted })
-        val persisted = requireNotNull(sessionStore.loadSession(request.sessionId))
+        val persisted = requireNotNull(persistence.load(request.sessionId)?.snapshot)
         assertEquals(AgentStatus.CANCELLED, persisted.state.status)
         assertEquals(1, persisted.state.pendingToolCalls.size)
     }
@@ -555,8 +539,7 @@ class RuntimeStateMachineContractTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
             retryPolicy = retryPolicy,
         )
 
@@ -575,8 +558,7 @@ class RuntimeStateMachineContractTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
             retryPolicy = retryPolicy,
         )
 
@@ -628,15 +610,13 @@ class RuntimeStateMachineContractTest {
 
     private fun runner(
         provider: ProviderAdapter,
-        sessionStore: InMemorySessionStore = InMemorySessionStore(),
-        checkpointStore: InMemoryCheckpointStore = InMemoryCheckpointStore(),
+        persistence: InMemoryAgentPersistence = InMemoryAgentPersistence(),
         tool: ToolExecutor? = null,
     ): DefaultAgentRunner {
         return DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(listOfNotNull(tool)),
-            sessionStore = sessionStore,
-            checkpointStore = checkpointStore,
+            persistence = persistence,
         )
     }
 
@@ -842,7 +822,7 @@ class RuntimeStateMachineContractTest {
     }
 
     private class CheckpointAssertingTool(
-        private val checkpointStore: InMemoryCheckpointStore,
+        private val persistence: InMemoryAgentPersistence,
     ) : ToolExecutor {
         override val definition = ToolDefinition(
             name = TOOL_NAME,
@@ -853,11 +833,12 @@ class RuntimeStateMachineContractTest {
         var pendingCheckpointObservedBeforeExecution: Boolean = false
 
         override suspend fun execute(request: ToolExecutionRequest): ToolExecutionResult {
-            val checkpoint = checkpointStore.loadLatestCheckpoint(request.sessionId)
-            pendingCheckpointObservedBeforeExecution = checkpoint
-                ?.state
-                ?.pendingToolCalls
-                ?.any { it.toolCallId == request.toolCall.toolCallId } == true
+            val checkpoint = persistence.load(request.sessionId)?.checkpoint
+            pendingCheckpointObservedBeforeExecution =
+                checkpoint?.toolExecutions?.any {
+                    it.executionId == request.executionId &&
+                        it.state == ToolExecutionState.STARTED
+                } == true
             executionCount += 1
             return ToolExecutionResult(
                 toolCallId = request.toolCall.toolCallId,

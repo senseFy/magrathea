@@ -19,15 +19,14 @@ class JvmRoomDatabaseIntegrationTest {
         val reporter = StoredRecordCorruptionReporter { error("Unexpected corruption: $it") }
 
         val first = JvmMagratheaRoom.open(database.toString(), reporter)
-        first.sessionStore.saveSession(session)
-        first.checkpointStore.saveCheckpoint(checkpoint)
+        first.persistence.commit(session, checkpoint)
         first.close()
         first.close()
 
         val reopened = JvmMagratheaRoom.open(database.toString(), reporter)
-        assertEquals(session, reopened.sessionStore.loadSession(session.sessionId))
-        assertEquals(listOf(session), reopened.sessionStore.listSessions())
-        assertEquals(checkpoint, reopened.checkpointStore.loadLatestCheckpoint(session.sessionId))
+        assertEquals(session, reopened.persistence.load(session.sessionId)?.snapshot)
+        assertEquals(listOf(session), reopened.persistence.listSessions())
+        assertEquals(checkpoint, reopened.persistence.load(session.sessionId)?.checkpoint)
         reopened.close()
 
         check(directory.toFile().deleteRecursively()) { "Failed to remove Room integration-test directory" }
@@ -44,16 +43,15 @@ class JvmRoomDatabaseIntegrationTest {
         val reporter = StoredRecordCorruptionReporter { error("Unexpected corruption: $it") }
 
         val source = JvmMagratheaRoom.open(database.toString(), reporter)
-        source.sessionStore.saveSession(session)
-        source.checkpointStore.saveCheckpoint(checkpoint)
+        source.persistence.commit(session, checkpoint)
         source.close()
 
         Files.copy(database, backup, StandardCopyOption.REPLACE_EXISTING)
         Files.copy(backup, restoredDatabase, StandardCopyOption.REPLACE_EXISTING)
 
         val restored = JvmMagratheaRoom.open(restoredDatabase.toString(), reporter)
-        assertEquals(session, restored.sessionStore.loadSession(session.sessionId))
-        assertEquals(checkpoint, restored.checkpointStore.loadLatestCheckpoint(session.sessionId))
+        assertEquals(session, restored.persistence.load(session.sessionId)?.snapshot)
+        assertEquals(checkpoint, restored.persistence.load(session.sessionId)?.checkpoint)
         restored.close()
 
         check(directory.toFile().deleteRecursively()) { "Failed to remove Room backup-test directory" }
@@ -73,25 +71,48 @@ class JvmRoomDatabaseIntegrationTest {
         rawDatabase.close()
 
         val store = JvmMagratheaRoom.open(databasePath.toString(), reporter)
-        assertTrue(store.sessionStore.listSessions().isEmpty())
+        assertTrue(store.persistence.listSessions().isEmpty())
         assertFailsWith<StoredRecordCorruptionException> {
-            store.checkpointStore.loadLatestCheckpoint(saien.magrathea.core.AgentSessionId(corruptId))
+            store.persistence.load(saien.magrathea.core.AgentSessionId(corruptId))
         }
 
-        store.sessionStore.clear()
-        store.checkpointStore.clear()
-        store.sessionStore.clear()
-        store.checkpointStore.clear()
+        store.persistence.clear()
+        store.persistence.clear()
         store.close()
 
         val rebuilt = JvmMagratheaRoom.open(databasePath.toString(), reporter)
-        assertTrue(rebuilt.sessionStore.listSessions().isEmpty())
+        assertTrue(rebuilt.persistence.listSessions().isEmpty())
         assertEquals(
             null,
-            rebuilt.checkpointStore.loadLatestCheckpoint(saien.magrathea.core.AgentSessionId(corruptId)),
+            rebuilt.persistence.load(saien.magrathea.core.AgentSessionId(corruptId)),
         )
         rebuilt.close()
 
         check(directory.toFile().deleteRecursively()) { "Failed to remove Room rebuild-test directory" }
+    }
+
+    @Test
+    fun atomicCommitCanReplaceAResumableRecordWithATerminalSnapshot() = runTest {
+        val directory = Files.createTempDirectory("magrathea-room-atomic-")
+        val database = directory.resolve("magrathea.db")
+        val snapshot = roomTestSnapshot("atomic-replacement")
+        val checkpoint = roomTestCheckpoint(snapshot, turn = 1)
+        val store = JvmMagratheaRoom.open(
+            database.toString(),
+            StoredRecordCorruptionReporter { error("Unexpected corruption: $it") },
+        )
+
+        store.persistence.commit(snapshot, checkpoint)
+        assertEquals(checkpoint, store.persistence.load(snapshot.sessionId)?.checkpoint)
+
+        store.persistence.commit(snapshot, null)
+        val terminalRecord = requireNotNull(store.persistence.load(snapshot.sessionId))
+        assertEquals(snapshot, terminalRecord.snapshot)
+        assertEquals(null, terminalRecord.checkpoint)
+
+        store.close()
+        check(directory.toFile().deleteRecursively()) {
+            "Failed to remove Room atomic-test directory"
+        }
     }
 }

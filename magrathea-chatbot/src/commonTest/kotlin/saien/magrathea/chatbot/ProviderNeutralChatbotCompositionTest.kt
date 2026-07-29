@@ -11,7 +11,7 @@ import kotlinx.coroutines.test.runTest
 import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentRequest
-import saien.magrathea.core.AgentRunner
+import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentStateSnapshot
@@ -20,23 +20,20 @@ import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
-import saien.magrathea.runtime.InMemoryCheckpointStore
-import saien.magrathea.runtime.InMemorySessionStore
+import saien.magrathea.runtime.InMemoryAgentPersistence
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class ProviderNeutralChatbotCompositionTest {
     @Test
     fun publicFactoryAcceptsArbitraryRunnerAndOwnsResourceClose() = runTest {
-        val sessions = InMemorySessionStore()
-        val checkpoints = InMemoryCheckpointStore()
-        val runner = RecordingRunner(sessions)
+        val persistence = InMemoryAgentPersistence()
+        val runner = RecordingRunner(persistence)
         var resourceCloses = 0
         val client = createChatbotClient(
             runner = runner,
             requestFactory = DefaultChatbotRequestFactory(),
-            sessionStore = sessions,
-            checkpointStore = checkpoints,
+            persistence = persistence,
             closeResources = { resourceCloses += 1 },
             sessionDispatcher = StandardTestDispatcher(testScheduler),
         )
@@ -60,13 +57,14 @@ class ProviderNeutralChatbotCompositionTest {
     }
 
     private class RecordingRunner(
-        private val sessions: InMemorySessionStore,
-    ) : AgentRunner {
+        private val persistence: InMemoryAgentPersistence,
+    ) : TestAgentRunner() {
         var lastProvider: String? = null
 
         override fun run(request: AgentRequest): Flow<AgentEvent> = flow {
             lastProvider = request.model.provider
-            emit(AgentEvent.Started(request.sessionId))
+            val runId = AgentRunId("provider-neutral-run")
+            emit(AgentEvent.Started(request.sessionId, runId))
             val state = AgentStateSnapshot(
                 messages = request.messages + AgentMessage(
                     role = MessageRole.ASSISTANT,
@@ -76,12 +74,14 @@ class ProviderNeutralChatbotCompositionTest {
                 status = AgentStatus.COMPLETED,
                 stopReason = StopReason.COMPLETED,
             )
-            sessions.saveSession(
+            persistence.commit(
                 AgentSessionSnapshot(
                     sessionId = request.sessionId,
+                    runId = runId,
                     request = request,
                     state = state,
                 ),
+                null,
             )
             emit(AgentEvent.Completed(request.sessionId, state))
         }

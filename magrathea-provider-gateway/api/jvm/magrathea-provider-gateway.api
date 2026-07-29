@@ -7,6 +7,7 @@ public final class saien/magrathea/provider/gateway/GatewayProviderAdapter : sai
 	public synthetic fun <init> (Ljava/lang/String;Lsaien/magrathea/provider/gateway/GatewayProviderConfig;Lsaien/magrathea/provider/gateway/GatewaySessionHeadersProvider;Lsaien/magrathea/provider/gateway/GatewayAttachmentCatalog;Lsaien/magrathea/provider/gateway/GatewayReconnectGate;Lsaien/magrathea/provider/api/HttpTransport;ZLsaien/magrathea/gateway/protocol/GatewayProtocolCodec;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun close ()V
 	public fun generate (Lsaien/magrathea/provider/api/ProviderRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getInvocationResumeMode ()Lsaien/magrathea/provider/api/ProviderInvocationResumeMode;
 	public fun getKey ()Ljava/lang/String;
 	public fun getOptionsFamily ()Ljava/lang/String;
 	public fun inputCapabilities (Lsaien/magrathea/provider/api/ProviderTransportConfig;)Lsaien/magrathea/provider/api/ProviderInputCapabilities;

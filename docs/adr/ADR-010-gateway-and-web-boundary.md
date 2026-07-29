@@ -15,6 +15,7 @@ servers.
 - Gateway `exact-v1` is a dedicated, strict wire protocol with its own DTOs and codec.
 - Stream creation and cancellation use an authenticated HTTP control plane. Events use sequenced
   Server-Sent Events with bounded replay, reconnect, idempotency, and terminal-state validation.
+- Runtime resume reuses the Gateway invocation identity to reattach to the existing durable stream.
 - The server resolves a browser-supplied model reference to server-owned Provider configuration,
   endpoint, and credential. Browser requests cannot set an upstream endpoint, credential, or
   arbitrary Provider header.

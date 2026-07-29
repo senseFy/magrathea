@@ -10,17 +10,17 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentFailureCode
+import saien.magrathea.core.AgentInterruptionReason
 import saien.magrathea.core.AgentMessage
+import saien.magrathea.core.AgentPersistence
+import saien.magrathea.core.AgentPersistenceRecord
 import saien.magrathea.core.AgentRequest
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
-import saien.magrathea.core.AgentStateSnapshot
-import saien.magrathea.core.AgentStatus
+import saien.magrathea.core.AgentCheckpoint
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.RetryPolicy
-import saien.magrathea.core.SessionStore
-import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
 import saien.magrathea.provider.api.InMemoryProviderRegistry
 import saien.magrathea.provider.api.ProviderAdapter
@@ -44,8 +44,6 @@ class RuntimeFailureContractTest {
         val cases = listOf(
             ProviderAuthException(canary) to AgentFailureCode.PROVIDER_AUTH,
             ProviderRateLimitException(canary) to AgentFailureCode.PROVIDER_RATE_LIMIT,
-            ProviderTimeoutException(ProviderTimeoutPhase.STREAM_IDLE) to AgentFailureCode.TIMEOUT,
-            ProviderNetworkException(canary) to AgentFailureCode.PROVIDER_NETWORK,
             ProviderProtocolException(canary) to AgentFailureCode.PROVIDER_PROTOCOL,
             ProviderContextLimitException(canary) to AgentFailureCode.CONTEXT_LIMIT,
             ProviderClientException(canary, statusCode = 400) to AgentFailureCode.PROVIDER_CLIENT,
@@ -64,13 +62,34 @@ class RuntimeFailureContractTest {
     }
 
     @Test
-    fun retryAndTerminalFailureNeverExposeThrowableMessage() = runTest {
+    fun exhaustedNetworkAndTimeoutFailuresBecomeResumableInterruptions() = runTest {
+        val canary = "interruption-secret-canary"
+        val cases = listOf(
+            ProviderTimeoutException(ProviderTimeoutPhase.STREAM_IDLE) to
+                AgentInterruptionReason.PROVIDER_TIMEOUT,
+            ProviderNetworkException(canary) to AgentInterruptionReason.PROVIDER_NETWORK,
+        )
+
+        cases.forEachIndexed { index, (throwable, reason) ->
+            val provider = ThrowingProvider("interruption-$index", throwable)
+            val events = runner(provider).run(request(provider.key)).toList()
+
+            assertEquals(reason, events.filterIsInstance<AgentEvent.Interrupted>().single().interruption.reason)
+            assertFalse(events.toString().contains(canary))
+        }
+    }
+
+    @Test
+    fun retryAndTerminalInterruptionNeverExposeThrowableMessage() = runTest {
         val canary = "retry-secret-canary"
         val provider = ThrowingProvider("retry-failure", ProviderNetworkException(canary))
         val events = runner(provider, retryPolicy = RetryOnce).run(request(provider.key)).toList()
 
         assertEquals(AgentFailureCode.PROVIDER_NETWORK, events.filterIsInstance<AgentEvent.RetryScheduled>().single().code)
-        assertEquals(AgentFailureCode.PROVIDER_NETWORK, events.filterIsInstance<AgentEvent.Failed>().single().code)
+        assertEquals(
+            AgentInterruptionReason.PROVIDER_NETWORK,
+            events.filterIsInstance<AgentEvent.Interrupted>().single().interruption.reason,
+        )
         assertFalse(events.toString().contains(canary))
     }
 
@@ -78,24 +97,23 @@ class RuntimeFailureContractTest {
     fun storageFailureIsClassifiedWithoutRenderingStoreMessage() = runTest {
         val canary = "storage-secret-canary"
         val provider = ThrowingProvider("unused-provider", IllegalStateException("must not run"))
-        val store = object : SessionStore {
-            override suspend fun saveSession(snapshot: AgentSessionSnapshot) {
+        val persistence = object : AgentPersistence {
+            override suspend fun commit(
+                snapshot: AgentSessionSnapshot,
+                checkpoint: AgentCheckpoint?,
+            ) {
                 error(canary)
             }
 
-            override suspend fun loadSession(sessionId: AgentSessionId): AgentSessionSnapshot? = null
-
+            override suspend fun load(sessionId: AgentSessionId): AgentPersistenceRecord? = null
             override suspend fun listSessions(): List<AgentSessionSnapshot> = emptyList()
-
             override suspend fun deleteSession(sessionId: AgentSessionId) = Unit
-
             override suspend fun clear() = Unit
         }
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = store,
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = persistence,
             dispatcher = Dispatchers.Unconfined,
         )
 
@@ -106,34 +124,27 @@ class RuntimeFailureContractTest {
     }
 
     @Test
-    fun resumeTerminalPersistenceFailure_isReturnedAsTypedStorageFailure() = runTest {
+    fun resumeLoadFailure_isReturnedAsTypedStorageFailure() = runTest {
         val canary = "resume-storage-secret-canary"
         val sessionId = AgentSessionId("resume-storage-failure")
-        val request = request("unused-provider").copy(sessionId = sessionId)
-        val snapshot = AgentSessionSnapshot(
-            sessionId = sessionId,
-            request = request,
-            state = AgentStateSnapshot(
-                messages = request.messages,
-                status = AgentStatus.RUNNING,
-                stopReason = StopReason.COMPLETED,
-            ),
-        )
-        val store = object : SessionStore {
-            override suspend fun saveSession(snapshot: AgentSessionSnapshot) {
+        val persistence = object : AgentPersistence {
+            override suspend fun commit(
+                snapshot: AgentSessionSnapshot,
+                checkpoint: AgentCheckpoint?,
+            ) = Unit
+
+            override suspend fun load(sessionId: AgentSessionId): AgentPersistenceRecord? {
                 error(canary)
             }
 
-            override suspend fun loadSession(sessionId: AgentSessionId): AgentSessionSnapshot = snapshot
-            override suspend fun listSessions(): List<AgentSessionSnapshot> = listOf(snapshot)
+            override suspend fun listSessions(): List<AgentSessionSnapshot> = emptyList()
             override suspend fun deleteSession(sessionId: AgentSessionId) = Unit
             override suspend fun clear() = Unit
         }
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(),
             toolRegistry = InMemoryToolRegistry(),
-            sessionStore = store,
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = persistence,
             dispatcher = Dispatchers.Unconfined,
         )
 
@@ -149,8 +160,7 @@ class RuntimeFailureContractTest {
     ) = DefaultAgentRunner(
         providerRegistry = InMemoryProviderRegistry(listOf(provider)),
         toolRegistry = InMemoryToolRegistry(),
-        sessionStore = InMemorySessionStore(),
-        checkpointStore = InMemoryCheckpointStore(),
+        persistence = InMemoryAgentPersistence(),
         retryPolicy = retryPolicy,
         dispatcher = Dispatchers.Unconfined,
     )

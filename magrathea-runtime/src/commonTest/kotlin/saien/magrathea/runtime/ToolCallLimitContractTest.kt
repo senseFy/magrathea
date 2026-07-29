@@ -10,7 +10,11 @@ import saien.magrathea.core.AgentEngineConfig
 import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentRequest
+import saien.magrathea.core.AgentResumeCursor
+import saien.magrathea.core.AgentResumePhase
+import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.AgentSessionId
+import saien.magrathea.core.AgentCheckpoint
 import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.AgentStatus
@@ -60,8 +64,7 @@ class ToolCallLimitContractTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(listOf(tool)),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
         )
 
         val events = runner.run(
@@ -93,8 +96,7 @@ class ToolCallLimitContractTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(listOf(tool)),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
         )
 
         val events = runner.run(
@@ -142,8 +144,9 @@ class ToolCallLimitContractTest {
     fun resumePreservesThePersistedRunBudget() = runTest {
         val tool = CountingLimitedTool(maxCallsPerTurn = 1, maxCallsPerRun = 1)
         val provider = CallWhileAdvertisedProvider()
-        val sessionStore = InMemorySessionStore()
+        val persistence = InMemoryAgentPersistence()
         val sessionId = AgentSessionId("resumed-run-limit")
+        val runId = AgentRunId("resumed-run-limit-run")
         val request = AgentRequest(
             sessionId = sessionId,
             messages = listOf(injectedUserMessage("search once")),
@@ -151,23 +154,30 @@ class ToolCallLimitContractTest {
             tools = listOf(tool.definition),
             engine = AgentEngineConfig(runtime = RuntimeConfig(maxTurns = 3)),
         )
-        sessionStore.saveSession(
+        val state = AgentStateSnapshot(
+            messages = request.messages,
+            toolCallCounts = mapOf("limited_tool" to 1),
+            turn = 1,
+            status = AgentStatus.RUNNING,
+        )
+        persistence.commit(
             AgentSessionSnapshot(
                 sessionId = sessionId,
+                runId = runId,
                 request = request,
-                state = AgentStateSnapshot(
-                    messages = request.messages,
-                    toolCallCounts = mapOf("limited_tool" to 1),
-                    turn = 1,
-                    status = AgentStatus.RUNNING,
-                ),
+                state = state,
+            ),
+            AgentCheckpoint(
+                sessionId = sessionId,
+                runId = runId,
+                cursor = AgentResumeCursor(1, AgentResumePhase.MODEL_PENDING),
+                state = state,
             ),
         )
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(listOf(tool)),
-            sessionStore = sessionStore,
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = persistence,
         )
 
         val events = runner.resume(sessionId).toList()
@@ -189,8 +199,7 @@ class ToolCallLimitContractTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(listOf(tool)),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
             followUpMessageProvider = followUpMessageProvider,
             steeringMessageProvider = steeringMessageProvider,
         )
@@ -221,8 +230,7 @@ class ToolCallLimitContractTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(listOf(tool)),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
         )
         val advertised = tool.definition.copy(maxCallsPerTurn = advertisedLimit)
         val events = runner.run(

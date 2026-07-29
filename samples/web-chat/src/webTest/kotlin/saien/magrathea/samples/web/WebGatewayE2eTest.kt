@@ -83,7 +83,7 @@ class WebGatewayE2eTest {
                 throw failure
             }
             assertTrue(chunks.flatMap { it.events }.any { it is ProviderEvent.Completed })
-            assertEquals(1, awaitMetric("provider-calls", requestId))
+            assertEquals(1, awaitRequestMetric("provider-calls", requestId))
         } finally {
             adapter.close()
         }
@@ -104,8 +104,10 @@ class WebGatewayE2eTest {
 
                 assertEquals(ChatbotStatus.COMPLETED, snapshot.status)
                 assertEquals("gateway e2e answer", snapshot.messages.last().text)
-                val requestId = "${snapshot.messages.first { it.role == saien.magrathea.chatbot.ChatbotMessageRole.USER }.id}:0"
-                assertEquals(1, awaitMetric("provider-calls", requestId))
+                assertEquals(
+                    1,
+                    awaitSessionMetric("provider-calls", assertNotNull(snapshot.sessionId)),
+                )
                 observation.cancel()
             } finally {
                 client.close()
@@ -123,8 +125,7 @@ class WebGatewayE2eTest {
                 val firstSession = firstClient.createSession(e2eSessionConfiguration())
                 firstSession.send("refresh this stream")
                 val sessionId = assertNotNull(firstSession.snapshot().sessionId)
-                val requestId = "${firstSession.snapshot().messages.first().id}:0"
-                assertEquals(1, awaitMetric("provider-calls", requestId))
+                assertEquals(1, awaitSessionMetric("provider-calls", sessionId))
 
                 val resumedClient = e2eClient(databaseName)
                 secondClient = resumedClient
@@ -134,7 +135,7 @@ class WebGatewayE2eTest {
                 resumed.observe(terminalObserver(terminal))
 
                 assertEquals(ChatbotStatus.COMPLETED, terminal.await().status)
-                assertEquals(1, awaitMetric("provider-calls", requestId))
+                assertEquals(1, awaitSessionMetric("provider-calls", sessionId))
             } finally {
                 secondClient?.close()
                 firstClient.close()
@@ -150,13 +151,13 @@ class WebGatewayE2eTest {
             try {
                 val session = client.createSession(e2eSessionConfiguration())
                 session.send("hang until explicit cancel")
-                val requestId = "${session.snapshot().messages.first().id}:0"
-                assertEquals(1, awaitMetric("provider-calls", requestId))
+                val sessionId = assertNotNull(session.snapshot().sessionId)
+                assertEquals(1, awaitSessionMetric("provider-calls", sessionId))
 
                 session.cancel()
 
                 assertEquals(ChatbotStatus.CANCELLED, session.snapshot().status)
-                assertEquals(1, awaitMetric("provider-cancellations", requestId))
+                assertEquals(1, awaitSessionMetric("provider-cancellations", sessionId))
             } finally {
                 client.close()
             }
@@ -217,15 +218,21 @@ private suspend fun awaitBrowserGateway() {
     )
 }
 
-private suspend fun awaitMetric(metric: String, requestId: String): Int {
+private suspend fun awaitRequestMetric(metric: String, requestId: String): Int =
+    awaitMetric(metric, "requestId", requestId)
+
+private suspend fun awaitSessionMetric(metric: String, sessionId: String): Int =
+    awaitMetric(metric, "sessionId", sessionId)
+
+private suspend fun awaitMetric(metric: String, key: String, value: String): Int {
     repeat(200) {
-        val value = fetchText(
-            "http://127.0.0.1:18081/e2e/$metric?requestId=${encodeUriComponent(requestId)}",
+        val observed = fetchText(
+            "http://127.0.0.1:18081/e2e/$metric?$key=${encodeUriComponent(value)}",
         ).await().toString().toIntOrNull() ?: 0
-        if (value > 0) return value
+        if (observed > 0) return observed
         awaitRealTimeDelay(25).await()
     }
-    error("Gateway E2E metric '$metric' was not observed for request '$requestId'")
+    error("Gateway E2E metric '$metric' was not observed for $key '$value'")
 }
 
 private suspend fun withDatabase(block: suspend (String) -> Unit) {

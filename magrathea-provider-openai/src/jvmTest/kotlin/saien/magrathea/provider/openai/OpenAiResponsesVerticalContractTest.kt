@@ -32,8 +32,7 @@ import saien.magrathea.core.ToolExecutionResult
 import saien.magrathea.core.ToolExecutor
 import saien.magrathea.provider.api.InMemoryProviderRegistry
 import saien.magrathea.runtime.DefaultAgentRunner
-import saien.magrathea.runtime.InMemoryCheckpointStore
-import saien.magrathea.runtime.InMemorySessionStore
+import saien.magrathea.runtime.InMemoryAgentPersistence
 import saien.magrathea.runtime.InMemoryToolRegistry
 
 class OpenAiResponsesVerticalContractTest {
@@ -51,8 +50,7 @@ class OpenAiResponsesVerticalContractTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(listOf(tool)),
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
             credentialProvider = credentials,
             dispatcher = Dispatchers.Unconfined,
         )

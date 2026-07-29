@@ -40,7 +40,7 @@ class ContextManagementRuntimeIntegrationTest {
     @Test
     fun semanticCompaction_usesToolFreeProviderCallAndPersistsOnlyCanonicalHistory() = runTest {
         val provider = SummaryAwareProvider()
-        val sessions = InMemorySessionStore()
+        val persistence = InMemoryAgentPersistence()
         val request = request(
             messages = longHistory(),
             contextWindowTokens = 220,
@@ -52,7 +52,7 @@ class ContextManagementRuntimeIntegrationTest {
                 ).toProviderOptions(),
             ),
         )
-        val runner = runner(provider, sessions)
+        val runner = runner(provider, persistence)
 
         val events = runner.run(request).toList()
 
@@ -69,7 +69,7 @@ class ContextManagementRuntimeIntegrationTest {
                 .contains("compacted summary"),
         )
 
-        val saved = assertNotNull(sessions.loadSession(request.sessionId))
+        val saved = assertNotNull(persistence.load(request.sessionId)?.snapshot)
         assertNotNull(saved.state.contextManagement.compaction)
         assertTrue(longHistory().all { original -> saved.state.messages.any { it.id == original.id } })
         assertFalse(
@@ -83,7 +83,7 @@ class ContextManagementRuntimeIntegrationTest {
 
     @Test
     fun aNewRunnerForTheSameSession_restoresPersistentContextState() = runTest {
-        val sessions = InMemorySessionStore()
+        val persistence = InMemoryAgentPersistence()
         val sentinel = ContextManagementState(
             usageObservation = ContextUsageObservation(
                 inputTokens = 7,
@@ -101,15 +101,15 @@ class ContextManagementRuntimeIntegrationTest {
             sessionId = AgentSessionId("persistent-context-session"),
             messages = listOf(message("u1", "first")),
         )
-        runner(firstProvider, sessions, firstManager).run(firstRequest).toList()
+        runner(firstProvider, persistence, firstManager).run(firstRequest).toList()
 
-        val persisted = assertNotNull(sessions.loadSession(firstRequest.sessionId))
+        val persisted = assertNotNull(persistence.load(firstRequest.sessionId)?.snapshot)
         assertEquals(sentinel, persisted.state.contextManagement)
         val secondMessages = persisted.state.messages + message("u2", "second")
         val secondManager = RecordingContextManager()
         val secondRequest = firstRequest.copy(messages = secondMessages)
 
-        runner(CompleteProvider(), sessions, secondManager).run(secondRequest).toList()
+        runner(CompleteProvider(), persistence, secondManager).run(secondRequest).toList()
 
         assertEquals(sentinel, secondManager.seenStates.single())
     }
@@ -117,14 +117,14 @@ class ContextManagementRuntimeIntegrationTest {
     @Test
     fun contextLimitBeforeAnyOutput_forcesOneSemanticCompactionAndRetriesOnce() = runTest {
         val provider = OverflowThenCompleteProvider()
-        val sessions = InMemorySessionStore()
+        val persistence = InMemoryAgentPersistence()
         val request = request(
             sessionId = AgentSessionId("overflow-recovery-session"),
             messages = longHistory(),
             contextWindowTokens = null,
         )
 
-        val events = runner(provider, sessions).run(request).toList()
+        val events = runner(provider, persistence).run(request).toList()
 
         assertTrue(events.any { it is AgentEvent.Completed })
         assertTrue(events.none { it is AgentEvent.Failed })
@@ -132,7 +132,7 @@ class ContextManagementRuntimeIntegrationTest {
             listOf("model", "summary", "model"),
             provider.requests.map { if (it.isContextSummary()) "summary" else "model" },
         )
-        assertNotNull(sessions.loadSession(request.sessionId)?.state?.contextManagement?.compaction)
+        assertNotNull(persistence.load(request.sessionId)?.snapshot?.state?.contextManagement?.compaction)
     }
 
     @Test
@@ -144,7 +144,7 @@ class ContextManagementRuntimeIntegrationTest {
             contextWindowTokens = null,
         )
 
-        val events = runner(provider, InMemorySessionStore()).run(request).toList()
+        val events = runner(provider, InMemoryAgentPersistence()).run(request).toList()
 
         assertEquals(1, provider.requests.size)
         assertTrue(provider.requests.none(ProviderRequest::isContextSummary))
@@ -163,13 +163,12 @@ class ContextManagementRuntimeIntegrationTest {
 
     private fun runner(
         provider: ProviderAdapter,
-        sessions: InMemorySessionStore,
+        persistence: InMemoryAgentPersistence,
         contextManager: saien.magrathea.core.ContextManager? = null,
     ) = DefaultAgentRunner(
         providerRegistry = InMemoryProviderRegistry(listOf(provider)),
         toolRegistry = InMemoryToolRegistry(),
-        sessionStore = sessions,
-        checkpointStore = InMemoryCheckpointStore(),
+        persistence = persistence,
         contextManager = contextManager,
     )
 

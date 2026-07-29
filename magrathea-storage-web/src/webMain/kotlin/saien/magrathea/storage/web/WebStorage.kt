@@ -5,11 +5,11 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import saien.magrathea.core.AgentCheckpoint
 import saien.magrathea.core.AgentCheckpointCodec
+import saien.magrathea.core.AgentPersistence
+import saien.magrathea.core.AgentPersistenceRecord
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentSessionSnapshotCodec
-import saien.magrathea.core.CheckpointStore
-import saien.magrathea.core.SessionStore
 
 const val MAGRATHEA_WEB_DATABASE_VERSION: Int = 1
 const val DEFAULT_MAGRATHEA_WEB_DATABASE_NAME: String = "magrathea-core"
@@ -71,8 +71,8 @@ class MagratheaWebStore internal constructor(
 ) {
     private val lifecycle = WebStoreLifecycle()
 
-    val sessionStore: SessionStore = IndexedDbSessionStore(database, lifecycle, reporter, json)
-    val checkpointStore: CheckpointStore = IndexedDbCheckpointStore(database, lifecycle, reporter, json)
+    val persistence: AgentPersistence =
+        IndexedDbAgentPersistence(database, lifecycle, reporter, json)
 
     suspend fun close() {
         lifecycle.close()
@@ -105,34 +105,62 @@ private class WebStoreLifecycle {
     }
 }
 
-private class IndexedDbSessionStore(
+private class IndexedDbAgentPersistence(
     private val database: WebRecordDatabase,
     private val lifecycle: WebStoreLifecycle,
     private val reporter: WebStoredRecordCorruptionReporter,
     json: Json,
-) : SessionStore {
-    private val codec = AgentSessionSnapshotCodec(json)
+) : AgentPersistence {
+    private val sessionCodec = AgentSessionSnapshotCodec(json)
+    private val checkpointCodec = AgentCheckpointCodec(json)
 
-    override suspend fun saveSession(snapshot: AgentSessionSnapshot) = lifecycle.withOpenOperation {
-        val payload = try {
-            codec.encode(snapshot)
+    override suspend fun commit(
+        snapshot: AgentSessionSnapshot,
+        checkpoint: AgentCheckpoint?,
+    ) = lifecycle.withOpenOperation {
+        val record = try {
+            AgentPersistenceRecord(snapshot, checkpoint)
         } catch (_: Throwable) {
             throw WebStorageException(WebStorageFailure.INVALID_RECORD)
         }
-        database.put(WebStoredRecordKind.SESSION, snapshot.sessionId.value, payload)
+        val sessionPayload = try {
+            sessionCodec.encode(record.snapshot)
+        } catch (_: Throwable) {
+            throw WebStorageException(WebStorageFailure.INVALID_RECORD)
+        }
+        val checkpointPayload = try {
+            record.checkpoint?.let(checkpointCodec::encode)
+        } catch (_: Throwable) {
+            throw WebStorageException(WebStorageFailure.INVALID_RECORD)
+        }
+        database.commit(snapshot.sessionId.value, sessionPayload, checkpointPayload)
     }
 
-    override suspend fun loadSession(sessionId: AgentSessionId): AgentSessionSnapshot? = lifecycle.withOpenOperation {
-        val record = database.get(WebStoredRecordKind.SESSION, sessionId.value)
+    override suspend fun load(
+        sessionId: AgentSessionId,
+    ): AgentPersistenceRecord? = lifecycle.withOpenOperation {
+        val record = database.get(sessionId.value)
             ?: return@withOpenOperation null
-        decode(record)
+        val snapshot = decodeSession(record.session)
+        val checkpoint = record.checkpoint?.let(::decodeCheckpoint)
+        if (
+            checkpoint != null &&
+            (checkpoint.sessionId != snapshot.sessionId || checkpoint.runId != snapshot.runId)
+        ) {
+            throw corruption(
+                kind = WebStoredRecordKind.CHECKPOINT,
+                recordId = record.checkpoint.key,
+                reason = WebStoredRecordCorruptionReason.INDEX_MISMATCH,
+            )
+        }
+        AgentPersistenceRecord(snapshot, checkpoint)
     }
 
     override suspend fun listSessions(): List<AgentSessionSnapshot> = lifecycle.withOpenOperation {
-        database.getAll(WebStoredRecordKind.SESSION)
+        database.getAllSessions()
             .mapNotNull { record ->
                 try {
-                    decode(record)
+                    decodeSession(record)
                 } catch (error: WebStorageException) {
                     if (error.failure != WebStorageFailure.CORRUPT_RECORD) throw error
                     null
@@ -145,16 +173,16 @@ private class IndexedDbSessionStore(
     }
 
     override suspend fun deleteSession(sessionId: AgentSessionId) = lifecycle.withOpenOperation {
-        database.delete(WebStoredRecordKind.SESSION, sessionId.value)
+        database.delete(sessionId.value)
     }
 
     override suspend fun clear() = lifecycle.withOpenOperation {
-        database.clear(WebStoredRecordKind.SESSION)
+        database.clear()
     }
 
-    private fun decode(record: WebRawRecord): AgentSessionSnapshot {
+    private fun decodeSession(record: WebRawRecord): AgentSessionSnapshot {
         val snapshot = try {
-            codec.decode(record.payload ?: throw InvalidStoredPayload)
+            sessionCodec.decode(record.payload ?: throw InvalidStoredPayload)
         } catch (_: Throwable) {
             throw corruption(
                 kind = WebStoredRecordKind.SESSION,
@@ -172,61 +200,31 @@ private class IndexedDbSessionStore(
         return snapshot
     }
 
-    private fun corruption(
-        kind: WebStoredRecordKind,
-        recordId: String?,
-        reason: WebStoredRecordCorruptionReason,
-    ): WebStorageException = reportCorruption(reporter, kind, recordId, reason)
-}
-
-private class IndexedDbCheckpointStore(
-    private val database: WebRecordDatabase,
-    private val lifecycle: WebStoreLifecycle,
-    private val reporter: WebStoredRecordCorruptionReporter,
-    json: Json,
-) : CheckpointStore {
-    private val codec = AgentCheckpointCodec(json)
-
-    override suspend fun saveCheckpoint(checkpoint: AgentCheckpoint) = lifecycle.withOpenOperation {
-        val payload = try {
-            codec.encode(checkpoint)
-        } catch (_: Throwable) {
-            throw WebStorageException(WebStorageFailure.INVALID_RECORD)
-        }
-        database.put(WebStoredRecordKind.CHECKPOINT, checkpoint.sessionId.value, payload)
-    }
-
-    override suspend fun loadLatestCheckpoint(sessionId: AgentSessionId): AgentCheckpoint? = lifecycle.withOpenOperation {
-        val record = database.get(WebStoredRecordKind.CHECKPOINT, sessionId.value)
-            ?: return@withOpenOperation null
+    private fun decodeCheckpoint(record: WebRawRecord): AgentCheckpoint {
         val checkpoint = try {
-            codec.decode(record.payload ?: throw InvalidStoredPayload)
+            checkpointCodec.decode(record.payload ?: throw InvalidStoredPayload)
         } catch (_: Throwable) {
-            throw reportCorruption(
-                reporter = reporter,
+            throw corruption(
                 kind = WebStoredRecordKind.CHECKPOINT,
                 recordId = record.key,
                 reason = WebStoredRecordCorruptionReason.INVALID_PAYLOAD,
             )
         }
         if (record.key != checkpoint.sessionId.value) {
-            throw reportCorruption(
-                reporter = reporter,
+            throw corruption(
                 kind = WebStoredRecordKind.CHECKPOINT,
                 recordId = record.key,
                 reason = WebStoredRecordCorruptionReason.INDEX_MISMATCH,
             )
         }
-        checkpoint
+        return checkpoint
     }
 
-    override suspend fun deleteSession(sessionId: AgentSessionId) = lifecycle.withOpenOperation {
-        database.delete(WebStoredRecordKind.CHECKPOINT, sessionId.value)
-    }
-
-    override suspend fun clear() = lifecycle.withOpenOperation {
-        database.clear(WebStoredRecordKind.CHECKPOINT)
-    }
+    private fun corruption(
+        kind: WebStoredRecordKind,
+        recordId: String?,
+        reason: WebStoredRecordCorruptionReason,
+    ): WebStorageException = reportCorruption(reporter, kind, recordId, reason)
 }
 
 private fun reportCorruption(

@@ -29,6 +29,7 @@ and consumers declare the logical module coordinates they need.
 ## Capabilities
 
 - Streaming agent turns with tools, retry, cancellation, checkpoints, resume, and hard limits.
+- Recoverable interruption across backgrounding and process loss, with fail-closed Tool replay.
 - Token-aware semantic context compaction while preserving authoritative full history.
 - Gemini Interactions, OpenAI Responses/Chat Completions, and Anthropic Messages reference
   adapters, plus a public custom Provider SPI.
@@ -82,6 +83,7 @@ in [Verification Status](docs/verification-status.md) and [Known Issues](docs/kn
 - [Architecture](docs/architecture.md)
 - [Providers](docs/providers.md)
 - [Public API overview](docs/api-overview.md)
+- [Interruption and recovery](docs/recovery.md)
 - [Samples](samples)
 - [Documentation index](docs/README.md)
 

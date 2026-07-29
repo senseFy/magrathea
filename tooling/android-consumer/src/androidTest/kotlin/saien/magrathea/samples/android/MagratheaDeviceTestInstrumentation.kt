@@ -35,6 +35,9 @@ import saien.magrathea.core.AgentCheckpoint
 import saien.magrathea.core.AgentEngineConfig
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentRequest
+import saien.magrathea.core.AgentResumeCursor
+import saien.magrathea.core.AgentResumePhase
+import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentStateSnapshot
@@ -200,13 +203,13 @@ private object DeviceScenarios {
         val handle = AndroidMagratheaRoom.open(context, DATABASE_NAME, StoredRecordCorruptionReporter { })
         val primary = snapshot(PRIMARY_SESSION, messageCount = 2)
         val secondary = snapshot(SECONDARY_SESSION, messageCount = 3)
-        handle.sessionStore.clear()
-        handle.checkpointStore.clear()
-        handle.sessionStore.saveSession(primary)
-        handle.checkpointStore.saveCheckpoint(checkpoint(primary, turn = 2))
-        handle.sessionStore.saveSession(secondary)
-        handle.checkpointStore.saveCheckpoint(checkpoint(secondary, turn = 3))
-        check(handle.sessionStore.listSessions().map { it.sessionId.value }.toSet() == setOf(PRIMARY_SESSION, SECONDARY_SESSION))
+        handle.persistence.clear()
+        handle.persistence.commit(primary, checkpoint(primary, turn = 2))
+        handle.persistence.commit(secondary, checkpoint(secondary, turn = 3))
+        check(
+            handle.persistence.listSessions().map { it.sessionId.value }.toSet() ==
+                setOf(PRIMARY_SESSION, SECONDARY_SESSION),
+        )
         handle.close()
 
         val database = context.getDatabasePath(DATABASE_NAME)
@@ -233,18 +236,17 @@ private object DeviceScenarios {
         var handle = AndroidMagratheaRoom.open(context, DATABASE_NAME, StoredRecordCorruptionReporter { })
         val primaryId = AgentSessionId(PRIMARY_SESSION)
         val secondaryId = AgentSessionId(SECONDARY_SESSION)
-        check(handle.sessionStore.loadSession(primaryId) == snapshot(PRIMARY_SESSION, messageCount = 2))
-        check(handle.checkpointStore.loadLatestCheckpoint(primaryId) == checkpoint(snapshot(PRIMARY_SESSION, 2), 2))
-        check(handle.sessionStore.loadSession(secondaryId) == snapshot(SECONDARY_SESSION, messageCount = 3))
-        check(handle.checkpointStore.loadLatestCheckpoint(secondaryId) == checkpoint(snapshot(SECONDARY_SESSION, 3), 3))
+        val primary = snapshot(PRIMARY_SESSION, messageCount = 2)
+        val secondary = snapshot(SECONDARY_SESSION, messageCount = 3)
+        check(handle.persistence.load(primaryId)?.snapshot == primary)
+        check(handle.persistence.load(primaryId)?.checkpoint == checkpoint(primary, 2))
+        check(handle.persistence.load(secondaryId)?.snapshot == secondary)
+        check(handle.persistence.load(secondaryId)?.checkpoint == checkpoint(secondary, 3))
 
-        handle.sessionStore.deleteSession(primaryId)
-        handle.checkpointStore.deleteSession(primaryId)
-        handle.sessionStore.deleteSession(primaryId)
-        handle.checkpointStore.deleteSession(primaryId)
-        check(handle.sessionStore.loadSession(primaryId) == null)
-        check(handle.checkpointStore.loadLatestCheckpoint(primaryId) == null)
-        check(handle.sessionStore.listSessions().single().sessionId == secondaryId)
+        handle.persistence.deleteSession(primaryId)
+        handle.persistence.deleteSession(primaryId)
+        check(handle.persistence.load(primaryId) == null)
+        check(handle.persistence.listSessions().single().sessionId == secondaryId)
         handle.close()
         val roomReadMillis = elapsedMillis(roomStart)
 
@@ -255,9 +257,9 @@ private object DeviceScenarios {
             DATABASE_NAME,
             StoredRecordCorruptionReporter(corruptions::add),
         )
-        check(handle.sessionStore.listSessions().isEmpty())
+        check(handle.persistence.listSessions().isEmpty())
         val corruption = try {
-            handle.sessionStore.loadSession(secondaryId)
+            handle.persistence.load(secondaryId)
             error("Corrupt session was accepted")
         } catch (expected: StoredRecordCorruptionException) {
             expected
@@ -267,12 +269,10 @@ private object DeviceScenarios {
         check(corruptions.isNotEmpty())
         check(!corruptions.toString().contains(CORRUPTION_SECRET))
 
-        handle.sessionStore.clear()
-        handle.checkpointStore.clear()
-        handle.sessionStore.clear()
-        handle.checkpointStore.clear()
-        check(handle.sessionStore.listSessions().isEmpty())
-        check(handle.checkpointStore.loadLatestCheckpoint(secondaryId) == null)
+        handle.persistence.clear()
+        handle.persistence.clear()
+        check(handle.persistence.listSessions().isEmpty())
+        check(handle.persistence.load(secondaryId) == null)
         handle.close()
 
         credentialStore.remove(credentialRef)
@@ -491,16 +491,15 @@ private object DeviceScenarios {
         val readyFile = File(context.filesDir, READY_FILE_NAME)
         readyFile.delete()
         val handle = AndroidMagratheaRoom.open(context, PERFORMANCE_DATABASE_NAME, StoredRecordCorruptionReporter { })
-        handle.sessionStore.clear()
-        handle.checkpointStore.clear()
+        handle.persistence.clear()
         val stress = snapshot(PERFORMANCE_SESSION, STRESS_MESSAGE_COUNT)
         val pssBeforeKb = Debug.getPss().coerceAtLeast(0)
 
         val saveStarted = SystemClock.elapsedRealtimeNanos()
-        handle.sessionStore.saveSession(stress)
+        handle.persistence.commit(stress, checkpoint = null)
         val saveMillis = elapsedMillis(saveStarted)
         val loadStarted = SystemClock.elapsedRealtimeNanos()
-        val loaded = requireNotNull(handle.sessionStore.loadSession(stress.sessionId))
+        val loaded = requireNotNull(handle.persistence.load(stress.sessionId)?.snapshot)
         val loadMillis = elapsedMillis(loadStarted)
         check(loaded.state.messages.size == STRESS_MESSAGE_COUNT)
         check(loaded.request.messages.size == STRESS_MESSAGE_COUNT)
@@ -513,8 +512,7 @@ private object DeviceScenarios {
         )
         SystemClock.sleep(holdMillis)
 
-        handle.sessionStore.clear()
-        handle.checkpointStore.clear()
+        handle.persistence.clear()
         handle.close()
         context.deleteDatabase(PERFORMANCE_DATABASE_NAME)
         readyFile.delete()
@@ -605,6 +603,7 @@ private object DeviceScenarios {
         )
         return AgentSessionSnapshot(
             sessionId = sessionId,
+            runId = AgentRunId("$sessionIdValue-run"),
             request = request,
             state = AgentStateSnapshot(messages = messages),
             updatedAtEpochMs = 10_000L + messageCount,
@@ -613,7 +612,8 @@ private object DeviceScenarios {
 
     private fun checkpoint(snapshot: AgentSessionSnapshot, turn: Int): AgentCheckpoint = AgentCheckpoint(
         sessionId = snapshot.sessionId,
-        turn = turn,
+        runId = snapshot.runId,
+        cursor = AgentResumeCursor(turn, AgentResumePhase.MODEL_PENDING),
         state = snapshot.state.copy(turn = turn),
     )
 

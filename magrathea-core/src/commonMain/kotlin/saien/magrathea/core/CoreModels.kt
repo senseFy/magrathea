@@ -24,6 +24,20 @@ data class AgentSessionId(val value: String) {
     }
 }
 
+/** Stable identity for one logical run within a longer-lived Agent session. */
+@Serializable
+data class AgentRunId(val value: String) {
+    init {
+        require(value.isNotBlank()) { "Agent run ID must not be blank" }
+    }
+
+    companion object {
+        fun create(): AgentRunId = create(SystemIdGenerator)
+
+        fun create(idGenerator: IdGenerator): AgentRunId = AgentRunId(idGenerator.nextId())
+    }
+}
+
 @Serializable
 enum class ToolExecutionMode {
     SEQUENTIAL,
@@ -237,9 +251,84 @@ data class ModelDescriptor(
 @Serializable
 data class AgentCheckpoint(
     val sessionId: AgentSessionId,
-    val turn: Int,
+    val runId: AgentRunId,
+    val cursor: AgentResumeCursor,
     val state: AgentStateSnapshot,
-)
+    val toolExecutions: List<ToolExecutionRecord> = emptyList(),
+) {
+    val turn: Int
+        get() = cursor.turn
+
+    init {
+        require(state.turn == cursor.turn) {
+            "Checkpoint state turn must match its resume cursor"
+        }
+        require(toolExecutions.map(ToolExecutionRecord::executionId).distinct().size == toolExecutions.size) {
+            "Checkpoint Tool execution IDs must be unique"
+        }
+        require(
+            toolExecutions
+                .map { Triple(it.toolCallId, it.toolName, it.callOrdinal) }
+                .distinct()
+                .size == toolExecutions.size,
+        ) {
+            "Checkpoint Tool execution identities must be unique"
+        }
+    }
+}
+
+/** Exact durable boundary from which a logical run can be recovered. */
+@Serializable
+data class AgentResumeCursor(
+    val turn: Int,
+    val phase: AgentResumePhase,
+    val providerAttempt: Int = 0,
+) {
+    init {
+        require(turn >= 0) { "Resume cursor turn must not be negative" }
+        require(providerAttempt >= 0) { "Provider attempt must not be negative" }
+    }
+}
+
+@Serializable
+enum class AgentResumePhase {
+    TURN_PREPARING,
+    MODEL_PENDING,
+    TOOLS_PENDING,
+    TURN_COMMITTED,
+}
+
+@Serializable
+enum class ToolExecutionState {
+    PENDING,
+    STARTED,
+    COMPLETED,
+}
+
+/**
+ * Durable evidence for one Tool execution. A persisted `STARTED` record has an unknown outcome
+ * after process death and is replayed only when the registered executor explicitly permits it.
+ */
+@Serializable
+data class ToolExecutionRecord(
+    val executionId: String,
+    val toolCallId: String,
+    val toolName: String,
+    val callOrdinal: Int,
+    val state: ToolExecutionState,
+    val result: ToolExecutionResult? = null,
+) {
+    init {
+        require(executionId.isNotBlank()) { "Tool execution ID must not be blank" }
+        require(callOrdinal > 0) { "Tool call ordinal must be positive" }
+        require((state == ToolExecutionState.COMPLETED) == (result != null)) {
+            "Completed Tool executions require a result and incomplete executions must not carry one"
+        }
+        require(result == null || (result.toolCallId == toolCallId && result.toolName == toolName)) {
+            "Tool execution result identity must match its journal record"
+        }
+    }
+}
 
 /**
  * Authoritative state persisted for one logical Agent run.
@@ -344,6 +433,7 @@ enum class AgentStatus {
     IDLE,
     RUNNING,
     WAITING_FOR_TOOLS,
+    INTERRUPTED,
     COMPLETED,
     FAILED,
     CANCELLED,
@@ -374,6 +464,7 @@ enum class MessageRole {
 enum class StopReason {
     COMPLETED,
     TOOL_CALLS,
+    INTERRUPTED,
     CANCELLED,
     ERROR,
     MAX_TURNS,
@@ -553,12 +644,25 @@ data class ToolDefinition(
     }
 }
 
+/** One Tool invocation; [executionId] remains stable when a replay-safe call is recovered. */
 @Serializable
 data class ToolExecutionRequest(
     val sessionId: AgentSessionId,
+    val runId: AgentRunId,
+    val executionId: String,
     val assistantMessage: AgentMessage,
     val toolCall: ToolCallPart,
-)
+) {
+    init {
+        require(executionId.isNotBlank()) { "Tool execution ID must not be blank" }
+    }
+}
+
+/** Host-owned assertion about replaying a Tool whose previous outcome is unknown. */
+enum class ToolRecoveryPolicy {
+    FAIL_CLOSED,
+    REPLAY_SAFE,
+}
 
 @Serializable
 data class ToolExecutionResult(

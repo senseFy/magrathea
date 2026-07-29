@@ -216,8 +216,7 @@ class ToolSafetyContractTest {
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = registry,
-            sessionStore = InMemorySessionStore(),
-            checkpointStore = InMemoryCheckpointStore(),
+            persistence = InMemoryAgentPersistence(),
             permissionGateway = permissionGateway,
             approvalGateway = approvalGateway,
         )

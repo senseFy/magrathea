@@ -12,6 +12,7 @@ import saien.magrathea.core.ToolDefinition
 import saien.magrathea.core.ToolExecutionRequest
 import saien.magrathea.core.ToolExecutionResult
 import saien.magrathea.core.ToolExecutor
+import saien.magrathea.core.ToolRecoveryPolicy
 
 enum class WebSearchDepth {
     QUICK,
@@ -183,6 +184,8 @@ class WebSearchTool(
     requiresPermission: String? = null,
     requiresApproval: Boolean = false,
 ) : ToolExecutor {
+    override val recoveryPolicy: ToolRecoveryPolicy = ToolRecoveryPolicy.REPLAY_SAFE
+
     val policy: WebSearchPolicy = policy.copy(
         allowedDomains = policy.allowedDomains.toList(),
         blockedDomains = policy.blockedDomains.toList(),

@@ -14,7 +14,7 @@ Platform behavior is supplied through narrow adapters and explicitly owned handl
   the read-only `CredentialProvider` boundary.
 - Room entities, DAOs, generated database classes, Android `Context`, and platform security types do
   not enter Core or the Chatbot DTO surface.
-- Opening a store returns one owner for its Session and Checkpoint stores. Close is idempotent and
+- Opening a store returns one owner for its atomic `AgentPersistence`. Close is idempotent and
   prevents continued use.
 - A facade closes active sessions before its Provider transport and persistence handles. Resources
   created by a composition root are closed exactly once.

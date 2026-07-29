@@ -37,5 +37,5 @@ Long sessions are bounded by token budget rather than message count, while full 
 available for UI, audit, regeneration, and future re-compaction. Semantic compaction has an explicit
 Provider cost and may fail; its usage and typed failure are therefore public runtime state.
 
-Persistent context state is part of storage schema v3 and participates in the same strict fixture,
-version, and unknown-field validation as the rest of the stored envelope.
+Persistent context state participates in the same strict fixtures, version checks, and unknown-field
+validation as the rest of the stored envelope.

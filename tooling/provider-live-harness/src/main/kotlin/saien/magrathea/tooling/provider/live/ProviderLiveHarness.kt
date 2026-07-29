@@ -47,8 +47,7 @@ import saien.magrathea.provider.gemini.GeminiProviderAdapter
 import saien.magrathea.provider.openai.OpenAiProviderAdapter
 import saien.magrathea.provider.openai.OpenAiProviderProfile
 import saien.magrathea.runtime.DefaultAgentRunner
-import saien.magrathea.runtime.InMemoryCheckpointStore
-import saien.magrathea.runtime.InMemorySessionStore
+import saien.magrathea.runtime.InMemoryAgentPersistence
 import saien.magrathea.runtime.InMemoryToolRegistry
 import saien.magrathea.storage.room.JvmMagratheaRoom
 import saien.magrathea.storage.room.StoredRecordCorruptionReporter
@@ -78,13 +77,11 @@ fun main(args: Array<String>) = runBlocking {
     }
     val providerRegistry = InMemoryProviderRegistry(listOf(config.createProviderAdapter()))
     val tools = listOf(EchoTextTool(), ClockNowTool(), ReadFileSummaryTool(), FetchUrlTextTool())
-    val sessionStore = InMemorySessionStore()
-    val checkpointStore = InMemoryCheckpointStore()
+    val persistence = InMemoryAgentPersistence()
     val runner = DefaultAgentRunner(
         providerRegistry = providerRegistry,
         toolRegistry = InMemoryToolRegistry(tools),
-        sessionStore = sessionStore,
-        checkpointStore = checkpointStore,
+        persistence = persistence,
         credentialProvider = credentialProvider,
     )
 
@@ -105,7 +102,7 @@ fun main(args: Array<String>) = runBlocking {
                 ),
             )
             "mixed-tools" -> runScenario(runner, scenarioRequest(config, providerKey, mixedToolsPrompt(config), toolDefinitions(tools)))
-            "resume" -> runResumeScenario(runner, sessionStore, checkpointStore, config, providerKey, tools)
+            "resume" -> runResumeScenario(runner, persistence, config, providerKey, tools)
             "x-search" -> runScenario(runner, scenarioRequest(config, providerKey, xSearchPrompt(config)))
             else -> error("Unknown scenario: ${config.scenario}")
         }
@@ -128,8 +125,7 @@ private suspend fun runFacadeChat(
     val runner = DefaultAgentRunner(
         providerRegistry = InMemoryProviderRegistry(listOf(provider)),
         toolRegistry = InMemoryToolRegistry(),
-        sessionStore = stores.sessionStore,
-        checkpointStore = stores.checkpointStore,
+        persistence = stores.persistence,
         credentialProvider = credentialProvider,
     )
     val client = createChatbotClient(
@@ -146,8 +142,7 @@ private suspend fun runFacadeChat(
                 )
             },
         ),
-        sessionStore = stores.sessionStore,
-        checkpointStore = stores.checkpointStore,
+        persistence = stores.persistence,
         closeResources = {
             try {
                 provider.close()
@@ -193,7 +188,12 @@ private suspend fun runFacadeChat(
 }
 
 private fun ChatbotStatus.isTerminal(): Boolean = when (this) {
-    ChatbotStatus.COMPLETED, ChatbotStatus.FAILED, ChatbotStatus.CANCELLED -> true
+    ChatbotStatus.COMPLETED,
+    ChatbotStatus.FAILED,
+    ChatbotStatus.CANCELLED,
+    ChatbotStatus.INTERRUPTED,
+    ChatbotStatus.RECOVERY_BLOCKED,
+    -> true
     ChatbotStatus.IDLE, ChatbotStatus.RUNNING, ChatbotStatus.WAITING_FOR_TOOL -> false
 }
 
@@ -220,8 +220,7 @@ private suspend fun runScenario(runner: DefaultAgentRunner, request: AgentReques
 
 private suspend fun runResumeScenario(
     runner: DefaultAgentRunner,
-    sessionStore: InMemorySessionStore,
-    checkpointStore: InMemoryCheckpointStore,
+    persistence: InMemoryAgentPersistence,
     config: ProviderLiveHarnessConfig,
     providerKey: String,
     tools: List<saien.magrathea.core.ToolExecutor>,
@@ -235,8 +234,9 @@ private suspend fun runResumeScenario(
         if (event is AgentEvent.Started) sessionId = event.sessionId
         if (event is AgentEvent.Completed) completionSeen = true
     }
-    val session = sessionStore.loadSession(sessionId)
-    val checkpoint = checkpointStore.loadLatestCheckpoint(sessionId)
+    val record = persistence.load(sessionId)
+    val session = record?.snapshot
+    val checkpoint = record?.checkpoint
     println("[resume] storedSession=${session != null} storedCheckpoint=${checkpoint != null} turn=${checkpoint?.turn}")
     if (!completionSeen) {
         runner.resume(sessionId).collect { event ->
@@ -250,6 +250,10 @@ internal fun requireSuccessfulProviderLiveEvent(event: AgentEvent) {
     when (event) {
         is AgentEvent.Failed -> error("Provider live scenario failed (${event.code.name})")
         is AgentEvent.Cancelled -> error("Provider live scenario was cancelled")
+        is AgentEvent.Interrupted ->
+            error("Provider live scenario was interrupted (${event.interruption.reason.name})")
+        is AgentEvent.RecoveryBlocked ->
+            error("Provider live scenario recovery was blocked (${event.reason.name})")
         else -> Unit
     }
 }
@@ -336,7 +340,9 @@ private fun printEvent(event: AgentEvent) {
 }
 
 internal fun formatProviderLiveEvent(event: AgentEvent): List<String> = when (event) {
-    is AgentEvent.Started -> listOf("[event] started session=${event.sessionId.value}")
+    is AgentEvent.Started -> listOf(
+        "[event] started session=${event.sessionId.value} run=${event.runId.value}",
+    )
     is AgentEvent.TurnStarted -> listOf("[event] turn=${event.turn}")
     is AgentEvent.ContextTransformed -> listOf("[event] context messages=${event.messageCount}")
     is AgentEvent.Debug -> listOf("[event] debug label=${event.label} payloadChars=${event.payload.length}")
@@ -388,6 +394,13 @@ internal fun formatProviderLiveEvent(event: AgentEvent): List<String> = when (ev
         }
     is AgentEvent.Failed -> listOf("[event] failed code=${event.code.name}")
     is AgentEvent.Cancelled -> listOf("[event] cancelled")
+    is AgentEvent.Interrupted -> listOf(
+        "[event] interrupted reason=${event.interruption.reason.name} " +
+            "turn=${event.state.turn} status=${event.state.status.name}",
+    )
+    is AgentEvent.RecoveryBlocked -> listOf(
+        "[event] recovery-blocked reason=${event.reason.name}",
+    )
 }
 
 private fun chatPrompt(config: ProviderLiveHarnessConfig): String =

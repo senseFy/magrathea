@@ -28,6 +28,7 @@ Magrathea 是一个 Kotlin Multiplatform Agent Runtime，用于在 Android、JVM
 ## 能力
 
 - 支持 Tool、retry、cancel、checkpoint、resume 与硬性资源限制的流式 Agent turn。
+- 支持应用切后台与进程丢失后的可恢复中断，并对 Tool 重放默认采用 fail-closed 策略。
 - 保留权威完整历史的 token-aware 语义上下文压缩。
 - Gemini Interactions、OpenAI Responses/Chat Completions、Anthropic Messages 参考适配器，以及
   公开的自定义 Provider SPI。
@@ -79,6 +80,7 @@ Desktop 支持通过 JVM embedding 提供。详细证据与限制维护在
 - [架构](docs/architecture.md)
 - [Provider 配置](docs/providers.md)
 - [公共 API 概览](docs/api-overview.md)
+- [中断与恢复](docs/recovery.md)
 - [Samples](samples)
 - [文档索引](docs/README.md)
 
