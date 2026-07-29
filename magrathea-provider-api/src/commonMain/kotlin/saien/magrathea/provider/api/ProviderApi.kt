@@ -35,9 +35,17 @@ import saien.magrathea.core.ToolResultPart
 
 /** Converts one Provider wire protocol into the canonical Magrathea event lifecycle. */
 interface ProviderAdapter {
+    /** Runtime routing key and credential namespace for this configured Provider instance. */
     val key: String
-    val inputCapabilities: ProviderInputCapabilities
-        get() = ProviderInputCapabilities()
+
+    /** Typed configuration family consumed by this adapter, independent from [key]. */
+    val optionsFamily: String?
+        get() = null
+
+    /** Protocol encoder capabilities for the effective request configuration. */
+    fun inputCapabilities(config: ProviderTransportConfig? = null): ProviderInputCapabilities =
+        ProviderInputCapabilities()
+
     suspend fun generate(request: ProviderRequest): Flow<ProviderChunk>
     fun close() = Unit
 }
@@ -115,9 +123,9 @@ fun ProviderTimeoutConfig.toHttpTimeoutConfig(): HttpTimeoutConfig = HttpTimeout
 @Serializable
 sealed interface ProviderTransportConfig
 
-/** Wire contracts supported by the OpenAI provider family. */
+/** Wire protocols supported by the OpenAI protocol family. */
 @Serializable
-enum class OpenAiApi {
+enum class OpenAiWireProtocol {
     @SerialName("responses")
     RESPONSES,
 
@@ -172,7 +180,8 @@ data class OpenAiXSearchToolConfig(
 @Serializable
 @SerialName("openai")
 data class OpenAiTransportConfig(
-    val api: OpenAiApi = OpenAiApi.RESPONSES,
+    /** Per-request protocol selection; `null` uses the Provider profile default. */
+    val protocol: OpenAiWireProtocol? = null,
     val authentication: OpenAiAuthentication = OpenAiAuthentication.BEARER,
     val instructions: String? = null,
     val reasoningEffort: String? = null,
@@ -184,7 +193,7 @@ data class OpenAiTransportConfig(
     val maxToolTurns: Int? = null,
 ) : ProviderTransportConfig {
     init {
-        require(api == OpenAiApi.RESPONSES || (hostedTools.isEmpty() && maxToolTurns == null)) {
+        require(protocol != OpenAiWireProtocol.CHAT_COMPLETIONS || (hostedTools.isEmpty() && maxToolTurns == null)) {
             "OpenAI hosted Tools are supported only by the Responses API"
         }
         require(hostedTools.size <= MAX_OPENAI_HOSTED_TOOLS) {
@@ -837,29 +846,28 @@ private val toolArgumentJson = Json
 
 fun compileProviderTransportConfig(
     config: saien.magrathea.core.ProviderConfig,
-    provider: String? = null,
+    expectedFamily: String?,
 ): ProviderTransportConfig? = when (val options = config.options) {
     null -> null
-    else -> when (options.family) {
-        "openai" -> {
-            require(provider == null || provider in OPEN_AI_PROVIDER_FAMILY) {
-                "OpenAI provider options cannot be used with provider $provider"
-            }
-            providerOptionsJson.decodeFromJsonElement(OpenAiTransportConfig.serializer(), options.values)
+    else -> {
+        require(expectedFamily != null) {
+            "Provider options family ${options.family} cannot be used because the adapter declares no options family"
         }
-        "gemini" -> {
-            require(provider == null || provider in GEMINI_PROVIDER_FAMILY) {
-                "Gemini provider options cannot be used with provider $provider"
-            }
-            providerOptionsJson.decodeFromJsonElement(GeminiTransportConfig.serializer(), options.values)
+        require(options.family == expectedFamily) {
+            "Provider options family ${options.family} cannot be used with adapter family $expectedFamily"
         }
-        "anthropic" -> {
-            require(provider == null || provider in ANTHROPIC_PROVIDER_FAMILY) {
-                "Anthropic provider options cannot be used with provider $provider"
+        when (options.family) {
+            "openai" -> {
+                providerOptionsJson.decodeFromJsonElement(OpenAiTransportConfig.serializer(), options.values)
             }
-            providerOptionsJson.decodeFromJsonElement(AnthropicTransportConfig.serializer(), options.values)
+            "gemini" -> {
+                providerOptionsJson.decodeFromJsonElement(GeminiTransportConfig.serializer(), options.values)
+            }
+            "anthropic" -> {
+                providerOptionsJson.decodeFromJsonElement(AnthropicTransportConfig.serializer(), options.values)
+            }
+            else -> throw IllegalArgumentException("Unknown provider options family ${options.family}")
         }
-        else -> throw IllegalArgumentException("Unknown provider options family ${options.family}")
     }
 }
 
@@ -882,10 +890,6 @@ private val providerOptionsJson = Json {
     encodeDefaults = false
     ignoreUnknownKeys = false
 }
-
-private val OPEN_AI_PROVIDER_FAMILY = setOf("openai")
-private val GEMINI_PROVIDER_FAMILY = setOf("gemini")
-private val ANTHROPIC_PROVIDER_FAMILY = setOf("anthropic")
 
 private fun validateXHandles(handles: List<String>) {
     require(handles.size <= MAX_X_SEARCH_HANDLES) {

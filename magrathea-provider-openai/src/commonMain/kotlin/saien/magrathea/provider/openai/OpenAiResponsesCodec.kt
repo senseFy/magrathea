@@ -16,12 +16,9 @@ import saien.magrathea.core.StopReason
 import saien.magrathea.core.ReasoningContentKind
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.provider.api.ProviderChunk
-import saien.magrathea.provider.api.ProviderContextLimitException
 import saien.magrathea.provider.api.ProviderEvent
 import saien.magrathea.provider.api.ProviderProtocolException
-import saien.magrathea.provider.api.ProviderServerException
 import saien.magrathea.provider.api.ProviderUsage
-import saien.magrathea.provider.api.isProviderContextLimitError
 import saien.magrathea.provider.api.PROVIDER_CITATIONS_METADATA_KEY
 import saien.magrathea.provider.api.validateSemantics
 
@@ -29,7 +26,11 @@ internal class OpenAiResponsesCodec(
     private val providerKey: String,
     private val model: String,
     private val json: Json = Json,
-    private val allowServerManagedCustomToolCalls: Boolean = false,
+    private val dialectPolicy: OpenAiResponsesDialectPolicy = OpenAiResponsesDialectPolicy(
+        reconcileReasoningAtItemBoundary = false,
+        allowXSearchOutput = false,
+        allowServerManagedCustomToolCalls = false,
+    ),
 ) {
     private var responseId: String? = null
     private var created = false
@@ -41,6 +42,9 @@ internal class OpenAiResponsesCodec(
     fun decodeNonStreaming(payload: String): ProviderChunk {
         ensurePristine()
         val response = parseObject(payload, "OpenAI response")
+        if (response.optionalString("status") == "failed") {
+            decodeFailure(response)
+        }
         responseId = response.requiredString("id")
         created = true
         val output = response.requiredArray("output")
@@ -166,6 +170,7 @@ internal class OpenAiResponsesCodec(
                 listOf(ProviderEvent.ToolCallStart(active.partialToolCall()))
             }
             "x_search_call" -> {
+                requireXSearchOutput()
                 item.validateXSearchCall(final = false)
                 emptyList()
             }
@@ -182,6 +187,7 @@ internal class OpenAiResponsesCodec(
     }
 
     private fun decodeXSearchProgress(root: JsonObject): List<ProviderEvent> {
+        requireXSearchOutput()
         val active = root.activeItem()
         if (active.type != "x_search_call") {
             protocolFailure("OpenAI X Search progress belongs to a non-X-Search item")
@@ -431,6 +437,7 @@ internal class OpenAiResponsesCodec(
                             wireKind = ReasoningWireKind.SUMMARY,
                             contentKind = ReasoningContentKind.SUMMARY,
                             finalParts = finalContent.summary,
+                            allowItemBoundaryReconciliation = dialectPolicy.reconcileReasoningAtItemBoundary,
                         ),
                     )
                     addAll(
@@ -438,6 +445,7 @@ internal class OpenAiResponsesCodec(
                             wireKind = ReasoningWireKind.TEXT,
                             contentKind = ReasoningContentKind.TEXT,
                             finalParts = finalContent.content,
+                            allowItemBoundaryReconciliation = dialectPolicy.reconcileReasoningAtItemBoundary,
                         ),
                     )
                     if (redacted) {
@@ -457,6 +465,7 @@ internal class OpenAiResponsesCodec(
                 emptyList<ProviderEvent>()
             }
             "x_search_call" -> {
+                requireXSearchOutput()
                 item.validateXSearchCall(final = true)
                 emptyList()
             }
@@ -499,13 +508,15 @@ internal class OpenAiResponsesCodec(
         val response = root["response"] as? JsonObject
         response?.optionalString("id")?.let(::requireResponseId)
         terminal = true
-        val error = (response?.get("error") as? JsonObject) ?: (root["error"] as? JsonObject)
-        val code = error?.optionalString("code") ?: "unknown"
-        val providerMessage = error?.optionalString("message")
-        if (isProviderContextLimitError("$code ${providerMessage.orEmpty()}")) {
-            throw ProviderContextLimitException()
-        }
-        throw ProviderServerException("OpenAI response failed with code $code", statusCode = 500)
+        val envelope = response ?: root
+        val error = (envelope["error"] as? JsonObject) ?: (root["error"] as? JsonObject)
+        val metadata = error?.get("metadata") as? JsonObject
+        throwOpenAiInBandFailure(
+            label = "OpenAI Responses",
+            code = error?.optionalString("code") ?: error?.optionalString("type"),
+            errorType = envelope.optionalString("error_type") ?: metadata?.optionalString("error_type"),
+            providerMessage = error?.optionalString("message"),
+        )
     }
 
     private fun decodeCompleteItem(item: JsonObject): List<ProviderEvent> = when (val type = item.requiredString("type")) {
@@ -552,6 +563,7 @@ internal class OpenAiResponsesCodec(
             )
         }
         "x_search_call" -> {
+            requireXSearchOutput()
             item.validateXSearchCall(final = true)
             emptyList()
         }
@@ -616,8 +628,14 @@ internal class OpenAiResponsesCodec(
     }
 
     private fun requireServerManagedCustomToolCalls() {
-        if (!allowServerManagedCustomToolCalls) {
+        if (!dialectPolicy.allowServerManagedCustomToolCalls) {
             protocolFailure("Unsupported OpenAI output item type custom_tool_call")
+        }
+    }
+
+    private fun requireXSearchOutput() {
+        if (!dialectPolicy.allowXSearchOutput) {
+            protocolFailure("Unsupported OpenAI output item type x_search_call")
         }
     }
 }
@@ -756,11 +774,15 @@ private data class ActiveOutputItem(
         wireKind: ReasoningWireKind,
         contentKind: ReasoningContentKind,
         finalParts: List<String>,
+        allowItemBoundaryReconciliation: Boolean,
     ): List<ProviderEvent> {
         val streamedParts = reasoningPartsFor(wireKind)
         if (streamedParts.isEmpty()) return finalParts.completeReasoningEvents(contentKind)
         if (streamedParts.size != finalParts.size) {
             protocolFailure("OpenAI final reasoning item changed its content-part count")
+        }
+        if (!allowItemBoundaryReconciliation && streamedParts.any { part -> !part.boundaryDone }) {
+            protocolFailure("OpenAI reasoning item ended before its nested content lifecycle completed")
         }
 
         return buildList {

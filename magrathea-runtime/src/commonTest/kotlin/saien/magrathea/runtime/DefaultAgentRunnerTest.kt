@@ -41,9 +41,12 @@ import saien.magrathea.core.ToolResultPart
 import saien.magrathea.core.TypedTool
 import saien.magrathea.core.citations
 import saien.magrathea.provider.api.InMemoryProviderRegistry
+import saien.magrathea.provider.api.OpenAiTransportConfig
+import saien.magrathea.provider.api.OpenAiWireProtocol
 import saien.magrathea.provider.api.ProviderAdapter
 import saien.magrathea.provider.api.ProviderChunk
 import saien.magrathea.provider.api.ProviderEvent
+import saien.magrathea.provider.api.toProviderOptions
 
 class DefaultAgentRunnerTest {
     class FakeEchoProvider : ProviderAdapter {
@@ -195,6 +198,20 @@ class DefaultAgentRunnerTest {
         }
     }
 
+    class OpenAiFamilyRecordingProvider : ProviderAdapter {
+        override val key: String = "openrouter"
+        override val optionsFamily: String = "openai"
+        var request: saien.magrathea.provider.api.ProviderRequest? = null
+
+        override suspend fun generate(
+            request: saien.magrathea.provider.api.ProviderRequest,
+        ): Flow<ProviderChunk> =
+            flow {
+                this@OpenAiFamilyRecordingProvider.request = request
+                emit(providerChunk(text = "done", completed = true))
+            }
+    }
+
     class DenyingApprovalGateway : ToolApprovalGateway {
         var requestCount: Int = 0
 
@@ -219,6 +236,33 @@ class DefaultAgentRunnerTest {
             )
         ).toList()
         assertTrue(events.any { it is AgentEvent.Completed })
+    }
+
+    @Test
+    fun providerIdentityCanConsumeADifferentTypedOptionsFamily() = runTest {
+        val provider = OpenAiFamilyRecordingProvider()
+        val runner = DefaultAgentRunner(
+            providerRegistry = InMemoryProviderRegistry(listOf(provider)),
+            toolRegistry = InMemoryToolRegistry(),
+            sessionStore = InMemorySessionStore(),
+            checkpointStore = InMemoryCheckpointStore(),
+        )
+        val options = OpenAiTransportConfig(
+            protocol = OpenAiWireProtocol.RESPONSES,
+            reasoningEffort = "high",
+        )
+
+        runner.run(
+            AgentRequest(
+                messages = listOf(AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("hello")))),
+                model = ModelDescriptor(provider = "openrouter", model = "provider/model"),
+                engine = AgentEngineConfig(
+                    provider = ProviderConfig(options = options.toProviderOptions()),
+                ),
+            ),
+        ).toList()
+
+        assertEquals(options, provider.request?.typedConfig)
     }
 
     @Test

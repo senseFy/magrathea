@@ -4,7 +4,8 @@ public final class saien/magrathea/provider/anthropic/AnthropicProviderAdapter :
 	public synthetic fun <init> (Lsaien/magrathea/provider/api/HttpTransport;Lkotlinx/serialization/json/Json;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun close ()V
 	public fun generate (Lsaien/magrathea/provider/api/ProviderRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun getInputCapabilities ()Lsaien/magrathea/provider/api/ProviderInputCapabilities;
 	public fun getKey ()Ljava/lang/String;
+	public fun getOptionsFamily ()Ljava/lang/String;
+	public fun inputCapabilities (Lsaien/magrathea/provider/api/ProviderTransportConfig;)Lsaien/magrathea/provider/api/ProviderInputCapabilities;
 }
 

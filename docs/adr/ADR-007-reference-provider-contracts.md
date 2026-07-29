@@ -18,25 +18,31 @@ Magrathea maintains three reference adapter modules covering four explicit wire 
 - the portable subset of OpenAI Chat Completions;
 - Anthropic Messages API.
 
+Provider adapters expose four related values:
+
+- `ProviderAdapter.key` identifies the Provider for Runtime routing, models, and credentials;
+- `ProviderAdapter.optionsFamily` selects its typed configuration schema;
+- the wire protocol selects the request builder and codec;
+- a dialect describes Provider-specific behavior within that protocol.
+
+For OpenAI-family services, `OpenAiProviderProfile` binds Provider identity, default
+`OpenAiWireProtocol`, endpoints, and dialect. The built-in profiles are OpenAI with Responses,
+OpenRouter with Chat Completions, and xAI with Responses. All use the `openai` options family.
+`OpenAiTransportConfig.protocol` can override a profile default for a request.
+
 Each selected contract owns its request model, codec, stream state machine, failure mapping, and
-replay metadata. The OpenAI module selects Responses or Chat Completions explicitly through
-`OpenAiTransportConfig.api`; it never infers one from an endpoint. The adapter key identifies a
-strict wire-protocol family, not an exclusive vendor hostname. Every contract has a canonical
-endpoint and authentication default, while an application may supply a full compatible endpoint
-and one of the adapter's explicit authentication modes. Adapters emit only canonical
-`ProviderEvent` values. Runtime and Chatbot code never read Provider wire JSON.
+replay metadata. Adapters emit canonical `ProviderEvent` values consumed by Runtime and Chatbot.
 
-Each adapter also exposes an `inputCapabilities` upper bound for attachment MIME envelopes its
-codec can encode. This is protocol metadata, not model discovery: products intersect it with their
-own policy and model-specific metadata when available. Custom adapters default to no attachment
-support and opt in explicitly. Request codecs remain authoritative and reject unsupported or
-internally inconsistent attachment input even when a host omitted preflight validation.
+Each adapter also exposes `inputCapabilities(config)` as an upper bound for attachment MIME
+envelopes the effective protocol can encode. This is protocol metadata, not model discovery:
+products intersect it with their own policy and model-specific metadata when available. Custom
+adapters default to no attachment support and opt in explicitly. Request codecs validate the
+attachment input they encode.
 
-Reference adapters model exactly the selected wire contract and are not subclassing bases for
-service-specific variants. Pointing an adapter at another service asserts that the service implements
-that exact request, streaming, tool, response, and error contract; a compatibility label alone is not
-such evidence. Responses and Chat Completions share one module but not a codec. A distinct protocol
-integrates through `ProviderAdapter` composition.
+Reference codecs model the selected wire contract. Responses and Chat Completions share one module
+but use separate codecs. OpenRouter maps `response.error` into the Responses error lifecycle, and
+xAI maps hosted X Search activity through its dialect. Distinct protocols integrate through
+`ProviderAdapter`.
 
 Provider-authoritative metadata is retained for replay with the same Provider and model. A
 cross-Provider or cross-model replay rebuilds only portable text and tool semantics. Tool calls
@@ -73,12 +79,9 @@ structures.
 Streaming codecs preserve strict lifecycle validation while accepting standard transport-envelope
 variants. Responses events may omit the optional SSE event name; when present it must match the
 payload type. Responses keeps `summary_text` and `reasoning_text` content-part lifecycles distinct.
-Some compatible Responses streams omit a reasoning part's nested text/part completion events while
-still supplying the complete reasoning item at `response.output_item.done`. That authoritative outer
-boundary may finalize an already-started visible reasoning block only when item identity, kind,
-part count, index order, and the streamed-text prefix all agree. Any authoritative suffix is emitted
-once before the canonical reasoning end; an explicitly completed part may not change. This
-reconciliation is reasoning-specific and does not weaken message or Tool finalization.
+OpenRouter and xAI Responses streams may supply the complete reasoning item at
+`response.output_item.done` without nested completion events. Their dialects reconcile that item
+when identity, kind, part count, order, and streamed prefix agree.
 Chat Completions assembles indexed text, normalized `reasoning_details`, legacy reasoning text, and
 tool-call deltas and requires
 its `[DONE]` terminal sentinel. Responses and Messages accept a single post-terminal `[DONE]`.

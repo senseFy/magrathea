@@ -14,12 +14,9 @@ import saien.magrathea.core.ReasoningContentKind
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.provider.api.ProviderChunk
-import saien.magrathea.provider.api.ProviderContextLimitException
 import saien.magrathea.provider.api.ProviderEvent
 import saien.magrathea.provider.api.ProviderProtocolException
-import saien.magrathea.provider.api.ProviderServerException
 import saien.magrathea.provider.api.ProviderUsage
-import saien.magrathea.provider.api.isProviderContextLimitError
 import saien.magrathea.provider.api.validateSemantics
 
 /** Normalizes the portable Chat Completions response shape into Magrathea events. */
@@ -530,12 +527,13 @@ private fun JsonObject.singleChoice(): JsonObject {
 
 private fun JsonObject.throwIfError() {
     val error = this["error"] as? JsonObject ?: return
-    val code = error.optionalChatString("code") ?: error.optionalChatString("type") ?: "unknown"
-    val providerMessage = error.optionalChatString("message")
-    if (isProviderContextLimitError("$code ${providerMessage.orEmpty()}")) {
-        throw ProviderContextLimitException()
-    }
-    throw ProviderServerException("OpenAI-compatible response failed with code $code", statusCode = 500)
+    val metadata = error["metadata"] as? JsonObject
+    throwOpenAiInBandFailure(
+        label = "OpenAI Chat Completions",
+        code = error.optionalChatString("code") ?: error.optionalChatString("type"),
+        errorType = metadata?.optionalChatString("error_type"),
+        providerMessage = error.optionalChatString("message"),
+    )
 }
 
 private fun JsonObject.toChatUsage(): ProviderUsage = ProviderUsage(

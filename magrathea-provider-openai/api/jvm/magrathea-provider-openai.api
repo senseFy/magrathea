@@ -1,10 +1,55 @@
+public final class saien/magrathea/provider/openai/OpenAiProtocolDialect : java/lang/Enum {
+	public static final field COMPATIBLE Lsaien/magrathea/provider/openai/OpenAiProtocolDialect;
+	public static final field OPENAI Lsaien/magrathea/provider/openai/OpenAiProtocolDialect;
+	public static final field OPENROUTER Lsaien/magrathea/provider/openai/OpenAiProtocolDialect;
+	public static final field XAI Lsaien/magrathea/provider/openai/OpenAiProtocolDialect;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/provider/openai/OpenAiProtocolDialect;
+	public static fun values ()[Lsaien/magrathea/provider/openai/OpenAiProtocolDialect;
+}
+
 public final class saien/magrathea/provider/openai/OpenAiProviderAdapter : saien/magrathea/provider/api/ProviderAdapter {
 	public fun <init> ()V
-	public fun <init> (Lsaien/magrathea/provider/api/HttpTransport;Lkotlinx/serialization/json/Json;)V
-	public synthetic fun <init> (Lsaien/magrathea/provider/api/HttpTransport;Lkotlinx/serialization/json/Json;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lsaien/magrathea/provider/openai/OpenAiProviderProfile;Lsaien/magrathea/provider/api/HttpTransport;Lkotlinx/serialization/json/Json;)V
+	public synthetic fun <init> (Lsaien/magrathea/provider/openai/OpenAiProviderProfile;Lsaien/magrathea/provider/api/HttpTransport;Lkotlinx/serialization/json/Json;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun close ()V
 	public fun generate (Lsaien/magrathea/provider/api/ProviderRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun getInputCapabilities ()Lsaien/magrathea/provider/api/ProviderInputCapabilities;
 	public fun getKey ()Ljava/lang/String;
+	public fun getOptionsFamily ()Ljava/lang/String;
+	public final fun getProfile ()Lsaien/magrathea/provider/openai/OpenAiProviderProfile;
+	public fun inputCapabilities (Lsaien/magrathea/provider/api/ProviderTransportConfig;)Lsaien/magrathea/provider/api/ProviderInputCapabilities;
+}
+
+public final class saien/magrathea/provider/openai/OpenAiProviderProfile {
+	public static final field Companion Lsaien/magrathea/provider/openai/OpenAiProviderProfile$Companion;
+	public fun <init> (Ljava/lang/String;Lsaien/magrathea/provider/api/OpenAiWireProtocol;Lsaien/magrathea/provider/openai/OpenAiProtocolDialect;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Lsaien/magrathea/provider/api/OpenAiWireProtocol;Lsaien/magrathea/provider/openai/OpenAiProtocolDialect;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Lsaien/magrathea/provider/api/OpenAiWireProtocol;
+	public final fun component3 ()Lsaien/magrathea/provider/openai/OpenAiProtocolDialect;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Lsaien/magrathea/provider/api/OpenAiWireProtocol;Lsaien/magrathea/provider/openai/OpenAiProtocolDialect;Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/provider/openai/OpenAiProviderProfile;
+	public static synthetic fun copy$default (Lsaien/magrathea/provider/openai/OpenAiProviderProfile;Ljava/lang/String;Lsaien/magrathea/provider/api/OpenAiWireProtocol;Lsaien/magrathea/provider/openai/OpenAiProtocolDialect;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/provider/openai/OpenAiProviderProfile;
+	public final fun defaultEndpoint (Lsaien/magrathea/provider/api/OpenAiWireProtocol;)Ljava/lang/String;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getChatCompletionsEndpoint ()Ljava/lang/String;
+	public final fun getDefaultProtocol ()Lsaien/magrathea/provider/api/OpenAiWireProtocol;
+	public final fun getDialect ()Lsaien/magrathea/provider/openai/OpenAiProtocolDialect;
+	public final fun getProviderId ()Ljava/lang/String;
+	public final fun getResponsesEndpoint ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/provider/openai/OpenAiProviderProfile$Companion {
+	public final fun compatible (Ljava/lang/String;Lsaien/magrathea/provider/api/OpenAiWireProtocol;Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/provider/openai/OpenAiProviderProfile;
+	public static synthetic fun compatible$default (Lsaien/magrathea/provider/openai/OpenAiProviderProfile$Companion;Ljava/lang/String;Lsaien/magrathea/provider/api/OpenAiWireProtocol;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/provider/openai/OpenAiProviderProfile;
+	public final fun openAi (Ljava/lang/String;)Lsaien/magrathea/provider/openai/OpenAiProviderProfile;
+	public static synthetic fun openAi$default (Lsaien/magrathea/provider/openai/OpenAiProviderProfile$Companion;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/provider/openai/OpenAiProviderProfile;
+	public final fun openRouter (Ljava/lang/String;)Lsaien/magrathea/provider/openai/OpenAiProviderProfile;
+	public static synthetic fun openRouter$default (Lsaien/magrathea/provider/openai/OpenAiProviderProfile$Companion;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/provider/openai/OpenAiProviderProfile;
+	public final fun xAi (Ljava/lang/String;)Lsaien/magrathea/provider/openai/OpenAiProviderProfile;
+	public static synthetic fun xAi$default (Lsaien/magrathea/provider/openai/OpenAiProviderProfile$Companion;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/provider/openai/OpenAiProviderProfile;
 }
 

@@ -14,6 +14,7 @@ import saien.magrathea.core.StopReason
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.provider.api.ProviderEvent
 import saien.magrathea.provider.api.ProviderEventAssembler
+import saien.magrathea.provider.api.ProviderAuthException
 import saien.magrathea.provider.api.ProviderContextLimitException
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.PROVIDER_CITATIONS_METADATA_KEY
@@ -33,7 +34,7 @@ class OpenAiResponsesCodecContractTest {
 
     @Test
     fun compatibleResponsesReasoningTextStreamsThroughContentPartLifecycle() {
-        val codec = OpenAiResponsesCodec("openai", "compatible-reasoning-model")
+        val codec = openRouterResponsesCodec("compatible-reasoning-model")
         val assembler = ProviderEventAssembler()
         var message: saien.magrathea.core.AgentMessage? = null
         val events = OPENAI_REASONING_TEXT_STREAM.flatMap { (event, data) ->
@@ -71,7 +72,7 @@ class OpenAiResponsesCodecContractTest {
 
     @Test
     fun compatibleResponsesCanFinalizeCompactedReasoningAtTheAuthoritativeItemBoundary() {
-        val codec = OpenAiResponsesCodec("openai", "compatible-reasoning-model")
+        val codec = openRouterResponsesCodec("compatible-reasoning-model")
         val events = OPENROUTER_COMPACTED_REASONING_STREAM.flatMap { (event, data) ->
             codec.decodeServerSentEvent(event, data)?.events.orEmpty()
         }
@@ -89,6 +90,19 @@ class OpenAiResponsesCodecContractTest {
     }
 
     @Test
+    fun standardOpenAiDialectDoesNotRepairACompactedReasoningLifecycle() {
+        val codec = OpenAiResponsesCodec("openai", "openai-reasoning-model")
+        OPENROUTER_COMPACTED_REASONING_STREAM.take(10).forEach { (event, data) ->
+            codec.decodeServerSentEvent(event, data)
+        }
+
+        assertFailsWith<ProviderProtocolException> {
+            val (event, data) = OPENROUTER_COMPACTED_REASONING_STREAM[10]
+            codec.decodeServerSentEvent(event, data)
+        }
+    }
+
+    @Test
     fun authoritativeItemBoundaryAppendsOnlyTheMissingReasoningSuffix() {
         val compactedPrefixStream = OPENROUTER_COMPACTED_REASONING_STREAM.map { (event, data) ->
             if (event == "response.reasoning_summary_text.delta" && data.contains("the constraints.")) {
@@ -97,7 +111,7 @@ class OpenAiResponsesCodecContractTest {
                 event to data
             }
         }
-        val codec = OpenAiResponsesCodec("openai", "compatible-reasoning-model")
+        val codec = openRouterResponsesCodec("compatible-reasoning-model")
         val events = compactedPrefixStream.flatMap { (event, data) ->
             codec.decodeServerSentEvent(event, data)?.events.orEmpty()
         }
@@ -118,7 +132,7 @@ class OpenAiResponsesCodecContractTest {
         val missingPartDone = OPENAI_REASONING_SUMMARY_STREAM.filterNot { (event, _) ->
             event == "response.reasoning_summary_part.done"
         }
-        val codec = OpenAiResponsesCodec("openai", "compatible-reasoning-model")
+        val codec = openRouterResponsesCodec("compatible-reasoning-model")
         val events = missingPartDone.flatMap { (event, data) ->
             codec.decodeServerSentEvent(event, data)?.events.orEmpty()
         }
@@ -133,7 +147,7 @@ class OpenAiResponsesCodecContractTest {
 
     @Test
     fun authoritativeReasoningReconciliationStillFailsClosedOnTextOrPartCountChanges() {
-        val textChanged = OpenAiResponsesCodec("openai", "compatible-reasoning-model")
+        val textChanged = openRouterResponsesCodec("compatible-reasoning-model")
         OPENROUTER_COMPACTED_REASONING_STREAM.take(10).forEach { (event, data) ->
             textChanged.decodeServerSentEvent(event, data)
         }
@@ -145,7 +159,7 @@ class OpenAiResponsesCodecContractTest {
             )
         }
 
-        val countChanged = OpenAiResponsesCodec("openai", "compatible-reasoning-model")
+        val countChanged = openRouterResponsesCodec("compatible-reasoning-model")
         OPENROUTER_COMPACTED_REASONING_STREAM.take(10).forEach { (event, data) ->
             countChanged.decodeServerSentEvent(event, data)
         }
@@ -162,7 +176,7 @@ class OpenAiResponsesCodecContractTest {
 
     @Test
     fun reasoningEventsAfterTheAuthoritativeItemBoundaryStillFailClosed() {
-        val codec = OpenAiResponsesCodec("openai", "compatible-reasoning-model")
+        val codec = openRouterResponsesCodec("compatible-reasoning-model")
         OPENROUTER_COMPACTED_REASONING_STREAM.take(11).forEach { (event, data) ->
             codec.decodeServerSentEvent(event, data)
         }
@@ -177,7 +191,7 @@ class OpenAiResponsesCodecContractTest {
 
     @Test
     fun compactedReasoningStillRequiresExactTerminalOutputEquality() {
-        val codec = OpenAiResponsesCodec("openai", "compatible-reasoning-model")
+        val codec = openRouterResponsesCodec("compatible-reasoning-model")
         OPENROUTER_COMPACTED_REASONING_STREAM.take(11).forEach { (event, data) ->
             codec.decodeServerSentEvent(event, data)
         }
@@ -201,6 +215,22 @@ class OpenAiResponsesCodecContractTest {
         assertEquals("I should answer directly.", reasoning.text)
         assertEquals(null, reasoning.signature)
         assertFalse(reasoning.redacted)
+    }
+
+    @Test
+    fun nonStreamingFailedResponseMapsItsErrorTypeToATypedFailure() {
+        val failure = """{
+            "id":"resp_failed_1",
+            "status":"failed",
+            "error_type":"authentication",
+            "error":{"code":"provider_error","message":"sensitive upstream message"}
+        }""".trimIndent()
+
+        val exception = assertFailsWith<ProviderAuthException> {
+            OpenAiResponsesCodec("openrouter", "provider/model").decodeNonStreaming(failure)
+        }
+
+        assertFalse(exception.message.orEmpty().contains("sensitive upstream message"))
     }
 
     @Test
@@ -316,7 +346,7 @@ class OpenAiResponsesCodecContractTest {
 
     @Test
     fun nonStreamingXSearchIsServerSideAndPreservesGroundedCitations() {
-        val chunk = OpenAiResponsesCodec("openai", "grok-contract")
+        val chunk = xAiSearchResponsesCodec()
             .decodeNonStreaming(OPENAI_X_SEARCH_RESPONSE)
         val message = requireNotNull(ProviderEventAssembler().apply(null, chunk.events))
 
@@ -340,7 +370,7 @@ class OpenAiResponsesCodecContractTest {
 
     @Test
     fun nonStreamingXSearchAcceptsXaiSchemaWhereIdAndStatusAreOptional() {
-        val chunk = OpenAiResponsesCodec("openai", "grok-contract")
+        val chunk = xAiSearchResponsesCodec()
             .decodeNonStreaming(XAI_SCHEMA_X_SEARCH_RESPONSE)
         val message = requireNotNull(ProviderEventAssembler().apply(null, chunk.events))
 
@@ -359,9 +389,9 @@ class OpenAiResponsesCodecContractTest {
         }
 
         val chunk = OpenAiResponsesCodec(
-            providerKey = "openai",
+            providerKey = "xai",
             model = "grok-contract",
-            allowServerManagedCustomToolCalls = true,
+            dialectPolicy = OpenAiProtocolDialect.XAI.responsesPolicy(xSearchConfigured = true),
         ).decodeNonStreaming(XAI_HOSTED_X_SEARCH_RESPONSE)
         val message = requireNotNull(ProviderEventAssembler().apply(null, chunk.events))
 
@@ -381,7 +411,7 @@ class OpenAiResponsesCodecContractTest {
 
     @Test
     fun streamingXSearchActivityDoesNotBecomeAClientSideToolCall() {
-        val codec = OpenAiResponsesCodec("openai", "grok-contract")
+        val codec = xAiSearchResponsesCodec()
         val events = OPENAI_X_SEARCH_STREAM.flatMap { (event, data) ->
             codec.decodeServerSentEvent(event, data)?.events.orEmpty()
         }
@@ -396,9 +426,9 @@ class OpenAiResponsesCodecContractTest {
     @Test
     fun streamingXaiHostedCustomToolTraceIsValidatedWithoutBecomingAClientToolCall() {
         val codec = OpenAiResponsesCodec(
-            providerKey = "openai",
+            providerKey = "xai",
             model = "grok-contract",
-            allowServerManagedCustomToolCalls = true,
+            dialectPolicy = OpenAiProtocolDialect.XAI.responsesPolicy(xSearchConfigured = true),
         )
         val events = XAI_HOSTED_X_SEARCH_STREAM.flatMap { (event, data) ->
             codec.decodeServerSentEvent(event, data)?.events.orEmpty()
@@ -413,7 +443,7 @@ class OpenAiResponsesCodecContractTest {
 
     @Test
     fun malformedXSearchLifecycleFailsClosed() {
-        val codec = OpenAiResponsesCodec("openai", "grok-contract")
+        val codec = xAiSearchResponsesCodec()
         codec.decodeServerSentEvent(
             "response.created",
             """{"type":"response.created","response":{"id":"resp_x","status":"in_progress"}}""",
@@ -487,4 +517,16 @@ class OpenAiResponsesCodecContractTest {
             premature.decodeServerSentEvent(null, "[DONE]")
         }
     }
+
+    private fun openRouterResponsesCodec(model: String): OpenAiResponsesCodec = OpenAiResponsesCodec(
+        providerKey = "openrouter",
+        model = model,
+        dialectPolicy = OpenAiProtocolDialect.OPENROUTER.responsesPolicy(xSearchConfigured = false),
+    )
+
+    private fun xAiSearchResponsesCodec(): OpenAiResponsesCodec = OpenAiResponsesCodec(
+        providerKey = "xai",
+        model = "grok-contract",
+        dialectPolicy = OpenAiProtocolDialect.XAI.responsesPolicy(xSearchConfigured = true),
+    )
 }

@@ -211,6 +211,7 @@ class ContextManagementRuntimeIntegrationTest {
 
     private class SummaryAwareProvider : ProviderAdapter {
         override val key: String = PROVIDER
+        override val optionsFamily: String = "openai"
         val requests = mutableListOf<ProviderRequest>()
 
         override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {

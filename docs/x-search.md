@@ -17,10 +17,11 @@ main model -> function call: x_search -> Runtime -> XSearchBackend
 main model -> grounded final answer
 ```
 
-`magrathea-provider-openai` also implements the lower-level xAI-compatible Responses wire contract.
-An `OpenAiXSearchToolConfig` is serialized as a server-side `{"type":"x_search"}` Tool.
-Returned `x_search_call` items are observed as Provider-owned activity and are never converted into
-a client `ToolCallPart`, so Runtime cannot accidentally execute a hosted call locally.
+`magrathea-provider-openai` also implements the lower-level xAI Responses dialect through
+`OpenAiProviderProfile.xAi()`. An `OpenAiXSearchToolConfig` is serialized as a server-side
+`{"type":"x_search"}` Tool.
+Returned `x_search_call` items are represented as Provider-owned activity rather than client
+`ToolCallPart` values.
 
 ## Runtime execution model
 
@@ -70,8 +71,8 @@ run.
 
 ## OpenAI Responses hosted wire
 
-`OpenAiTransportConfig.hostedTools` accepts `OpenAiXSearchToolConfig` only when
-`api == OpenAiApi.RESPONSES`. The request builder emits:
+`OpenAiTransportConfig.hostedTools` accepts `OpenAiXSearchToolConfig` only for an xAI Provider
+profile using `OpenAiWireProtocol.RESPONSES`. The request builder emits:
 
 ```json
 {
@@ -87,12 +88,10 @@ run.
 }
 ```
 
-Chat Completions rejects hosted Tools. Responses decoding accepts `x_search_call` output items in
-synchronous and streaming responses, but emits no canonical client Tool call for them. Top-level
-response citations and URL annotations are normalized under the canonical Provider metadata key
-`citations`. The decoder follows the xAI Responses schema where `id` and `status` may be omitted;
-each hosted call must still carry a stable `id` or `call_id`, and any supplied status is validated
-against its lifecycle position.
+The xAI Responses profile decodes `x_search_call` output in synchronous and streaming responses as
+Provider-owned activity. Top-level response citations and URL annotations use the canonical
+Provider metadata key `citations`. Hosted calls use `id` or `call_id`; optional status values follow
+their lifecycle position.
 
 ## Security and failure behavior
 

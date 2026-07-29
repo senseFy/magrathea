@@ -1,9 +1,9 @@
 # Provider Live Harness
 
-This tooling application performs explicitly authorized smoke tests against a remote Gemini,
-OpenAI, or Anthropic API. It is not an SDK module and is not published. Its remote `run` task is
-not invoked by the normal deterministic test suites; only its offline configuration and redaction
-tests are part of the repository gates.
+This tooling application performs explicitly authorized smoke tests against remote Gemini,
+OpenAI, OpenRouter, xAI, or Anthropic APIs. It is not an SDK module and is not published. Its
+remote `run` task is not invoked by the normal deterministic test suites; only its offline
+configuration and redaction tests are part of the repository gates.
 
 Each run can incur Provider charges. Select one Provider, supply only its environment credential,
 and choose the model deliberately:
@@ -36,29 +36,30 @@ MAGRATHEA_ANTHROPIC_API_KEY=... \
   --args="provider=anthropic scenario=chat streaming=true model=provider/model endpoint=https://compatible.example/api/v1/messages authentication=bearer"
 ```
 
-For an OpenAI-family endpoint, select the exact wire contract explicitly. The default is Responses;
-Chat Completions uses `api=chat-completions` (or `MAGRATHEA_OPENAI_API=chat-completions`):
+OpenAI-family identities use their profile default: OpenAI and xAI use Responses, while OpenRouter
+uses Chat Completions. Select another exact wire protocol with `protocol=responses` or
+`protocol=chat-completions` (or `MAGRATHEA_OPENAI_PROTOCOL`):
 
 ```bash
-MAGRATHEA_OPENAI_API_KEY=... \
+MAGRATHEA_OPENROUTER_API_KEY=... \
   ./gradlew :provider-live-harness:run \
-  --args="provider=openai api=chat-completions scenario=chat streaming=true model=provider/model endpoint=https://compatible.example/v1/chat/completions"
+  --args="provider=openrouter scenario=chat streaming=true model=openai/gpt-4o-mini"
 ```
 
-The `x-search` scenario validates an OpenAI Responses-compatible hosted X Search implementation,
-including provider-managed search traces and grounded citation metadata:
+The `x-search` scenario validates the xAI profile's hosted X Search implementation, including
+Provider-managed search traces and grounded citation metadata:
 
 ```bash
-MAGRATHEA_OPENAI_API_KEY=... \
+MAGRATHEA_XAI_API_KEY=... \
   ./gradlew :provider-live-harness:run \
-  --args="provider=openai scenario=x-search model=grok-4.5 endpoint=https://api.x.ai/v1/responses authentication=bearer"
+  --args="provider=xai scenario=x-search model=grok-4.5"
 ```
 
-OpenAI accepts `bearer` or `api-key`; Anthropic accepts `x-api-key` or `bearer`. The corresponding
-environment settings are `MAGRATHEA_ENDPOINT` and `MAGRATHEA_AUTHENTICATION`. An authentication
-override requires an explicit HTTPS endpoint. The configured service must implement the exact
-selected OpenAI Responses, OpenAI Chat Completions, or Anthropic Messages contract, including its
-streaming and tool behavior.
+OpenAI-family profiles accept `bearer` or `api-key`; Anthropic accepts `x-api-key` or `bearer`.
+The corresponding environment settings are `MAGRATHEA_ENDPOINT` and
+`MAGRATHEA_AUTHENTICATION`. An authentication override requires an explicit HTTPS endpoint. The
+configured service must implement the exact selected Responses, Chat Completions, or Messages
+contract, including its streaming and Tool behavior.
 
 Harness output contains only status, counts, lengths, and metadata keys. It does not print API
 keys, prompts, model output, reasoning content, tool payloads, or Provider signatures.

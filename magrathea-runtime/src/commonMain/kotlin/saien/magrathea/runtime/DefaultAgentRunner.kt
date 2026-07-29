@@ -435,7 +435,7 @@ class DefaultAgentRunner(
                                 headers = resolvedProviderConfig.headers,
                                 typedConfig = compileProviderTransportConfig(
                                     activeRequest.engine.provider,
-                                    activeRequest.model.provider,
+                                    provider.optionsFamily,
                                 ),
                                 timeouts = activeRequest.engine.provider.timeouts,
                             )
@@ -1207,7 +1207,7 @@ class DefaultAgentRunner(
             headers = resolved.headers,
             typedConfig = compileProviderTransportConfig(
                 request.provider,
-                request.model.provider,
+                provider.optionsFamily,
             ).forContextSummary(),
             timeouts = request.provider.timeouts,
         )

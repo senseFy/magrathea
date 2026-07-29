@@ -13,27 +13,40 @@ import saien.magrathea.provider.api.HttpResponseSpec
 import saien.magrathea.provider.api.HttpStreamFormat
 import saien.magrathea.provider.api.HttpStreamFrame
 import saien.magrathea.provider.api.HttpTransport
-import saien.magrathea.provider.api.OpenAiApi
 import saien.magrathea.provider.api.OpenAiAuthentication
 import saien.magrathea.provider.api.OpenAiTransportConfig
+import saien.magrathea.provider.api.OpenAiWireProtocol
 import saien.magrathea.provider.api.OpenAiXSearchToolConfig
 import saien.magrathea.provider.api.ProviderAdapter
 import saien.magrathea.provider.api.ProviderAuthException
 import saien.magrathea.provider.api.ProviderChunk
+import saien.magrathea.provider.api.ProviderInputCapabilities
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRequest
+import saien.magrathea.provider.api.ProviderTransportConfig
 import saien.magrathea.provider.api.ReferenceProviderInputCapabilities
 import saien.magrathea.provider.api.createDefaultHttpTransport
 import saien.magrathea.provider.api.requireSuccessful
 import saien.magrathea.provider.api.toHttpTimeoutConfig
 
-/** OpenAI-family adapter for Responses and compatible Chat Completions services. */
+/** OpenAI-family protocol adapter configured by a Provider profile. */
 class OpenAiProviderAdapter(
+    val profile: OpenAiProviderProfile = OpenAiProviderProfile.openAi(),
     private val transport: HttpTransport = createDefaultHttpTransport(),
     sourceJson: Json = Json,
 ) : ProviderAdapter {
-    override val key: String = "openai"
-    override val inputCapabilities = ReferenceProviderInputCapabilities.openAiResponses
+    override val key: String = profile.providerId
+    override val optionsFamily: String = "openai"
+
+    override fun inputCapabilities(config: ProviderTransportConfig?): ProviderInputCapabilities {
+        val openAiConfig = config.openAiConfigOrDefault()
+        val protocol = resolveProtocol(openAiConfig)
+        validateConfig(openAiConfig, protocol)
+        return when (protocol) {
+            OpenAiWireProtocol.RESPONSES -> ReferenceProviderInputCapabilities.openAiResponses
+            OpenAiWireProtocol.CHAT_COMPLETIONS -> ReferenceProviderInputCapabilities.openAiChatCompletions
+        }
+    }
 
     private val json = Json(sourceJson) {
         encodeDefaults = false
@@ -41,14 +54,19 @@ class OpenAiProviderAdapter(
     }
 
     override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> {
+        require(request.model.provider == key) {
+            "OpenAI Provider profile $key cannot serve model Provider ${request.model.provider}"
+        }
         val credential = requireCredential(request)
         val config = request.openAiTransportConfig()
-        val payload = when (config.api) {
-            OpenAiApi.RESPONSES -> OpenAiResponsesRequestBuilder(key, json).build(request)
-            OpenAiApi.CHAT_COMPLETIONS -> OpenAiChatCompletionsRequestBuilder(json).build(request)
+        val protocol = resolveProtocol(config)
+        validateConfig(config, protocol)
+        val payload = when (protocol) {
+            OpenAiWireProtocol.RESPONSES -> OpenAiResponsesRequestBuilder(key, json).build(request)
+            OpenAiWireProtocol.CHAT_COMPLETIONS -> OpenAiChatCompletionsRequestBuilder(json).build(request)
         }
         val body = json.encodeToString(JsonObject.serializer(), payload)
-        val endpoint = resolveEndpoint(request, credential, config.api)
+        val endpoint = resolveEndpoint(request, credential, protocol)
         val httpRequest = HttpRequestSpec(
             method = HttpMethod.POST,
             url = endpoint,
@@ -57,9 +75,9 @@ class OpenAiProviderAdapter(
             timeouts = request.timeouts.toHttpTimeoutConfig(),
         )
         return if (request.model.supportsStreaming) {
-            streamResponse(request, httpRequest, config)
+            streamResponse(request, httpRequest, config, protocol)
         } else {
-            executeResponse(request, httpRequest, config)
+            executeResponse(request, httpRequest, config, protocol)
         }
     }
 
@@ -70,11 +88,13 @@ class OpenAiProviderAdapter(
     private fun resolveEndpoint(
         request: ProviderRequest,
         credential: ProviderCredential,
-        api: OpenAiApi,
-    ): String = request.endpoint ?: credential.endpoint ?: when (api) {
-        OpenAiApi.RESPONSES -> DEFAULT_RESPONSES_ENDPOINT
-        OpenAiApi.CHAT_COMPLETIONS -> DEFAULT_CHAT_COMPLETIONS_ENDPOINT
-    }
+        protocol: OpenAiWireProtocol,
+    ): String = request.endpoint
+        ?: credential.endpoint
+        ?: profile.defaultEndpoint(protocol)
+        ?: throw IllegalArgumentException(
+            "OpenAI Provider profile ${profile.providerId} requires an endpoint for $protocol",
+        )
 
     private fun authenticationHeader(
         credential: ProviderCredential,
@@ -88,18 +108,19 @@ class OpenAiProviderAdapter(
         request: ProviderRequest,
         httpRequest: HttpRequestSpec,
         config: OpenAiTransportConfig,
+        protocol: OpenAiWireProtocol,
     ): Flow<ProviderChunk> = channelFlow {
         val response = transport.execute(httpRequest).requireSuccessful()
         send(
-            when (config.api) {
-                OpenAiApi.RESPONSES -> OpenAiResponsesCodec(
+            when (protocol) {
+                OpenAiWireProtocol.RESPONSES -> OpenAiResponsesCodec(
                     providerKey = key,
                     model = request.model.model,
                     json = json,
-                    allowServerManagedCustomToolCalls = config.hasXSearch(),
+                    dialectPolicy = profile.dialect.responsesPolicy(config.hasXSearch()),
                 )
                     .decodeNonStreaming(response.body)
-                OpenAiApi.CHAT_COMPLETIONS -> OpenAiChatCompletionsCodec(key, request.model.model)
+                OpenAiWireProtocol.CHAT_COMPLETIONS -> OpenAiChatCompletionsCodec(key, request.model.model)
                     .decodeNonStreaming(response.body)
             },
         )
@@ -109,15 +130,18 @@ class OpenAiProviderAdapter(
         request: ProviderRequest,
         httpRequest: HttpRequestSpec,
         config: OpenAiTransportConfig,
+        protocol: OpenAiWireProtocol,
     ): Flow<ProviderChunk> = channelFlow {
+        val normalizer = OpenAiResponsesDialectNormalizer(profile.dialect, json)
+            .takeIf { protocol == OpenAiWireProtocol.RESPONSES }
         val responsesCodec = OpenAiResponsesCodec(
             providerKey = key,
             model = request.model.model,
             json = json,
-            allowServerManagedCustomToolCalls = config.hasXSearch(),
-        ).takeIf { config.api == OpenAiApi.RESPONSES }
+            dialectPolicy = profile.dialect.responsesPolicy(config.hasXSearch()),
+        ).takeIf { protocol == OpenAiWireProtocol.RESPONSES }
         val chatCodec = OpenAiChatCompletionsCodec(key, request.model.model)
-            .takeIf { config.api == OpenAiApi.CHAT_COMPLETIONS }
+            .takeIf { protocol == OpenAiWireProtocol.CHAT_COMPLETIONS }
         var transportCompleted = false
         transport.stream(httpRequest, HttpStreamFormat.SERVER_SENT_EVENTS).collect { frame ->
             if (transportCompleted) throw ProviderProtocolException("OpenAI transport emitted a frame after completion")
@@ -128,7 +152,11 @@ class OpenAiProviderAdapter(
                     body = "",
                 ).requireSuccessful()
                 is HttpStreamFrame.ServerSentEvent -> {
-                    val chunk = responsesCodec?.decodeServerSentEvent(frame.event, frame.data)
+                    val normalized = normalizer?.normalize(frame.event, frame.data)
+                    val chunk = responsesCodec?.decodeServerSentEvent(
+                        normalized?.eventName ?: frame.event,
+                        normalized?.payload ?: frame.data,
+                    )
                         ?: chatCodec?.decodeServerSentEvent(frame.event, frame.data)
                     chunk?.let { send(it) }
                 }
@@ -151,6 +179,26 @@ class OpenAiProviderAdapter(
         return request.credential ?: throw ProviderAuthException("$key credential is required")
     }
 
+    private fun resolveProtocol(config: OpenAiTransportConfig): OpenAiWireProtocol =
+        config.protocol ?: profile.defaultProtocol
+
+    private fun validateConfig(
+        config: OpenAiTransportConfig,
+        protocol: OpenAiWireProtocol,
+    ) {
+        val hostedToolsSupported =
+            protocol == OpenAiWireProtocol.RESPONSES ||
+                (config.hostedTools.isEmpty() && config.maxToolTurns == null)
+        require(hostedToolsSupported) {
+            "OpenAI hosted Tools are supported only by the Responses API"
+        }
+        if (config.hasXSearch()) {
+            require(profile.dialect == OpenAiProtocolDialect.XAI) {
+                "OpenAI X Search requires an xAI Provider profile"
+            }
+        }
+    }
+
     private fun buildHeaders(
         request: ProviderRequest,
         credential: ProviderCredential,
@@ -170,8 +218,11 @@ class OpenAiProviderAdapter(
 private fun OpenAiTransportConfig.hasXSearch(): Boolean =
     hostedTools.any { tool -> tool is OpenAiXSearchToolConfig }
 
-private const val DEFAULT_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses"
-private const val DEFAULT_CHAT_COMPLETIONS_ENDPOINT = "https://api.openai.com/v1/chat/completions"
+private fun ProviderTransportConfig?.openAiConfigOrDefault(): OpenAiTransportConfig = when (this) {
+    null -> OpenAiTransportConfig()
+    is OpenAiTransportConfig -> this
+    else -> throw IllegalArgumentException("OpenAI provider received options for another provider family")
+}
 
 private val RESERVED_HEADERS = setOf(
     "authorization",

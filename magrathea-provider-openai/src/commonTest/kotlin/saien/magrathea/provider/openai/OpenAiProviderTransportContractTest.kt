@@ -15,14 +15,16 @@ import saien.magrathea.core.ProviderCredential
 import saien.magrathea.core.TextPart
 import saien.magrathea.provider.api.HttpStreamFormat
 import saien.magrathea.provider.api.HttpResponseSpec
-import saien.magrathea.provider.api.OpenAiApi
 import saien.magrathea.provider.api.OpenAiAuthentication
 import saien.magrathea.provider.api.OpenAiTransportConfig
+import saien.magrathea.provider.api.OpenAiWireProtocol
 import saien.magrathea.provider.api.OpenAiXSearchToolConfig
 import saien.magrathea.provider.api.ProviderAuthException
 import saien.magrathea.provider.api.ProviderEvent
 import saien.magrathea.provider.api.ProviderProtocolException
+import saien.magrathea.provider.api.ProviderRateLimitException
 import saien.magrathea.provider.api.ProviderRequest
+import saien.magrathea.provider.api.ReferenceProviderInputCapabilities
 
 class OpenAiProviderTransportContractTest {
     @Test
@@ -95,8 +97,13 @@ class OpenAiProviderTransportContractTest {
             executeResponses = listOf(HttpResponseSpec(200, body = XAI_HOSTED_X_SEARCH_RESPONSE)),
         )
 
-        val chunks = OpenAiProviderAdapter(transport = transport).generate(
+        val chunks = OpenAiProviderAdapter(
+            profile = OpenAiProviderProfile.xAi(),
+            transport = transport,
+        ).generate(
             request(streaming = false, secret = "secret").copy(
+                model = ModelDescriptor("xai", "grok-contract"),
+                credentialRef = CredentialRef("xai"),
                 typedConfig = OpenAiTransportConfig(
                     hostedTools = listOf(OpenAiXSearchToolConfig()),
                 ),
@@ -117,7 +124,7 @@ class OpenAiProviderTransportContractTest {
         val chunks = OpenAiProviderAdapter(transport = transport).generate(
             request(streaming = true, secret = secret).copy(
                 model = ModelDescriptor("openai", "compatible-model", supportsStreaming = true),
-                typedConfig = OpenAiTransportConfig(api = OpenAiApi.CHAT_COMPLETIONS),
+                typedConfig = OpenAiTransportConfig(protocol = OpenAiWireProtocol.CHAT_COMPLETIONS),
             ),
         ).toList()
 
@@ -128,6 +135,84 @@ class OpenAiProviderTransportContractTest {
         assertFalse(outbound.body.orEmpty().contains(secret))
         assertEquals(1, chunks.flatMap { it.events }.filterIsInstance<ProviderEvent.ToolCallEnd>().size)
         assertEquals(1, chunks.flatMap { it.events }.filterIsInstance<ProviderEvent.Completed>().size)
+    }
+
+    @Test
+    fun openRouterProfileSeparatesIdentityDialectAndDefaultWireProtocol() = runTest {
+        val transport = ScriptedOpenAiTransport(
+            streamResponses = listOf(openAiChatSseFrames(OPENAI_CHAT_TOOL_STREAM)),
+        )
+        val adapter = OpenAiProviderAdapter(
+            profile = OpenAiProviderProfile.openRouter(),
+            transport = transport,
+        )
+
+        val chunks = adapter.generate(
+            request(streaming = true, secret = "secret").copy(
+                model = ModelDescriptor("openrouter", "openai/gpt-contract", supportsStreaming = true),
+                credentialRef = CredentialRef("openrouter"),
+            ),
+        ).toList()
+
+        assertEquals("openrouter", adapter.key)
+        assertEquals("openai", adapter.optionsFamily)
+        assertEquals(
+            ReferenceProviderInputCapabilities.openAiChatCompletions,
+            adapter.inputCapabilities(),
+        )
+        assertEquals(
+            "https://openrouter.ai/api/v1/chat/completions",
+            transport.requests.single().first.url,
+        )
+        assertEquals(1, chunks.flatMap { it.events }.filterIsInstance<ProviderEvent.Completed>().size)
+    }
+
+    @Test
+    fun openRouterResponsesDialectNormalizesResponseErrorWithoutWeakeningStandardCodec() = runTest {
+        val errorStream = listOf(
+            "response.created" to
+                """{"type":"response.created","response":{"id":"resp_error_1","status":"in_progress"}}""",
+            "response.error" to
+                """{"type":"response.error","error":{"code":"rate_limit_exceeded","message":"Rate limit exceeded"}}""",
+        )
+        val transport = ScriptedOpenAiTransport(
+            streamResponses = listOf(openAiSseFrames(errorStream)),
+        )
+        val adapter = OpenAiProviderAdapter(
+            profile = OpenAiProviderProfile.openRouter(),
+            transport = transport,
+        )
+        val request = request(streaming = true, secret = "secret").copy(
+            model = ModelDescriptor("openrouter", "provider/model", supportsStreaming = true),
+            credentialRef = CredentialRef("openrouter"),
+            typedConfig = OpenAiTransportConfig(protocol = OpenAiWireProtocol.RESPONSES),
+        )
+
+        assertFailsWith<ProviderRateLimitException> {
+            adapter.generate(request).toList()
+        }
+        assertEquals("https://openrouter.ai/api/v1/responses", transport.requests.single().first.url)
+
+        val standard = OpenAiResponsesCodec("openai", "gpt-contract")
+        standard.decodeServerSentEvent(errorStream.first().first, errorStream.first().second)
+        assertFailsWith<ProviderProtocolException> {
+            standard.decodeServerSentEvent(errorStream.last().first, errorStream.last().second)
+        }
+    }
+
+    @Test
+    fun xSearchRequiresAnExplicitXaiDialect() = runTest {
+        val request = request(streaming = false, secret = "secret").copy(
+            typedConfig = OpenAiTransportConfig(
+                hostedTools = listOf(OpenAiXSearchToolConfig()),
+            ),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            OpenAiProviderAdapter(transport = ScriptedOpenAiTransport())
+                .generate(request)
+                .toList()
+        }
     }
 
     @Test

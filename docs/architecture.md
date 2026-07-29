@@ -46,7 +46,7 @@ val credentials = CredentialProvider { ref ->
 }
 val sessions = InMemorySessionStore()
 val checkpoints = InMemoryCheckpointStore()
-val provider = OpenAiProviderAdapter()
+val provider = OpenAiProviderAdapter(OpenAiProviderProfile.openAi())
 val runner = DefaultAgentRunner(
     providerRegistry = InMemoryProviderRegistry(listOf(provider)),
     toolRegistry = InMemoryToolRegistry(),
@@ -78,8 +78,8 @@ The Runner and Chatbot client must share the same Session and Checkpoint stores.
 `CredentialRef`; the host resolves the secret only when a request runs. Headless compositions can
 use `DefaultAgentRunner` directly.
 
-Provider endpoints, authentication modes, and compatible services are covered in
-[Providers](providers.md).
+Provider identity, wire protocols, dialect profiles, endpoints, and authentication modes are
+covered in [Providers](providers.md).
 
 ## Deployment paths
 

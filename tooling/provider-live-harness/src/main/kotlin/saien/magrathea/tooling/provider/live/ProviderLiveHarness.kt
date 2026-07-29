@@ -38,13 +38,14 @@ import saien.magrathea.provider.api.AnthropicTransportConfig
 import saien.magrathea.provider.anthropic.AnthropicProviderAdapter
 import saien.magrathea.provider.api.InMemoryProviderRegistry
 import saien.magrathea.provider.api.GeminiTransportConfig
-import saien.magrathea.provider.api.OpenAiApi
 import saien.magrathea.provider.api.OpenAiAuthentication
 import saien.magrathea.provider.api.OpenAiTransportConfig
+import saien.magrathea.provider.api.OpenAiWireProtocol
 import saien.magrathea.provider.api.OpenAiXSearchToolConfig
 import saien.magrathea.provider.api.toProviderOptions
 import saien.magrathea.provider.gemini.GeminiProviderAdapter
 import saien.magrathea.provider.openai.OpenAiProviderAdapter
+import saien.magrathea.provider.openai.OpenAiProviderProfile
 import saien.magrathea.runtime.DefaultAgentRunner
 import saien.magrathea.runtime.InMemoryCheckpointStore
 import saien.magrathea.runtime.InMemorySessionStore
@@ -75,13 +76,7 @@ fun main(args: Array<String>) = runBlocking {
         runFacadeChat(config, credentialProvider)
         return@runBlocking
     }
-    val providerRegistry = InMemoryProviderRegistry(
-        listOf(
-            OpenAiProviderAdapter(),
-            GeminiProviderAdapter(),
-            AnthropicProviderAdapter(),
-        )
-    )
+    val providerRegistry = InMemoryProviderRegistry(listOf(config.createProviderAdapter()))
     val tools = listOf(EchoTextTool(), ClockNowTool(), ReadFileSummaryTool(), FetchUrlTextTool())
     val sessionStore = InMemorySessionStore()
     val checkpointStore = InMemoryCheckpointStore()
@@ -299,14 +294,24 @@ private fun scenarioRequest(
     )
 }
 
+private fun ProviderLiveHarnessConfig.createProviderAdapter() = when (provider) {
+    "gemini" -> GeminiProviderAdapter()
+    "anthropic" -> AnthropicProviderAdapter()
+    "openai" -> OpenAiProviderAdapter(profile = OpenAiProviderProfile.openAi())
+    "openrouter" -> OpenAiProviderAdapter(profile = OpenAiProviderProfile.openRouter())
+    "xai" -> OpenAiProviderAdapter(profile = OpenAiProviderProfile.xAi())
+    else -> error("Unknown provider key: $provider")
+}
+
 private fun providerOptions(config: ProviderLiveHarnessConfig) = when (config.provider) {
     "gemini" -> GeminiTransportConfig(thinkingSummaries = "auto").toProviderOptions()
-    "openai" -> OpenAiTransportConfig(
-        api = requireNotNull(config.openAiApi).transportApi,
+    "openai", "openrouter", "xai" -> OpenAiTransportConfig(
+        protocol = requireNotNull(config.openAiProtocol).wireProtocol,
         authentication = when (config.authentication) {
             null, ProviderLiveAuthentication.BEARER -> OpenAiAuthentication.BEARER
             ProviderLiveAuthentication.API_KEY -> OpenAiAuthentication.API_KEY
-            ProviderLiveAuthentication.X_API_KEY -> error("OpenAI does not support x-api-key authentication")
+            ProviderLiveAuthentication.X_API_KEY ->
+                error("OpenAI-family providers do not support x-api-key authentication")
         },
         hostedTools = if (config.scenario == "x-search") {
             listOf(OpenAiXSearchToolConfig())
@@ -415,7 +420,7 @@ data class ProviderLiveHarnessConfig(
     val maxProviderRetries: Int,
     val endpoint: String?,
     val authentication: ProviderLiveAuthentication?,
-    val openAiApi: ProviderLiveOpenAiApi?,
+    val openAiProtocol: ProviderLiveOpenAiProtocol?,
     val filePath: String?,
     val env: Map<String, String>,
 ) {
@@ -427,7 +432,7 @@ data class ProviderLiveHarnessConfig(
             "streaming=$streaming, promptConfigured=${prompt != null}, endpointConfigured=${endpoint != null}, " +
             "fileConfigured=${filePath != null}, " +
             "maxTokens=$maxTokens, maxProviderRetries=$maxProviderRetries, authentication=$authentication, " +
-            "openAiApi=$openAiApi, " +
+            "openAiProtocol=$openAiProtocol, " +
             "environmentKeys=${env.keys.sorted()})"
 
     companion object {
@@ -461,19 +466,22 @@ data class ProviderLiveHarnessConfig(
                 ?.also(::requireSecureEndpoint)
             val authentication = (values["authentication"] ?: env["MAGRATHEA_AUTHENTICATION"])
                 ?.let(ProviderLiveAuthentication::parse)
-            val requestedOpenAiApi = (values["api"] ?: env["MAGRATHEA_OPENAI_API"])
-                ?.let(ProviderLiveOpenAiApi::parse)
-            require(provider == "openai" || requestedOpenAiApi == null) {
-                "The api setting is available only for the OpenAI provider family"
+            val requestedOpenAiProtocol = (values["protocol"] ?: env["MAGRATHEA_OPENAI_PROTOCOL"])
+                ?.let(ProviderLiveOpenAiProtocol::parse)
+            require(provider in OPENAI_FAMILY_PROVIDERS || requestedOpenAiProtocol == null) {
+                "The protocol setting is available only for OpenAI-family providers"
             }
-            val openAiApi = if (provider == "openai") {
-                requestedOpenAiApi ?: ProviderLiveOpenAiApi.RESPONSES
+            val openAiProtocol = if (provider in OPENAI_FAMILY_PROVIDERS) {
+                requestedOpenAiProtocol ?: when (provider) {
+                    "openrouter" -> ProviderLiveOpenAiProtocol.CHAT_COMPLETIONS
+                    else -> ProviderLiveOpenAiProtocol.RESPONSES
+                }
             } else {
                 null
             }
             if (scenario == "x-search") {
-                require(provider == "openai" && openAiApi == ProviderLiveOpenAiApi.RESPONSES) {
-                    "The x-search scenario requires the OpenAI provider family with the Responses API"
+                require(provider == "xai" && openAiProtocol == ProviderLiveOpenAiProtocol.RESPONSES) {
+                    "The x-search scenario requires the xAI Provider profile with the Responses protocol"
                 }
             }
             val filePath = values["file"] ?: env["MAGRATHEA_FILE"]
@@ -491,7 +499,7 @@ data class ProviderLiveHarnessConfig(
                 maxProviderRetries = maxProviderRetries,
                 endpoint = endpoint,
                 authentication = authentication,
-                openAiApi = openAiApi,
+                openAiProtocol = openAiProtocol,
                 filePath = filePath,
                 env = env,
             )
@@ -553,17 +561,17 @@ enum class ProviderLiveAuthentication(val argument: String) {
     }
 }
 
-enum class ProviderLiveOpenAiApi(
+enum class ProviderLiveOpenAiProtocol(
     val argument: String,
-    val transportApi: OpenAiApi,
+    val wireProtocol: OpenAiWireProtocol,
 ) {
-    RESPONSES("responses", OpenAiApi.RESPONSES),
-    CHAT_COMPLETIONS("chat-completions", OpenAiApi.CHAT_COMPLETIONS);
+    RESPONSES("responses", OpenAiWireProtocol.RESPONSES),
+    CHAT_COMPLETIONS("chat-completions", OpenAiWireProtocol.CHAT_COMPLETIONS);
 
     companion object {
-        fun parse(value: String): ProviderLiveOpenAiApi = entries.singleOrNull {
+        fun parse(value: String): ProviderLiveOpenAiProtocol = entries.singleOrNull {
             it.argument == value.lowercase()
-        } ?: throw IllegalArgumentException("Unknown OpenAI API: $value")
+        } ?: throw IllegalArgumentException("Unknown OpenAI wire protocol: $value")
     }
 }
 
@@ -585,9 +593,16 @@ private fun validateAuthentication(
     if (authentication == null) return
     require(endpoint != null) { "Explicit Provider authentication requires an explicit endpoint" }
     when (provider) {
-        "openai" -> require(authentication in setOf(ProviderLiveAuthentication.BEARER, ProviderLiveAuthentication.API_KEY)) {
-            "OpenAI authentication must be bearer or api-key"
-        }
+        in OPENAI_FAMILY_PROVIDERS ->
+            require(
+                authentication in
+                    setOf(
+                        ProviderLiveAuthentication.BEARER,
+                        ProviderLiveAuthentication.API_KEY,
+                    ),
+            ) {
+                "OpenAI-family authentication must be bearer or api-key"
+            }
         "anthropic" -> require(authentication in setOf(ProviderLiveAuthentication.X_API_KEY, ProviderLiveAuthentication.BEARER)) {
             "Anthropic authentication must be x-api-key or bearer"
         }
@@ -603,8 +618,11 @@ private data class ProviderLiveSpec(
 private val HARNESS_PROVIDER_SPECS = mapOf(
     "gemini" to ProviderLiveSpec("MAGRATHEA_GEMINI_API_KEY", "gemini-2.5-flash"),
     "openai" to ProviderLiveSpec("MAGRATHEA_OPENAI_API_KEY", "gpt-4o-mini"),
+    "openrouter" to ProviderLiveSpec("MAGRATHEA_OPENROUTER_API_KEY", "openai/gpt-4o-mini"),
+    "xai" to ProviderLiveSpec("MAGRATHEA_XAI_API_KEY", "grok-4.5"),
     "anthropic" to ProviderLiveSpec("MAGRATHEA_ANTHROPIC_API_KEY", "claude-3-5-sonnet-latest"),
 )
+private val OPENAI_FAMILY_PROVIDERS = setOf("openai", "openrouter", "xai")
 private val HARNESS_SCENARIOS = setOf("chat", "file", "mixed-tools", "resume", "x-search")
 private const val HARNESS_TIMEOUT_MS = 120_000L
 private const val MAX_LIVE_FILE_BYTES = 10L * 1_024L * 1_024L

@@ -1,15 +1,19 @@
 # Providers
 
-A Magrathea Provider adapter implements one exact wire protocol and emits canonical Runtime events.
-Provider keys identify protocol families and can target canonical or compatible service endpoints.
+A Magrathea Provider adapter translates one wire protocol into canonical Runtime events:
+
+- `ProviderAdapter.key` is the Runtime routing key and credential namespace;
+- `ProviderAdapter.optionsFamily` selects the typed options schema;
+- a Provider profile owns protocol defaults, endpoints, and documented dialect behavior.
 
 ## Reference adapters
 
-| Module | Provider key | Wire contract | Default endpoint | Default authentication |
+| Module/profile | Provider key | Default wire contract | Default endpoint | Authentication |
 |---|---|---|---|---|
 | `magrathea-provider-gemini` | `gemini` | Gemini Interactions v1 | `https://generativelanguage.googleapis.com/v1/interactions` | `x-goog-api-key` |
-| `magrathea-provider-openai` | `openai` | OpenAI Responses | `https://api.openai.com/v1/responses` | Bearer |
-| `magrathea-provider-openai` | `openai` | OpenAI Chat Completions | `https://api.openai.com/v1/chat/completions` | Bearer |
+| `OpenAiProviderProfile.openAi()` | `openai` | OpenAI Responses | `https://api.openai.com/v1/responses` | Bearer |
+| `OpenAiProviderProfile.openRouter()` | `openrouter` | OpenAI Chat Completions | `https://openrouter.ai/api/v1/chat/completions` | Bearer |
+| `OpenAiProviderProfile.xAi()` | `xai` | OpenAI Responses | `https://api.x.ai/v1/responses` | Bearer |
 | `magrathea-provider-anthropic` | `anthropic` | Anthropic Messages | `https://api.anthropic.com/v1/messages` | `x-api-key` |
 
 The capability and verification details for each contract are in the
@@ -42,50 +46,70 @@ val credentials = CredentialProvider { ref ->
 }
 ```
 
-Secrets never belong in a session, checkpoint, Provider options, diagnostic, or model descriptor.
-Use distinct profiles when an application has multiple accounts or endpoints for the same
-protocol.
+Distinct credential profiles can represent multiple accounts for one Provider.
 
-## Compatible services
+## OpenAI-family profiles
 
-A compatible service must implement the selected wire contract exactly. The host selects the full
-endpoint and protocol variant; the adapter uses that contract without probing or fallback between
-Responses, Chat Completions, and Messages.
+Register each service under its real identity:
 
-Bind a custom endpoint and any required non-authentication headers to the credential profile so a
-persisted session can resume after a process restart:
+```kotlin
+val providers = InMemoryProviderRegistry(
+    listOf(
+        OpenAiProviderAdapter(OpenAiProviderProfile.openAi()),
+        OpenAiProviderAdapter(OpenAiProviderProfile.openRouter()),
+        OpenAiProviderAdapter(OpenAiProviderProfile.xAi()),
+    ),
+)
+```
+
+An OpenRouter session consequently uses `openrouter` in both its model and credential reference:
+
+```kotlin
+ChatbotSessionConfiguration(
+    model = ModelDescriptor("openrouter", "openai/gpt-4o-mini"),
+    credentialRef = CredentialRef("openrouter"),
+)
+```
+
+OpenAI defaults to Responses, OpenRouter to Chat Completions, and xAI to Responses. Set
+`protocol` when using another wire contract supported by the selected service and model:
+
+```kotlin
+OpenAiTransportConfig(
+    protocol = OpenAiWireProtocol.RESPONSES,
+    authentication = OpenAiAuthentication.BEARER,
+).toProviderOptions()
+```
+
+A custom service that implements an OpenAI wire protocol receives its own Provider identity:
+
+```kotlin
+val profile = OpenAiProviderProfile.compatible(
+    providerId = "acme-ai",
+    defaultProtocol = OpenAiWireProtocol.CHAT_COMPLETIONS,
+    chatCompletionsEndpoint = "https://api.acme.example/v1/chat/completions",
+)
+val provider = OpenAiProviderAdapter(profile)
+```
+
+The host may instead bind the full endpoint and non-authentication headers to the credential
+profile. This keeps a persisted session resumable across process restarts:
 
 ```kotlin
 val credentials = CredentialProvider { ref ->
-    require(ref == CredentialRef(provider = "openai", profile = "compatible"))
+    require(ref == CredentialRef(provider = "acme-ai", profile = "default"))
     ProviderCredential(
         value = loadCompatibleApiKey(),
-        endpoint = "https://compatible.example/v1/chat/completions",
+        endpoint = "https://api.acme.example/v1/chat/completions",
         headers = mapOf("X-Application" to "my-app"),
     )
 }
 ```
 
-Select the matching OpenAI contract and authentication mode explicitly:
+The profile supplies the default protocol. The `COMPATIBLE` dialect uses the shared codec without
+Provider-specific normalization.
 
-```kotlin
-val requestFactory = DefaultChatbotRequestFactory(
-    configure = {
-        copy(
-            engine = engine.copy(
-                provider = engine.provider.copy(
-                    options = OpenAiTransportConfig(
-                        api = OpenAiApi.CHAT_COMPLETIONS,
-                        authentication = OpenAiAuthentication.BEARER,
-                    ).toProviderOptions(),
-                ),
-            ),
-        )
-    },
-)
-```
-
-OpenAI-family adapters support `BEARER` and `API_KEY`. Anthropic Messages supports `X_API_KEY` and
+OpenAI-family profiles support `BEARER` and `API_KEY`. Anthropic Messages supports `X_API_KEY` and
 `BEARER`:
 
 ```kotlin
@@ -98,9 +122,8 @@ The endpoint is the full request URL. Direct remote endpoints must use HTTPS; pl
 accepted only for exact loopback hosts used by local development and controlled tests. URL
 userinfo and fragments are rejected.
 
-`ProviderConfig.endpoint` and `ProviderConfig.headers` are transient per-run overrides. They are
-deliberately excluded from serialized sessions and checkpoints; use the credential profile for
-durable endpoint configuration.
+`ProviderConfig.endpoint` and `ProviderConfig.headers` are per-run overrides. Use the credential
+profile for durable endpoint configuration.
 
 ## Custom adapters
 
@@ -122,9 +145,10 @@ uniformly through the registry.
 
 ## Model and attachment capabilities
 
-`ProviderAdapter.inputCapabilities` is the protocol encoder's upper bound. Per-model support comes
-from trusted model metadata and product policy, intersected with adapter capabilities; missing
-model metadata means unknown rather than text-only.
+`ProviderAdapter.inputCapabilities(config)` is the effective protocol encoder's upper bound. For
+example, one OpenAI-family profile can report different attachment support for Responses and Chat
+Completions. Per-model support comes from trusted model metadata and product policy, intersected
+with adapter capabilities; missing model metadata means unknown rather than text-only.
 
 The same rule applies to streaming, Tool use, and reasoning: configure `ModelDescriptor` from
 trusted model metadata instead of inferring capability from a Provider name.
@@ -133,3 +157,4 @@ trusted model metadata instead of inferring capability from a Provider name.
 
 Deterministic protocol tests are part of the normal SDK gates. Controlled remote checks live in the
 [Provider live harness](../tooling/provider-live-harness) and run only when explicitly invoked.
+See [ADR-007](adr/ADR-007-reference-provider-contracts.md) for the Provider contract.

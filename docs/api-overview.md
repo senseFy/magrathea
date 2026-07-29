@@ -28,8 +28,9 @@ and UI.
 - strict typed options for Gemini, OpenAI, and Anthropic protocol families.
 
 Reference adapters live in their own modules. Applications can register a custom adapter without
-changing Runtime. The host retains credential ownership and resolves credentials immediately
-before each call.
+changing Runtime. OpenAI-family integrations use `OpenAiProviderProfile` to keep Provider identity,
+wire protocol, endpoint defaults, and documented dialect behavior separate. The host retains
+credential ownership and resolves credentials immediately before each call.
 
 See [Providers](providers.md) for endpoint and authentication configuration, and the
 [Provider Capability Matrix](provider-capability-matrix.md) for protocol coverage.

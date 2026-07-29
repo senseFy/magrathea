@@ -20,8 +20,8 @@ import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolDefinition
 import saien.magrathea.core.ToolResultPart
-import saien.magrathea.provider.api.OpenAiApi
 import saien.magrathea.provider.api.OpenAiTransportConfig
+import saien.magrathea.provider.api.OpenAiWireProtocol
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRequest
 
@@ -100,7 +100,7 @@ class OpenAiChatCompletionsRequestContractTest {
         val payload = builder.build(
             request(
                 typedConfig = OpenAiTransportConfig(
-                    api = OpenAiApi.CHAT_COMPLETIONS,
+                    protocol = OpenAiWireProtocol.CHAT_COMPLETIONS,
                     instructions = "Answer briefly",
                     reasoningEffort = "high",
                     serviceTier = "auto",
@@ -183,7 +183,7 @@ class OpenAiChatCompletionsRequestContractTest {
     private fun request(
         messages: List<AgentMessage> = listOf(AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("Hello")))),
         tools: List<ToolDefinition> = emptyList(),
-        typedConfig: OpenAiTransportConfig = OpenAiTransportConfig(api = OpenAiApi.CHAT_COMPLETIONS),
+        typedConfig: OpenAiTransportConfig = OpenAiTransportConfig(protocol = OpenAiWireProtocol.CHAT_COMPLETIONS),
     ): ProviderRequest = ProviderRequest(
         model = ModelDescriptor("openai", "compatible-model", supportsStreaming = true),
         messages = messages,

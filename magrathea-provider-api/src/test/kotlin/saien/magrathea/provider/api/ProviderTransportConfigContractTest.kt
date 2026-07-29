@@ -5,7 +5,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.Assert.assertThrows
-import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ProviderConfig
 import saien.magrathea.core.ProviderOptions
 import kotlinx.serialization.json.buildJsonObject
@@ -17,7 +16,7 @@ class ProviderTransportConfigContractTest {
         try {
             compileProviderTransportConfig(
                 config = ProviderConfig(options = AnthropicTransportConfig().toProviderOptions()),
-                provider = "openai",
+                expectedFamily = "openai",
             )
             throw AssertionError("Expected provider family validation")
         } catch (error: IllegalArgumentException) {
@@ -26,15 +25,25 @@ class ProviderTransportConfigContractTest {
 
         val valid = compileProviderTransportConfig(
             config = ProviderConfig(options = OpenAiTransportConfig(reasoningEffort = "high").toProviderOptions()),
-            provider = "openai",
+            expectedFamily = "openai",
         )
         assertEquals(OpenAiTransportConfig(reasoningEffort = "high"), valid)
     }
 
     @Test
+    fun adapterWithoutAnOptionsFamilyRejectsTypedOptions() {
+        assertThrows(IllegalArgumentException::class.java) {
+            compileProviderTransportConfig(
+                config = ProviderConfig(options = OpenAiTransportConfig().toProviderOptions()),
+                expectedFamily = null,
+            )
+        }
+    }
+
+    @Test
     fun compatibleEndpointAuthenticationModesRoundTripThroughProviderOptions() {
         val openAi = OpenAiTransportConfig(
-            api = OpenAiApi.CHAT_COMPLETIONS,
+            protocol = OpenAiWireProtocol.CHAT_COMPLETIONS,
             authentication = OpenAiAuthentication.API_KEY,
         )
         val anthropic = AnthropicTransportConfig(authentication = AnthropicAuthentication.BEARER)
@@ -43,14 +52,14 @@ class ProviderTransportConfigContractTest {
             openAi,
             compileProviderTransportConfig(
                 ProviderConfig(options = openAi.toProviderOptions()),
-                provider = "openai",
+                expectedFamily = "openai",
             ),
         )
         assertEquals(
             anthropic,
             compileProviderTransportConfig(
                 ProviderConfig(options = anthropic.toProviderOptions()),
-                provider = "anthropic",
+                expectedFamily = "anthropic",
             ),
         )
     }
@@ -73,7 +82,7 @@ class ProviderTransportConfigContractTest {
             config,
             compileProviderTransportConfig(
                 ProviderConfig(options = config.toProviderOptions()),
-                provider = "openai",
+                expectedFamily = "openai",
             ),
         )
 
@@ -90,7 +99,7 @@ class ProviderTransportConfigContractTest {
 
         assertThrows(IllegalArgumentException::class.java) {
             OpenAiTransportConfig(
-                api = OpenAiApi.CHAT_COMPLETIONS,
+                protocol = OpenAiWireProtocol.CHAT_COMPLETIONS,
                 hostedTools = listOf(OpenAiXSearchToolConfig()),
             )
         }
@@ -101,7 +110,7 @@ class ProviderTransportConfigContractTest {
         try {
             compileProviderTransportConfig(
                 config = ProviderConfig(options = ProviderOptions(family = "future-provider")),
-                provider = "future-provider",
+                expectedFamily = "future-provider",
             )
             throw AssertionError("Expected unknown provider options rejection")
         } catch (error: IllegalArgumentException) {
@@ -119,7 +128,7 @@ class ProviderTransportConfigContractTest {
         )
 
         try {
-            compileProviderTransportConfig(config, provider = "openai")
+            compileProviderTransportConfig(config, expectedFamily = "openai")
             throw AssertionError("Expected strict provider option decoding")
         } catch (error: IllegalArgumentException) {
             assertFalse(error.message.orEmpty().isBlank())

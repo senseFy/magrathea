@@ -7,6 +7,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import saien.magrathea.core.ProviderCredential
 import saien.magrathea.provider.api.AnthropicAuthentication
+import saien.magrathea.provider.api.AnthropicTransportConfig
 import saien.magrathea.provider.api.HttpHeader
 import saien.magrathea.provider.api.HttpMethod
 import saien.magrathea.provider.api.HttpRequestSpec
@@ -19,6 +20,7 @@ import saien.magrathea.provider.api.ProviderAuthException
 import saien.magrathea.provider.api.ProviderChunk
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRequest
+import saien.magrathea.provider.api.ProviderTransportConfig
 import saien.magrathea.provider.api.ReferenceProviderInputCapabilities
 import saien.magrathea.provider.api.createDefaultHttpTransport
 import saien.magrathea.provider.api.requireSuccessful
@@ -30,7 +32,12 @@ class AnthropicProviderAdapter(
     sourceJson: Json = Json,
 ) : ProviderAdapter {
     override val key: String = "anthropic"
-    override val inputCapabilities = ReferenceProviderInputCapabilities.anthropicMessages
+    override val optionsFamily: String = "anthropic"
+
+    override fun inputCapabilities(config: ProviderTransportConfig?) = when (config) {
+        null, is AnthropicTransportConfig -> ReferenceProviderInputCapabilities.anthropicMessages
+        else -> throw IllegalArgumentException("Anthropic provider received options for another provider family")
+    }
 
     private val json = Json(sourceJson) {
         encodeDefaults = false

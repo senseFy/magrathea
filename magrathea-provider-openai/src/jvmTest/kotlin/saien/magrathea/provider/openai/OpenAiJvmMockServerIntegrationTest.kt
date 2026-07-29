@@ -13,8 +13,8 @@ import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ProviderCredential
 import saien.magrathea.core.TextPart
 import saien.magrathea.provider.api.ProviderEvent
-import saien.magrathea.provider.api.OpenAiApi
 import saien.magrathea.provider.api.OpenAiTransportConfig
+import saien.magrathea.provider.api.OpenAiWireProtocol
 import saien.magrathea.provider.api.ProviderRequest
 
 class OpenAiJvmMockServerIntegrationTest {
@@ -73,7 +73,7 @@ class OpenAiJvmMockServerIntegrationTest {
                     credentialRef = CredentialRef("openai"),
                     credential = ProviderCredential("mock-secret"),
                     endpoint = "http://127.0.0.1:${server.address.port}/v1/chat/completions",
-                    typedConfig = OpenAiTransportConfig(api = OpenAiApi.CHAT_COMPLETIONS),
+                    typedConfig = OpenAiTransportConfig(protocol = OpenAiWireProtocol.CHAT_COMPLETIONS),
                 ),
             ).toList()
 

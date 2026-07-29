@@ -28,7 +28,7 @@ class ProviderLiveHarnessConfigTest {
         assertEquals(0, config.maxProviderRetries)
         assertNull(config.endpoint)
         assertNull(config.authentication)
-        assertNull(config.openAiApi)
+        assertNull(config.openAiProtocol)
         assertNull(config.filePath)
     }
 
@@ -89,30 +89,29 @@ class ProviderLiveHarnessConfigTest {
         val config = ProviderLiveHarnessConfig.from(
             arrayOf(
                 "provider=openai",
-                "api=chat-completions",
+                "protocol=chat-completions",
                 "endpoint=https://compatible.example.test/v1/chat/completions",
             ),
             emptyMap(),
         )
 
-        assertEquals(ProviderLiveOpenAiApi.CHAT_COMPLETIONS, config.openAiApi)
-        assertTrue(config.toString().contains("openAiApi=CHAT_COMPLETIONS"))
+        assertEquals(ProviderLiveOpenAiProtocol.CHAT_COMPLETIONS, config.openAiProtocol)
+        assertTrue(config.toString().contains("openAiProtocol=CHAT_COMPLETIONS"))
     }
 
     @Test
     fun xSearchUsesOpenAiResponsesWithAReasoningSizedOutputBudget() {
         val config = ProviderLiveHarnessConfig.from(
             arrayOf(
-                "provider=openai",
+                "provider=xai",
                 "scenario=x-search",
                 "model=grok-contract",
-                "endpoint=https://api.x.ai/v1/responses",
             ),
             emptyMap(),
         )
 
         assertEquals("x-search", config.scenario)
-        assertEquals(ProviderLiveOpenAiApi.RESPONSES, config.openAiApi)
+        assertEquals(ProviderLiveOpenAiProtocol.RESPONSES, config.openAiProtocol)
         assertEquals(8_192, config.maxTokens)
     }
 
@@ -127,9 +126,9 @@ class ProviderLiveHarnessConfigTest {
         assertThrows(IllegalArgumentException::class.java) {
             ProviderLiveHarnessConfig.from(
                 arrayOf(
-                    "provider=openai",
+                    "provider=xai",
                     "scenario=x-search",
-                    "api=chat-completions",
+                    "protocol=chat-completions",
                 ),
                 emptyMap(),
             )
@@ -167,11 +166,29 @@ class ProviderLiveHarnessConfigTest {
             ProviderLiveHarnessConfig.from(arrayOf("maxProviderRetries=-1"), emptyMap())
         }
         assertThrows(IllegalArgumentException::class.java) {
-            ProviderLiveHarnessConfig.from(arrayOf("provider=gemini", "api=chat-completions"), emptyMap())
+            ProviderLiveHarnessConfig.from(arrayOf("provider=gemini", "protocol=chat-completions"), emptyMap())
         }
         assertThrows(IllegalArgumentException::class.java) {
             ProviderLiveHarnessConfig.from(arrayOf("scenario=unknown"), emptyMap())
         }
+    }
+
+    @Test
+    fun providerProfilesHaveIndependentIdentityAndProtocolDefaults() {
+        val openRouter = ProviderLiveHarnessConfig.from(
+            arrayOf("provider=openrouter"),
+            mapOf("MAGRATHEA_OPENROUTER_API_KEY" to "secret"),
+        )
+        val xAi = ProviderLiveHarnessConfig.from(
+            arrayOf("provider=xai"),
+            mapOf("MAGRATHEA_XAI_API_KEY" to "secret"),
+        )
+
+        assertEquals(ProviderLiveOpenAiProtocol.CHAT_COMPLETIONS, openRouter.openAiProtocol)
+        assertEquals("openai/gpt-4o-mini", openRouter.model)
+        assertEquals("secret", openRouter.apiKeyFor("openrouter"))
+        assertEquals(ProviderLiveOpenAiProtocol.RESPONSES, xAi.openAiProtocol)
+        assertEquals("grok-4.5", xAi.model)
     }
 
     @Test
