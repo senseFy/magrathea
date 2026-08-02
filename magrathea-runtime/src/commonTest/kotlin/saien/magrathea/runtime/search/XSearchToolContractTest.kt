@@ -43,8 +43,9 @@ class XSearchToolContractTest {
 
     @Test
     fun definitionContainsStableSchemaAndHardRuntimeLimits() {
+        val backend = XSearchBackend { XSearchEvidence("No evidence.") }
         val tool = XSearchTool(
-            backend = XSearchBackend { XSearchEvidence("No evidence.") },
+            backend = backend,
             policy = XSearchPolicy(
                 maxSearchCallsPerRun = 2,
                 maxQueryChars = 240,
@@ -54,9 +55,14 @@ class XSearchToolContractTest {
             requiresPermission = "network",
             requiresApproval = true,
         )
+        val failClosed = XSearchTool(
+            backend = backend,
+            recoveryPolicy = ToolRecoveryPolicy.FAIL_CLOSED,
+        )
 
         assertEquals(XSearchTool.NAME, tool.definition.name)
         assertEquals(ToolRecoveryPolicy.REPLAY_SAFE, tool.recoveryPolicy)
+        assertEquals(ToolRecoveryPolicy.FAIL_CLOSED, failClosed.recoveryPolicy)
         assertEquals(2, tool.definition.maxCallsPerTurn)
         assertEquals(2, tool.definition.maxCallsPerRun)
         assertEquals(4_000, tool.definition.timeoutMs)

@@ -16,7 +16,7 @@ remote integration expand Agent context or authority outside the existing host c
 MCP support is an optional `magrathea-mcp` client adapter. It depends on Core and the official
 Kotlin MCP client SDK; Core and Runtime do not depend on MCP.
 
-The Alpha adapter maps MCP Tools onto the existing `ToolRegistry`:
+The adapter maps MCP Tools onto the existing `ToolRegistry`:
 
 - initialization and capability negotiation are delegated to the official SDK;
 - `tools/list` is consumed with bounded pagination and `notifications/tools/list_changed` refreshes
@@ -27,8 +27,13 @@ The Alpha adapter maps MCP Tools onto the existing `ToolRegistry`:
   call budgets;
 - Tool annotations are treated only as untrusted presentation hints;
 - Tools that require experimental MCP Tasks are reported as incompatible and are not advertised;
-- Tool results preserve structured content and canonical MCP content in bounded Magrathea result
-  fields.
+- Tool results keep `structuredContent`, or the serialized MCP content envelope when absent, as
+  the durable canonical result;
+- server and source-local Tool identity map to the generic, bounded `ToolOrigin` contract;
+- model input uses a separate typed projection: text and images map natively, links and text
+  resources map to bounded text, and binary resources and audio map to omission markers;
+- raw resource blobs, audio payloads, and arbitrary MCP metadata do not enter that typed
+  projection, while MCP audience annotations map to explicit model/user audiences.
 
 Streamable HTTP is the portable transport. Remote plaintext HTTP is rejected; loopback HTTP remains
 available for local development and conformance tests. Credentials are supplied lazily as headers
@@ -43,9 +48,8 @@ tighten or deliberately raise these limits with `McpConnectionOptions`; Runtime 
 independent outer boundary. Public connection, refresh, and Tool-call failures carry stable
 operation/category values without retaining raw transport or server exceptions.
 
-Resources, Prompts, server instructions, Sampling, Roots, Elicitation, and Tasks are not
-automatically injected or enabled. A future feature may expose an explicit host API for one of
-these capabilities without changing this authority boundary.
+Resources, Prompts, server instructions, Sampling, Roots, Elicitation, and Tasks remain outside the
+Tool adapter authority and require separate, explicit host APIs.
 
 The repository uses three complementary verification layers:
 

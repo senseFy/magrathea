@@ -1,7 +1,5 @@
 # X Search Contract
 
-> Status: Alpha public contract for `0.1.0-alpha.1`.
-
 ## Scope
 
 Magrathea exposes X Search as a Provider-neutral, client-executed function Tool. The main agent
@@ -68,6 +66,11 @@ checkpoint resume. The same numeric ceiling is also applied per model response a
 against an oversized parallel Tool-call batch; it does not reset or increase the run budget.
 `RuntimeConfig.maxTurns` independently bounds the number of main-model/tool cycles in one Agent
 run.
+
+`XSearchTool` defaults to `ToolRecoveryPolicy.REPLAY_SAFE`. A host whose backend must not repeat an
+invocation with an unknown outcome, including a backend with non-repeatable billing semantics,
+sets `recoveryPolicy = ToolRecoveryPolicy.FAIL_CLOSED` when constructing the Tool. Recovery policy
+describes backend execution semantics and therefore remains separate from `XSearchPolicy`.
 
 ## OpenAI Responses hosted wire
 

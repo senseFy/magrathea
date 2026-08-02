@@ -124,9 +124,21 @@ fun interface ContextManager {
     suspend fun prepare(request: ContextPreparationRequest): ContextPreparationResult
 }
 
+/**
+ * Decides whether Runtime may start another Provider request before any canonical event was seen.
+ *
+ * `attempt` is the one-based retry ordinal for the current Provider invocation: `1` is the first
+ * retry after its initial request. The ordinal resets when Runtime starts a later Provider
+ * invocation, such as after a tool result.
+ * Runtime enforces [RuntimeConfig.maxProviderRetries] and any Provider `Retry-After` minimum in
+ * addition to this policy.
+ */
 interface RetryPolicy {
     suspend fun shouldRetry(attempt: Int, error: Throwable): Boolean
-    suspend fun backoffDelayMs(attempt: Int): Long = (attempt * 250L).coerceAtMost(2_000L)
+
+    /** Returns the host-selected delay before the retry identified by `attempt`. */
+    suspend fun backoffDelayMs(attempt: Int, error: Throwable): Long =
+        (attempt * 250L).coerceAtMost(2_000L)
 }
 
 /**
@@ -228,7 +240,7 @@ data class AgentSessionSnapshot(
     }
 }
 
-const val CURRENT_STORAGE_SCHEMA_VERSION: Int = 4
+const val CURRENT_STORAGE_SCHEMA_VERSION: Int = 5
 
 @Serializable
 data class StoredSessionEnvelope(
@@ -425,6 +437,7 @@ sealed interface AgentEvent {
 
     @Serializable
     @SerialName("retry_scheduled")
+    /** `attempt` is the one-based retry ordinal for the current Provider invocation. */
     data class RetryScheduled(
         val sessionId: AgentSessionId,
         val attempt: Int,
@@ -468,17 +481,51 @@ sealed interface AgentEvent {
 @Serializable
 enum class AgentInterruptionReason {
     HOST_REQUESTED,
-    PROVIDER_NETWORK,
-    PROVIDER_TIMEOUT,
+    PROVIDER_FAILURE,
     ORPHANED,
+}
+
+@Serializable
+enum class ProviderInterruptionPhase {
+    BEFORE_FIRST_EVENT,
+    AFTER_FIRST_EVENT,
+}
+
+@Serializable
+data class ProviderInterruption(
+    val code: AgentFailureCode,
+    val phase: ProviderInterruptionPhase,
+    val retryAtEpochMs: Long? = null,
+) {
+    init {
+        require(
+            code == AgentFailureCode.PROVIDER_NETWORK ||
+                code == AgentFailureCode.TIMEOUT ||
+                code == AgentFailureCode.PROVIDER_RATE_LIMIT ||
+                code == AgentFailureCode.PROVIDER_SERVER,
+        ) { "Provider interruption must describe a recoverable Provider failure" }
+        require(retryAtEpochMs == null || retryAtEpochMs >= 0) {
+            "Provider retry time must not be negative"
+        }
+    }
 }
 
 @Serializable
 data class AgentInterruption(
     val reason: AgentInterruptionReason,
+    val provider: ProviderInterruption? = null,
     @EncodeDefault(EncodeDefault.Mode.ALWAYS)
     val occurredAtEpochMs: Long = SystemEpochClock.nowEpochMs(),
-)
+) {
+    init {
+        require((reason == AgentInterruptionReason.PROVIDER_FAILURE) == (provider != null)) {
+            "Provider interruption details must match the interruption reason"
+        }
+        require(provider?.retryAtEpochMs == null || provider.retryAtEpochMs >= occurredAtEpochMs) {
+            "Provider retry time must not precede the interruption"
+        }
+    }
+}
 
 enum class AgentRecoveryDisposition {
     ACTIVE,

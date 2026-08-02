@@ -20,59 +20,6 @@ enum class WebSearchDepth {
     DEEP,
 }
 
-enum class WebSearchFreshness {
-    AUTO,
-    PAST_DAY,
-    PAST_WEEK,
-    PAST_MONTH,
-    PAST_YEAR,
-}
-
-enum class WebSearchSafeSearch {
-    OFF,
-    MODERATE,
-    STRICT,
-}
-
-data class WebSearchLocale(
-    val languageTag: String? = null,
-    val countryCode: String? = null,
-) {
-    init {
-        languageTag?.let {
-            require(LANGUAGE_TAG.matches(it)) { "Web search languageTag must be a normalized BCP 47 tag" }
-        }
-        countryCode?.let {
-            require(COUNTRY_CODE.matches(it)) { "Web search countryCode must be an uppercase ISO alpha-2 code" }
-        }
-    }
-}
-
-data class WebSearchLocation(
-    val city: String? = null,
-    val region: String? = null,
-    val countryCode: String? = null,
-    val timezone: String? = null,
-) {
-    init {
-        listOfNotNull(city, region, timezone).forEach {
-            require(
-                it.isNotBlank() &&
-                    it == it.trim() &&
-                    it.length <= MAX_LOCATION_VALUE_CHARS &&
-                    it.none(Char::isUnsafeControl),
-            ) {
-                "Web search location values must be trimmed and bounded"
-            }
-        }
-        countryCode?.let {
-            require(COUNTRY_CODE.matches(it)) { "Web search countryCode must be an uppercase ISO alpha-2 code" }
-        }
-    }
-
-    override fun toString(): String = "WebSearchLocation(<redacted>)"
-}
-
 /** Host-owned policy for one portable web-search Tool instance. No credential belongs in this value. */
 data class WebSearchPolicy(
     val maxSearchCallsPerRun: Int = 3,
@@ -81,12 +28,12 @@ data class WebSearchPolicy(
     val maxQueryChars: Int = 512,
     val maxSnippetChars: Int = 1_200,
     val depth: WebSearchDepth = WebSearchDepth.BALANCED,
-    val freshness: WebSearchFreshness = WebSearchFreshness.AUTO,
+    val freshness: SearchFreshness = SearchFreshness.AUTO,
     val allowedDomains: List<String> = emptyList(),
     val blockedDomains: List<String> = emptyList(),
-    val locale: WebSearchLocale? = null,
-    val location: WebSearchLocation? = null,
-    val safeSearch: WebSearchSafeSearch = WebSearchSafeSearch.MODERATE,
+    val locale: SearchLocale? = null,
+    val location: SearchLocation? = null,
+    val safeSearch: SearchSafeSearch = SearchSafeSearch.MODERATE,
     val timeoutMs: Long = 12_000,
 ) {
     init {
@@ -121,12 +68,12 @@ data class WebSearchBackendRequest(
     val query: String,
     val maxResults: Int,
     val depth: WebSearchDepth,
-    val freshness: WebSearchFreshness,
+    val freshness: SearchFreshness,
     val allowedDomains: List<String>,
     val blockedDomains: List<String>,
-    val locale: WebSearchLocale?,
-    val location: WebSearchLocation?,
-    val safeSearch: WebSearchSafeSearch,
+    val locale: SearchLocale?,
+    val location: SearchLocation?,
+    val safeSearch: SearchSafeSearch,
     val timeoutMs: Long,
 ) {
     override fun toString(): String {
@@ -183,9 +130,8 @@ class WebSearchTool(
     policy: WebSearchPolicy = WebSearchPolicy(),
     requiresPermission: String? = null,
     requiresApproval: Boolean = false,
+    override val recoveryPolicy: ToolRecoveryPolicy = ToolRecoveryPolicy.REPLAY_SAFE,
 ) : ToolExecutor {
-    override val recoveryPolicy: ToolRecoveryPolicy = ToolRecoveryPolicy.REPLAY_SAFE
-
     val policy: WebSearchPolicy = policy.copy(
         allowedDomains = policy.allowedDomains.toList(),
         blockedDomains = policy.blockedDomains.toList(),
@@ -285,6 +231,7 @@ class WebSearchTool(
         },
         isError = true,
         displayText = "Web search failed.",
+        userErrorCode = code.serialName,
     )
 
     companion object {
@@ -407,8 +354,6 @@ private fun isDomainShape(value: String): Boolean {
 
 private fun Char.isAsciiLetterOrDigit(): Boolean = this in 'a'..'z' || this in '0'..'9'
 
-private fun Char.isUnsafeControl(): Boolean = code < 0x20 || code == 0x7f
-
 private val WebSearchFailureCode.serialName: String
     get() = when (this) {
         WebSearchFailureCode.INVALID_QUERY -> "invalid-query"
@@ -420,8 +365,6 @@ private val WebSearchFailureCode.serialName: String
         WebSearchFailureCode.UNAVAILABLE -> "unavailable"
     }
 
-private val LANGUAGE_TAG = Regex("[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-[A-Z]{2}|-[0-9]{3})?")
-private val COUNTRY_CODE = Regex("[A-Z]{2}")
 private val EXTERNAL_WHITESPACE = Regex("[\\s\\u0000-\\u001F\\u007F]+")
 private const val MAX_SEARCH_CALLS_PER_RUN = 20
 private const val MAX_RESULTS_PER_QUERY = 50
@@ -431,7 +374,6 @@ private const val MAX_SNIPPET_CHARS = 8_000
 private const val MIN_TIMEOUT_MS = 100L
 private const val MAX_TIMEOUT_MS = 120_000L
 private const val MAX_DOMAIN_FILTERS = 100
-private const val MAX_LOCATION_VALUE_CHARS = 128
 private const val MAX_TITLE_CHARS = 300
 private const val MAX_PUBLISHED_AT_CHARS = 64
 private const val MAX_URL_CHARS = 2_048

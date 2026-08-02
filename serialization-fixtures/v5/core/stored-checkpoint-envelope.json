@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 5,
+  "sdkVersion": "0.1.0-alpha.2",
+  "payload": {
+    "sessionId": {
+      "value": "session-fixture-1"
+    },
+    "runId": {
+      "value": "run-fixture-1"
+    },
+    "cursor": {
+      "turn": 2,
+      "phase": "MODEL_PENDING",
+      "provider": {
+        "nextPhysicalAttempt": 3,
+        "pending": {
+          "requestId": "run-fixture-1:turn-2:attempt-2",
+          "purpose": "CONTEXT_SUMMARY",
+          "inputIdentity": "context-summary-input-fixture-1"
+        }
+      }
+    },
+    "state": {
+      "messages": [
+        {
+          "id": "user-fixture-1",
+          "role": "USER",
+          "parts": [
+            {
+              "type": "text",
+              "text": "hello",
+              "signature": null,
+              "phase": null,
+              "providerMetadata": null
+            }
+          ],
+          "createdAtEpochMs": 1700000000001,
+          "metadata": {},
+          "stopReason": null
+        }
+      ],
+      "pendingToolCalls": [],
+      "toolCallCounts": {},
+      "metadata": {},
+      "turn": 2,
+      "status": "RUNNING",
+      "retryCount": 0,
+      "stopReason": null,
+      "usage": {
+        "inputTokens": 12,
+        "outputTokens": 4,
+        "reasoningTokens": 2
+      },
+      "latestRequestUsage": {
+        "inputTokens": 9,
+        "outputTokens": 4,
+        "reasoningTokens": 2
+      },
+      "contextManagement": {
+        "compaction": null,
+        "usageObservation": null
+      }
+    },
+    "toolExecutions": [
+      {
+        "executionId": "execution-fixture-1",
+        "toolCallId": "image-call-fixture-1",
+        "toolName": "image_search",
+        "callOrdinal": 1,
+        "state": "COMPLETED",
+        "result": {
+          "toolCallId": "image-call-fixture-1",
+          "toolName": "image_search",
+          "result": {
+            "type": "image_search_results",
+            "count": 1
+          },
+          "isError": false,
+          "displayText": "1 image",
+          "userErrorCode": null,
+          "metadata": {
+            "query": "kmp architecture"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "One image matched the query.",
+              "audiences": [
+                "MODEL"
+              ]
+            },
+            {
+              "type": "image",
+              "source": {
+                "type": "remote_https",
+                "uri": "https://images.example.com/kmp-architecture.jpg"
+              },
+              "previewSource": null,
+              "previewMimeType": null,
+              "mimeType": "image/jpeg",
+              "title": "Kotlin Multiplatform architecture",
+              "altText": null,
+              "width": null,
+              "height": null,
+              "attribution": null,
+              "audiences": [
+                "USER"
+              ],
+              "reference": {
+                "value": "tool-result:execution-fixture-1:1"
+              }
+            }
+          ],
+          "modelResultVisible": false,
+          "origin": {
+            "sourceId": "image-catalog-fixture",
+            "sourceLabel": "Image catalog",
+            "toolId": "image_search",
+            "toolLabel": "Image search"
+          }
+        }
+      }
+    ]
+  }
+}

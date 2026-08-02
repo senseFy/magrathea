@@ -90,9 +90,9 @@ public final class saien/magrathea/gateway/server/GatewayCoordinatorConfig {
 	public final fun copy (IIJJJ)Lsaien/magrathea/gateway/server/GatewayCoordinatorConfig;
 	public static synthetic fun copy$default (Lsaien/magrathea/gateway/server/GatewayCoordinatorConfig;IIJJJILjava/lang/Object;)Lsaien/magrathea/gateway/server/GatewayCoordinatorConfig;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getIdempotencyRetentionMillis ()J
 	public final fun getMaxReplayBytes ()I
 	public final fun getMaxReplayEvents ()I
-	public final fun getReconnectGraceMillis ()J
 	public final fun getStreamLifetimeMillis ()J
 	public final fun getTerminalRetentionMillis ()J
 	public fun hashCode ()I
@@ -159,6 +159,10 @@ public final class saien/magrathea/gateway/server/GatewayIdempotencyConflictExce
 	public fun <init> ()V
 }
 
+public final class saien/magrathea/gateway/server/GatewayInvocationInvalidatedException : java/lang/RuntimeException {
+	public fun <init> ()V
+}
+
 public final class saien/magrathea/gateway/server/GatewayKtorRoutesKt {
 	public static final fun installMagratheaGateway (Lio/ktor/server/application/Application;Lsaien/magrathea/gateway/server/GatewayHttpDependencies;Lsaien/magrathea/gateway/server/GatewayHttpConfig;)V
 	public static synthetic fun installMagratheaGateway$default (Lio/ktor/server/application/Application;Lsaien/magrathea/gateway/server/GatewayHttpDependencies;Lsaien/magrathea/gateway/server/GatewayHttpConfig;ILjava/lang/Object;)V
@@ -183,9 +187,11 @@ public abstract interface class saien/magrathea/gateway/server/GatewayModelResol
 }
 
 public final class saien/magrathea/gateway/server/GatewayOperation : java/lang/Enum {
+	public static final field ABANDON_INVOCATION Lsaien/magrathea/gateway/server/GatewayOperation;
 	public static final field CANCEL_STREAM Lsaien/magrathea/gateway/server/GatewayOperation;
 	public static final field CREATE_STREAM Lsaien/magrathea/gateway/server/GatewayOperation;
 	public static final field READ_STREAM Lsaien/magrathea/gateway/server/GatewayOperation;
+	public static final field RESOLVE_INVOCATION Lsaien/magrathea/gateway/server/GatewayOperation;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/gateway/server/GatewayOperation;
 	public static fun values ()[Lsaien/magrathea/gateway/server/GatewayOperation;
@@ -274,10 +280,12 @@ public final class saien/magrathea/gateway/server/GatewayReplayWindowException :
 public final class saien/magrathea/gateway/server/GatewayStreamCoordinator : java/lang/AutoCloseable {
 	public fun <init> (Lsaien/magrathea/provider/api/ProviderRegistry;Lsaien/magrathea/gateway/server/GatewayModelResolver;Lsaien/magrathea/gateway/server/GatewayProviderCredentialResolver;Lsaien/magrathea/gateway/server/GatewayAttachmentResolver;Lsaien/magrathea/gateway/server/GatewayQuotaManager;Lsaien/magrathea/gateway/server/GatewayAuditSink;Lkotlinx/coroutines/CoroutineScope;Lsaien/magrathea/gateway/server/GatewayCoordinatorConfig;Lsaien/magrathea/core/IdGenerator;Lsaien/magrathea/core/EpochClock;Lsaien/magrathea/gateway/protocol/GatewayProtocolCodec;)V
 	public synthetic fun <init> (Lsaien/magrathea/provider/api/ProviderRegistry;Lsaien/magrathea/gateway/server/GatewayModelResolver;Lsaien/magrathea/gateway/server/GatewayProviderCredentialResolver;Lsaien/magrathea/gateway/server/GatewayAttachmentResolver;Lsaien/magrathea/gateway/server/GatewayQuotaManager;Lsaien/magrathea/gateway/server/GatewayAuditSink;Lkotlinx/coroutines/CoroutineScope;Lsaien/magrathea/gateway/server/GatewayCoordinatorConfig;Lsaien/magrathea/core/IdGenerator;Lsaien/magrathea/core/EpochClock;Lsaien/magrathea/gateway/protocol/GatewayProtocolCodec;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun abandon (Lsaien/magrathea/gateway/server/GatewayPrincipal;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun cancel (Lsaien/magrathea/gateway/server/GatewayPrincipal;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun close ()V
 	public final fun create (Lsaien/magrathea/gateway/server/GatewayPrincipal;Lsaien/magrathea/gateway/protocol/GatewayCreateStreamRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun events (Lsaien/magrathea/gateway/server/GatewayPrincipal;Ljava/lang/String;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun resolveExisting (Lsaien/magrathea/gateway/server/GatewayPrincipal;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class saien/magrathea/gateway/server/GatewayStreamNotFoundException : java/lang/RuntimeException {

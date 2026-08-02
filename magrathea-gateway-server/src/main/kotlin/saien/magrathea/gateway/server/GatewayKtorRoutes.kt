@@ -31,6 +31,9 @@ import kotlinx.io.readByteArray
 import saien.magrathea.gateway.protocol.GATEWAY_PROTOCOL_VERSION
 import saien.magrathea.gateway.protocol.GATEWAY_CSRF_HEADER
 import saien.magrathea.gateway.protocol.GATEWAY_IDEMPOTENCY_HEADER
+import saien.magrathea.gateway.protocol.GATEWAY_INVOCATION_INVALIDATED_PROBLEM_CODE
+import saien.magrathea.gateway.protocol.GATEWAY_INVOCATION_UNKNOWN_PROBLEM_CODE
+import saien.magrathea.gateway.protocol.GATEWAY_REPLAY_WINDOW_EXHAUSTED_PROBLEM_CODE
 import saien.magrathea.gateway.protocol.GATEWAY_SSE_EVENT
 import saien.magrathea.gateway.protocol.GATEWAY_VERSION_HEADER
 import saien.magrathea.gateway.protocol.GatewayProblem
@@ -38,16 +41,16 @@ import saien.magrathea.gateway.protocol.GatewayProtocolCodec
 import saien.magrathea.gateway.protocol.GatewayProtocolException
 
 data class GatewayHttpConfig(
-    val basePath: String = "/v1/streams",
+    val basePath: String = "/v2/streams",
     val maxRequestBodyBytes: Int = 8 * 1024 * 1024,
     val sseHeartbeatMillis: Long = 15_000,
 ) {
     init {
         require(
-            GATEWAY_V1_BASE_PATH.matches(basePath) &&
+            GATEWAY_V2_BASE_PATH.matches(basePath) &&
                 basePath.split('/').none { segment -> segment == "." || segment == ".." },
         ) {
-            "Gateway basePath must be a safe path ending in /v1/streams"
+            "Gateway basePath must be a safe path ending in /v2/streams"
         }
         require(maxRequestBodyBytes > 0)
         require(sseHeartbeatMillis > 0)
@@ -106,6 +109,29 @@ fun Application.installMagratheaGateway(
             }
         }
 
+        get(config.basePath) {
+            call.handleGateway(dependencies.codec) {
+                enforceVersion()
+                enforceOrigin(dependencies, GatewayOperation.RESOLVE_INVOCATION)
+                val principal = authenticate(dependencies)
+                enforceRateLimit(dependencies, principal, GatewayOperation.RESOLVE_INVOCATION)
+                enforceNoQueryParameters()
+                val requestId = request.header(GATEWAY_IDEMPOTENCY_HEADER)
+                    ?.takeIf(String::isNotBlank)
+                    ?: throw GatewayProtocolException("Missing Idempotency-Key")
+                if (!dependencies.authorizer.authorize(principal, GatewayOperation.RESOLVE_INVOCATION, null)) {
+                    throw GatewayAuthorizationException()
+                }
+                val descriptor = dependencies.coordinator.resolveExisting(principal, requestId)
+                response.headers.append(GATEWAY_VERSION_HEADER, GATEWAY_PROTOCOL_VERSION.toString())
+                respondText(
+                    text = dependencies.codec.encodeDescriptor(descriptor),
+                    contentType = ContentType.Application.Json,
+                    status = HttpStatusCode.OK,
+                )
+            }
+        }
+
         get("${config.basePath}/{streamId}/events") {
             call.handleGateway(dependencies.codec) {
                 enforceVersion()
@@ -138,6 +164,25 @@ fun Application.installMagratheaGateway(
                 enforceNoQueryParameters()
                 val streamId = parameters["streamId"] ?: throw GatewayStreamNotFoundException()
                 dependencies.coordinator.cancel(principal, streamId)
+                response.headers.append(GATEWAY_VERSION_HEADER, GATEWAY_PROTOCOL_VERSION.toString())
+                respond(HttpStatusCode.NoContent)
+            }
+        }
+
+        delete(config.basePath) {
+            call.handleGateway(dependencies.codec) {
+                enforceVersion()
+                enforceOrigin(dependencies, GatewayOperation.ABANDON_INVOCATION)
+                val principal = authenticate(dependencies)
+                enforceRateLimit(dependencies, principal, GatewayOperation.ABANDON_INVOCATION)
+                if (!dependencies.authorizer.authorize(principal, GatewayOperation.ABANDON_INVOCATION, null)) {
+                    throw GatewayAuthorizationException()
+                }
+                enforceNoQueryParameters()
+                val requestId = request.header(GATEWAY_IDEMPOTENCY_HEADER)
+                    ?.takeIf(String::isNotBlank)
+                    ?: throw GatewayProtocolException("Missing Idempotency-Key")
+                dependencies.coordinator.abandon(principal, requestId)
                 response.headers.append(GATEWAY_VERSION_HEADER, GATEWAY_PROTOCOL_VERSION.toString())
                 respond(HttpStatusCode.NoContent)
             }
@@ -311,8 +356,24 @@ private fun Throwable.toHttpFailure(): HttpFailure = when (this) {
     is GatewayRateLimitException -> HttpFailure(HttpStatusCode.TooManyRequests, "rate_limited", "Rate limit exceeded", retryAfterMillis)
     is GatewayQuotaException -> HttpFailure(HttpStatusCode.TooManyRequests, "quota_exceeded", "Quota exceeded", retryAfterMillis)
     is GatewayIdempotencyConflictException -> HttpFailure(HttpStatusCode.Conflict, "idempotency_conflict", "Idempotency key conflict")
+    is GatewayInvocationInvalidatedException -> HttpFailure(
+        HttpStatusCode.Conflict,
+        GATEWAY_INVOCATION_INVALIDATED_PROBLEM_CODE,
+        "Invocation is no longer reattachable",
+    )
+    is GatewayInvocationUnknownException -> HttpFailure(
+        HttpStatusCode.NotFound,
+        GATEWAY_INVOCATION_UNKNOWN_PROBLEM_CODE,
+        "Invocation identity is not retained",
+    )
+    is GatewayInvocationReplayUnavailableException,
+    is GatewayReplayWindowException,
+    -> HttpFailure(
+        HttpStatusCode.Gone,
+        GATEWAY_REPLAY_WINDOW_EXHAUSTED_PROBLEM_CODE,
+        "Replay window exhausted",
+    )
     is GatewayStreamNotFoundException -> HttpFailure(HttpStatusCode.NotFound, "stream_not_found", "Stream not found")
-    is GatewayReplayWindowException -> HttpFailure(HttpStatusCode.Gone, "replay_window_exhausted", "Replay window exhausted")
     is GatewayCursorException -> HttpFailure(HttpStatusCode.BadRequest, "invalid_cursor", "Replay cursor is invalid")
     is GatewayProtocolException, is IllegalArgumentException -> HttpFailure(HttpStatusCode.BadRequest, "invalid_request", "Request is invalid")
     else -> HttpFailure(HttpStatusCode.InternalServerError, "internal_error", "Gateway request failed")
@@ -326,4 +387,4 @@ private data class HttpFailure(
 )
 
 private val EVENT_STREAM_CONTENT_TYPE = ContentType.parse("text/event-stream")
-private val GATEWAY_V1_BASE_PATH = Regex("^(?:/[A-Za-z0-9._~-]+)*/v1/streams$")
+private val GATEWAY_V2_BASE_PATH = Regex("^(?:/[A-Za-z0-9._~-]+)*/v2/streams$")

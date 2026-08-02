@@ -2,15 +2,17 @@
 
 package saien.magrathea.gateway.server
 
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
@@ -18,6 +20,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import saien.magrathea.core.AgentMessage
@@ -28,22 +31,48 @@ import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ProviderCredential
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
+import saien.magrathea.core.ToolImageAttachmentReference
+import saien.magrathea.core.ToolResultAudience
+import saien.magrathea.core.ToolResultImageContent
+import saien.magrathea.core.ToolResultPart
+import saien.magrathea.core.ToolResultTextContent
 import saien.magrathea.gateway.protocol.GatewayCreateStreamRequest
 import saien.magrathea.gateway.protocol.GatewayAttachmentReference
 import saien.magrathea.gateway.protocol.GatewayEvent
+import saien.magrathea.gateway.protocol.GatewayFailureCode
 import saien.magrathea.gateway.protocol.GatewayGenerationOptions
 import saien.magrathea.gateway.protocol.GatewayModelReference
 import saien.magrathea.gateway.protocol.GatewayProtocolCodec
 import saien.magrathea.gateway.protocol.GatewayStreamEnvelope
 import saien.magrathea.provider.api.InMemoryProviderRegistry
 import saien.magrathea.provider.api.ProviderAdapter
+import saien.magrathea.provider.api.ProviderAuthException
 import saien.magrathea.provider.api.ProviderChunk
+import saien.magrathea.provider.api.ProviderClientException
 import saien.magrathea.provider.api.ProviderContextLimitException
 import saien.magrathea.provider.api.ProviderEvent
+import saien.magrathea.provider.api.ProviderException
+import saien.magrathea.provider.api.ProviderInvocationInvalidatedException
+import saien.magrathea.provider.api.ProviderNetworkException
+import saien.magrathea.provider.api.ProviderProtocolException
+import saien.magrathea.provider.api.ProviderRateLimitException
 import saien.magrathea.provider.api.ProviderRequest
+import saien.magrathea.provider.api.ProviderServerException
+import saien.magrathea.provider.api.ProviderTimeoutException
+import saien.magrathea.provider.api.ProviderTimeoutPhase
 import saien.magrathea.provider.api.ProviderUsage
 
 class GatewayStreamCoordinatorTest {
+    @Test
+    fun coordinatorConfigKeepsReplayAvailableForTheAdvertisedLease() {
+        assertFailsWith<IllegalArgumentException> {
+            GatewayCoordinatorConfig(
+                terminalRetentionMillis = 999,
+                streamLifetimeMillis = 1_000,
+            )
+        }
+    }
+
     @Test
     fun sameScopedRequestIsExactlyOnceAndDifferentBodyConflicts() = runTest {
         val fixture = Fixture(this)
@@ -64,6 +93,238 @@ class GatewayStreamCoordinatorTest {
             )
         }
         fixture.close()
+    }
+
+    @Test
+    fun resolveReturnsActiveAndRetainedTerminalDescriptorsWithoutStartingProviderWork() = runTest {
+        val active = Fixture(this, provider = ScriptedProvider(blockAfterDelta = true))
+        val activeDescriptor = active.coordinator.create(USER_A, request()).descriptor
+        runCurrent()
+
+        assertEquals(activeDescriptor, active.coordinator.resolveExisting(USER_A, request().requestId))
+        assertEquals(1, active.provider.calls)
+        assertEquals(1, active.quota.reservations)
+        active.coordinator.cancel(USER_A, activeDescriptor.streamId)
+        active.close()
+
+        val terminal = Fixture(this)
+        val terminalDescriptor = terminal.coordinator.create(USER_A, request()).descriptor
+        runCurrent()
+
+        assertEquals(terminalDescriptor, terminal.coordinator.resolveExisting(USER_A, request().requestId))
+        assertEquals(1, terminal.provider.calls)
+        assertEquals(1, terminal.quota.reservations)
+        terminal.close()
+    }
+
+    @Test
+    fun resolvingATerminalInvocationRenewsItsReplayRetention() = runTest {
+        val fixture = Fixture(
+            scope = this,
+            config = GatewayCoordinatorConfig(
+                terminalRetentionMillis = 1_000,
+                idempotencyRetentionMillis = 5_000,
+                streamLifetimeMillis = 100,
+            ),
+        )
+        val descriptor = fixture.coordinator.create(USER_A, request()).descriptor
+        runCurrent()
+        advanceTimeBy(900)
+
+        assertEquals(descriptor, fixture.coordinator.resolveExisting(USER_A, request().requestId))
+        advanceTimeBy(200)
+        runCurrent()
+        val replay = fixture.coordinator.events(USER_A, descriptor.streamId, -1).toList()
+
+        assertIs<GatewayEvent.Completed>(replay.last().event)
+        assertEquals(1, fixture.provider.calls)
+        assertEquals(1, fixture.quota.reservations)
+        fixture.close()
+    }
+
+    @Test
+    fun resolvePreservesInvalidationAndReplayExpiryWithoutStartingProviderWork() = runTest {
+        val invalidated = Fixture(this, provider = ScriptedProvider(blockAfterDelta = true))
+        val invalidatedDescriptor = invalidated.coordinator.create(USER_A, request()).descriptor
+        runCurrent()
+        invalidated.coordinator.cancel(USER_A, invalidatedDescriptor.streamId)
+
+        assertFailsWith<GatewayInvocationInvalidatedException> {
+            invalidated.coordinator.resolveExisting(USER_A, request().requestId)
+        }
+        assertEquals(1, invalidated.provider.calls)
+        assertEquals(1, invalidated.quota.reservations)
+        invalidated.close()
+
+        val expired = Fixture(
+            scope = this,
+            config = GatewayCoordinatorConfig(
+                terminalRetentionMillis = 100,
+                idempotencyRetentionMillis = 1_000,
+                streamLifetimeMillis = 100,
+            ),
+        )
+        expired.coordinator.create(USER_A, request())
+        runCurrent()
+        advanceTimeBy(100)
+        runCurrent()
+
+        assertFailsWith<GatewayInvocationReplayUnavailableException> {
+            expired.coordinator.resolveExisting(USER_A, request().requestId)
+        }
+        assertEquals(1, expired.provider.calls)
+        assertEquals(1, expired.quota.reservations)
+        expired.close()
+    }
+
+    @Test
+    fun resolveAfterCoordinatorStateLossFailsClosedWithoutStartingOrOrphaningProviderWork() = runTest {
+        val provider = ScriptedProvider(blockAfterDelta = true)
+        val original = Fixture(this, provider = provider)
+        val descriptor = original.coordinator.create(USER_A, request()).descriptor
+        runCurrent()
+        assertEquals(1, provider.calls)
+
+        val restarted = Fixture(this, provider = provider)
+        assertFailsWith<GatewayInvocationUnknownException> {
+            restarted.coordinator.resolveExisting(USER_A, request().requestId)
+        }
+        assertFailsWith<GatewayInvocationUnknownException> {
+            restarted.coordinator.resolveExisting(USER_B, request().requestId)
+        }
+        assertEquals(1, provider.calls)
+        assertEquals(0, restarted.quota.reservations)
+
+        original.coordinator.cancel(USER_A, descriptor.streamId)
+        restarted.close()
+        original.close()
+    }
+
+    @Test
+    fun completedInvocationRemainsIdempotentlyReplayableDuringTerminalRetention() = runTest {
+        val fixture = Fixture(
+            scope = this,
+            config = GatewayCoordinatorConfig(
+                terminalRetentionMillis = 1_000,
+                streamLifetimeMillis = 100,
+            ),
+        )
+        val first = fixture.coordinator.create(USER_A, request())
+        runCurrent()
+        advanceTimeBy(100)
+
+        val reused = fixture.coordinator.create(USER_A, request())
+
+        assertFalse(reused.created)
+        assertEquals(first.descriptor, reused.descriptor)
+        assertEquals(1, fixture.provider.calls)
+        fixture.close()
+    }
+
+    @Test
+    fun terminalReuseRenewsReplayRetention() = runTest {
+        val fixture = Fixture(
+            scope = this,
+            config = GatewayCoordinatorConfig(
+                terminalRetentionMillis = 1_000,
+                idempotencyRetentionMillis = 5_000,
+                streamLifetimeMillis = 100,
+            ),
+        )
+        val first = fixture.coordinator.create(USER_A, request())
+        runCurrent()
+        advanceTimeBy(900)
+
+        val reused = fixture.coordinator.create(USER_A, request())
+        advanceTimeBy(200)
+        runCurrent()
+        val replay = fixture.coordinator.events(USER_A, reused.descriptor.streamId, -1).toList()
+
+        assertFalse(reused.created)
+        assertEquals(first.descriptor, reused.descriptor)
+        assertIs<GatewayEvent.Completed>(replay.last().event)
+        assertEquals(1, fixture.provider.calls)
+        fixture.close()
+    }
+
+    @Test
+    fun completedReplayExpiryFailsClosedWithoutRepeatingProviderWork() = runTest {
+        val fixture = Fixture(
+            scope = this,
+            config = GatewayCoordinatorConfig(
+                terminalRetentionMillis = 100,
+                idempotencyRetentionMillis = 1_000,
+                streamLifetimeMillis = 100,
+            ),
+        )
+        val created = fixture.coordinator.create(USER_A, request()).descriptor
+        runCurrent()
+        advanceTimeBy(100)
+        runCurrent()
+
+        assertFailsWith<GatewayStreamNotFoundException> {
+            fixture.coordinator.events(USER_A, created.streamId, -1)
+        }
+        assertFailsWith<GatewayInvocationReplayUnavailableException> {
+            fixture.coordinator.create(USER_A, request())
+        }
+        assertFailsWith<GatewayIdempotencyConflictException> {
+            fixture.coordinator.create(
+                USER_A,
+                request().copy(messages = listOf(message("different"))),
+            )
+        }
+        assertEquals(1, fixture.provider.calls)
+        assertEquals(1, fixture.quota.reservations)
+
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(fixture.coordinator.create(USER_A, request()).created)
+        runCurrent()
+        assertEquals(2, fixture.provider.calls)
+        assertEquals(2, fixture.quota.reservations)
+        fixture.close()
+    }
+
+    @Test
+    fun permanentFailureReplayExpiryFailsClosedWhileRetryableFailureInvalidates() = runTest {
+        suspend fun tombstoneFailure(
+            failure: Throwable,
+            replayUnavailable: Boolean,
+        ) {
+            val fixture = Fixture(
+                scope = this,
+                provider = ScriptedProvider(failure = failure),
+                config = GatewayCoordinatorConfig(
+                    terminalRetentionMillis = 100,
+                    idempotencyRetentionMillis = 1_000,
+                    streamLifetimeMillis = 100,
+                ),
+            )
+            fixture.coordinator.create(USER_A, request())
+            runCurrent()
+            advanceTimeBy(100)
+            runCurrent()
+
+            val actual = runCatching { fixture.coordinator.create(USER_A, request()) }.exceptionOrNull()
+            if (replayUnavailable) {
+                assertIs<GatewayInvocationReplayUnavailableException>(actual)
+            } else {
+                assertIs<GatewayInvocationInvalidatedException>(actual)
+            }
+            assertEquals(1, fixture.provider.calls)
+            assertEquals(1, fixture.quota.reservations)
+            fixture.close()
+        }
+
+        tombstoneFailure(
+            failure = ProviderProtocolException("permanent"),
+            replayUnavailable = true,
+        )
+        tombstoneFailure(
+            failure = ProviderNetworkException("retryable"),
+            replayUnavailable = false,
+        )
     }
 
     @Test
@@ -118,6 +379,55 @@ class GatewayStreamCoordinatorTest {
         }
         assertEquals(0, fixture.provider.calls)
         assertEquals(0, fixture.quota.reservations)
+        fixture.close()
+    }
+
+    @Test
+    fun directGatewayRequestCannotExposeProductOnlyToolResultDataToProvider() = runTest {
+        val secret = "gateway-direct-request-secret"
+        val fixture = Fixture(scope = this)
+        val maliciousToolResult = ToolResultPart(
+            toolCallId = "tool-call-1",
+            toolName = "search",
+            result = JsonPrimitive(secret),
+            displayText = secret,
+            metadata = buildJsonObject { put("private", secret) },
+            content = listOf(
+                ToolResultTextContent("model-visible", setOf(ToolResultAudience.MODEL)),
+                ToolResultTextContent(secret, setOf(ToolResultAudience.USER)),
+                ToolResultImageContent(
+                    source = ToolImageAttachmentReference("magrathea-attachment:user-only-image"),
+                    mimeType = "image/jpeg",
+                    audiences = setOf(ToolResultAudience.USER),
+                ),
+            ),
+            providerMetadata = buildJsonObject { put("private", secret) },
+            modelResultVisible = false,
+        )
+        val directRequest = request().copy(
+            messages = listOf(
+                message("ignored").copy(
+                    role = MessageRole.TOOL,
+                    parts = listOf(maliciousToolResult),
+                ),
+            ),
+            attachments = listOf(
+                GatewayAttachmentReference("user-only-image", "image/jpeg", 42),
+            ),
+        )
+
+        fixture.coordinator.create(USER_A, directRequest)
+        runCurrent()
+
+        val providerRequest = fixture.provider.requests.single()
+        assertFalse(providerRequest.toString().contains(secret))
+        val projected = providerRequest.messages.single().parts.single() as ToolResultPart
+        assertEquals(null, projected.displayText)
+        assertEquals(emptySet(), projected.metadata.keys)
+        assertEquals(null, projected.providerMetadata)
+        assertEquals(JsonPrimitive("Tool completed without model-visible output."), projected.result)
+        assertEquals(1, projected.content.size)
+        assertEquals(setOf(ToolResultAudience.MODEL), projected.content.single().audiences)
         fixture.close()
     }
 
@@ -186,6 +496,87 @@ class GatewayStreamCoordinatorTest {
         assertTrue(events.last().event is GatewayEvent.Cancelled)
         fixture.coordinator.cancel(USER_A, created.streamId)
         assertEquals(1, fixture.provider.cancellations)
+        assertFailsWith<GatewayInvocationInvalidatedException> {
+            fixture.coordinator.create(USER_A, request())
+        }
+        assertEquals(1, fixture.provider.calls)
+        fixture.close()
+    }
+
+    @Test
+    fun abandonByScopedRequestIdIsIdempotentAndDoesNotRevealAbsence() = runTest {
+        val fixture = Fixture(this, provider = ScriptedProvider(blockAfterDelta = true))
+        fixture.coordinator.create(USER_A, request())
+        runCurrent()
+
+        fixture.coordinator.abandon(USER_B, request().requestId)
+        fixture.coordinator.abandon(USER_A, "missing-request")
+        assertEquals(0, fixture.provider.cancellations)
+
+        fixture.coordinator.abandon(USER_A, request().requestId)
+        fixture.coordinator.abandon(USER_A, request().requestId)
+
+        assertEquals(1, fixture.provider.cancellations)
+        assertEquals(1, fixture.quota.cancelled)
+        assertFailsWith<GatewayInvocationInvalidatedException> {
+            fixture.coordinator.create(USER_A, request())
+        }
+        assertEquals(1, fixture.provider.calls)
+        fixture.close()
+    }
+
+    @Test
+    fun abandonWinningTheCreateRaceInvalidatesTheRequestIdempotently() = runTest {
+        val fixture = Fixture(this)
+        val request = request()
+
+        fixture.coordinator.abandon(USER_A, request.requestId)
+        fixture.coordinator.abandon(USER_A, request.requestId)
+
+        assertFailsWith<GatewayInvocationInvalidatedException> {
+            fixture.coordinator.create(USER_A, request)
+        }
+        assertFailsWith<GatewayInvocationInvalidatedException> {
+            fixture.coordinator.create(
+                USER_A,
+                request.copy(messages = listOf(message("different"))),
+            )
+        }
+        assertEquals(0, fixture.provider.calls)
+        assertEquals(0, fixture.quota.reservations)
+        fixture.close()
+    }
+
+    @Test
+    fun detachedStreamRemainsReattachableUntilItsLeaseExpires() = runTest {
+        val fixture = Fixture(
+            scope = this,
+            provider = ScriptedProvider(blockAfterDelta = true),
+            config = GatewayCoordinatorConfig(
+                terminalRetentionMillis = 60_000,
+                streamLifetimeMillis = 60_000,
+            ),
+        )
+        val created = fixture.coordinator.create(USER_A, request()).descriptor
+        val collection = backgroundScope.async {
+            fixture.coordinator.events(USER_A, created.streamId, -1).toList()
+        }
+        runCurrent()
+
+        collection.cancelAndJoin()
+        advanceTimeBy(31_000)
+        runCurrent()
+        assertEquals(0, fixture.provider.cancellations)
+
+        val reattached = backgroundScope.async {
+            fixture.coordinator.events(USER_A, created.streamId, afterSequence = 1).toList()
+        }
+        runCurrent()
+        fixture.coordinator.cancel(USER_A, created.streamId)
+        val resumedEvents = reattached.await()
+
+        assertEquals(1, fixture.provider.cancellations)
+        assertIs<GatewayEvent.Cancelled>(resumedEvents.last().event)
         fixture.close()
     }
 
@@ -208,19 +599,74 @@ class GatewayStreamCoordinatorTest {
     }
 
     @Test
-    fun quotaCompletionFailureCannotPublishContradictoryCompletedTerminal() = runTest {
+    fun completedRemainsAuthoritativeWhenQuotaCompletionFails() = runTest {
         val fixture = Fixture(this, quota = RecordingQuotaManager(failComplete = true))
         val created = fixture.coordinator.create(USER_A, request()).descriptor
         runCurrent()
 
         val events = fixture.coordinator.events(USER_A, created.streamId, -1).toList()
 
-        assertTrue(events.last().event is GatewayEvent.Failed)
-        assertTrue(events.none { it.event is GatewayEvent.Completed })
+        assertTrue(events.last().event is GatewayEvent.Completed)
         assertEquals(1, fixture.quota.completed)
-        assertEquals(1, fixture.quota.failed)
-        assertTrue(fixture.audit.any { it.action == GatewayAuditAction.STREAM_FAILED })
-        assertTrue(fixture.audit.none { it.action == GatewayAuditAction.STREAM_COMPLETED })
+        assertEquals(0, fixture.quota.failed)
+        assertEquals(0, fixture.quota.cancelled)
+        assertEquals(1, fixture.audit.count { it.action == GatewayAuditAction.STREAM_COMPLETED })
+        assertTrue(fixture.audit.none { it.action == GatewayAuditAction.STREAM_FAILED })
+        fixture.close()
+    }
+
+    @Test
+    fun completedRemainsAuthoritativeAfterLaterTransportFailureOrCancellation() = runTest {
+        listOf(
+            ProviderNetworkException("late disconnect"),
+            CancellationException("late cancellation"),
+        ).forEachIndexed { index, lateFailure ->
+            val fixture = Fixture(
+                scope = this,
+                provider = ScriptedProvider(failureAfterCompleted = lateFailure),
+            )
+            val created = fixture.coordinator.create(
+                USER_A,
+                request().copy(
+                    requestId = "terminal-$index:0",
+                    sessionId = "terminal-$index",
+                ),
+            ).descriptor
+            runCurrent()
+
+            val events = fixture.coordinator.events(USER_A, created.streamId, -1).toList()
+
+            assertIs<GatewayEvent.Completed>(events.last().event)
+            assertEquals(1, fixture.quota.completed)
+            assertEquals(0, fixture.quota.failed)
+            assertEquals(0, fixture.quota.cancelled)
+            assertEquals(1, fixture.audit.count { it.action == GatewayAuditAction.STREAM_COMPLETED })
+            assertTrue(fixture.audit.none { it.action == GatewayAuditAction.STREAM_FAILED })
+            assertTrue(fixture.audit.none { it.action == GatewayAuditAction.STREAM_CANCELLED })
+            fixture.close()
+        }
+    }
+
+    @Test
+    fun fastCompletionCancelsTheInstalledLifetimeTimer() = runTest {
+        val fixture = Fixture(
+            scope = this,
+            config = GatewayCoordinatorConfig(
+                terminalRetentionMillis = 1_000,
+                streamLifetimeMillis = 100,
+            ),
+        )
+        val created = fixture.coordinator.create(USER_A, request()).descriptor
+        runCurrent()
+        advanceTimeBy(100)
+        runCurrent()
+
+        val events = fixture.coordinator.events(USER_A, created.streamId, -1).toList()
+
+        assertIs<GatewayEvent.Completed>(events.last().event)
+        assertEquals(0, fixture.provider.cancellations)
+        assertEquals(1, fixture.quota.completed)
+        assertEquals(0, fixture.quota.cancelled)
         fixture.close()
     }
 
@@ -245,12 +691,105 @@ class GatewayStreamCoordinatorTest {
     }
 
     @Test
+    fun providerFailureTaxonomyIsStableSafeAndPreservesRetryPolicy() = runTest {
+        val providerMessageCanary = "provider-message-must-not-cross-the-gateway"
+
+        suspend fun failedEvent(failure: Throwable): GatewayEvent.Failed {
+            val fixture = Fixture(
+                scope = this,
+                provider = ScriptedProvider(failure = failure),
+            )
+            val created = fixture.coordinator.create(USER_A, request()).descriptor
+            runCurrent()
+            val terminal = fixture.coordinator.events(USER_A, created.streamId, -1).toList().last()
+            val failed = assertIs<GatewayEvent.Failed>(terminal.event)
+            assertFalse(GatewayProtocolCodec().encodeEnvelope(terminal).contains(providerMessageCanary))
+            fixture.close()
+            return failed
+        }
+
+        data class Expected(
+            val failure: Throwable,
+            val code: GatewayFailureCode,
+            val retryable: Boolean,
+            val retryAfterMillis: Long? = null,
+        )
+
+        listOf(
+            Expected(
+                ProviderAuthException(providerMessageCanary),
+                GatewayFailureCode.AUTHENTICATION_FAILURE,
+                false,
+            ),
+            Expected(
+                ProviderClientException(providerMessageCanary, statusCode = 400),
+                GatewayFailureCode.CLIENT_FAILURE,
+                false,
+            ),
+            Expected(
+                ProviderProtocolException(providerMessageCanary),
+                GatewayFailureCode.PROTOCOL_FAILURE,
+                false,
+            ),
+            Expected(
+                ProviderRateLimitException(providerMessageCanary, retryAfterMillis = 1_100),
+                GatewayFailureCode.RATE_LIMIT,
+                true,
+                1_100,
+            ),
+            Expected(
+                ProviderNetworkException(providerMessageCanary),
+                GatewayFailureCode.NETWORK_FAILURE,
+                true,
+            ),
+            Expected(
+                ProviderTimeoutException(ProviderTimeoutPhase.STREAM_IDLE),
+                GatewayFailureCode.TIMEOUT,
+                true,
+            ),
+            Expected(
+                ProviderContextLimitException(providerMessageCanary),
+                GatewayFailureCode.CONTEXT_LIMIT,
+                false,
+            ),
+            Expected(
+                ProviderServerException(providerMessageCanary, statusCode = 503, retryAfterMillis = 2_200),
+                GatewayFailureCode.SERVER_FAILURE,
+                true,
+                2_200,
+            ),
+            Expected(
+                ProviderException(providerMessageCanary),
+                GatewayFailureCode.INTERNAL_FAILURE,
+                false,
+            ),
+            Expected(
+                ProviderInvocationInvalidatedException(
+                    failure = ProviderClientException(
+                        providerMessageCanary,
+                        statusCode = 409,
+                        retryAfterMillis = 3_300,
+                    ),
+                    retryable = true,
+                ),
+                GatewayFailureCode.CLIENT_FAILURE,
+                true,
+                3_300,
+            ),
+        ).forEach { expected ->
+            val actual = failedEvent(expected.failure)
+            assertEquals(expected.code, actual.code)
+            assertEquals(expected.retryable, actual.retryable)
+            assertEquals(expected.retryAfterMillis, actual.retryAfterMillis)
+        }
+    }
+
+    @Test
     fun hardStreamLifetimeCancelsAHungProviderEvenWhileSubscribed() = runTest {
         val fixture = Fixture(
             scope = this,
             provider = ScriptedProvider(blockAfterDelta = true),
             config = GatewayCoordinatorConfig(
-                reconnectGraceMillis = 60_000,
                 terminalRetentionMillis = 60_000,
                 streamLifetimeMillis = 1_000,
             ),
@@ -267,6 +806,10 @@ class GatewayStreamCoordinatorTest {
 
         assertEquals(1, fixture.provider.cancellations)
         assertIs<GatewayEvent.Cancelled>(events.last().event)
+        assertFailsWith<GatewayInvocationInvalidatedException> {
+            fixture.coordinator.create(USER_A, request())
+        }
+        assertEquals(1, fixture.provider.calls)
         fixture.close()
     }
 
@@ -276,8 +819,7 @@ class GatewayStreamCoordinatorTest {
             scope = this,
             config = GatewayCoordinatorConfig(
                 maxReplayEvents = 2,
-                reconnectGraceMillis = 10_000,
-                terminalRetentionMillis = 10_000,
+                terminalRetentionMillis = 20_000,
                 streamLifetimeMillis = 20_000,
             ),
         )
@@ -305,8 +847,7 @@ class GatewayStreamCoordinatorTest {
             ),
             config = GatewayCoordinatorConfig(
                 maxReplayBytes = maxReplayBytes,
-                reconnectGraceMillis = 10_000,
-                terminalRetentionMillis = 10_000,
+                terminalRetentionMillis = 20_000,
                 streamLifetimeMillis = 20_000,
             ),
         )
@@ -331,8 +872,7 @@ class GatewayStreamCoordinatorTest {
             scope = this,
             config = GatewayCoordinatorConfig(
                 maxReplayBytes = 1,
-                reconnectGraceMillis = 10_000,
-                terminalRetentionMillis = 10_000,
+                terminalRetentionMillis = 20_000,
                 streamLifetimeMillis = 20_000,
             ),
         )
@@ -356,8 +896,7 @@ class GatewayStreamCoordinatorTest {
         },
         attachmentResolver: GatewayAttachmentResolver = RejectingGatewayAttachmentResolver,
         config: GatewayCoordinatorConfig = GatewayCoordinatorConfig(
-            reconnectGraceMillis = 10_000,
-            terminalRetentionMillis = 10_000,
+            terminalRetentionMillis = 20_000,
             streamLifetimeMillis = 20_000,
         ),
     ) : AutoCloseable {
@@ -384,28 +923,35 @@ class GatewayStreamCoordinatorTest {
         private val blockAfterDelta: Boolean = false,
         private val completedMetadata: JsonObject? = null,
         private val failure: Throwable? = null,
+        private val failureAfterCompleted: Throwable? = null,
     ) : ProviderAdapter {
         override val key: String = "gemini"
         var calls = 0
         var cancellations = 0
+        val requests = mutableListOf<ProviderRequest>()
 
         override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
             calls += 1
+            requests += request
             failure?.let { throw it }
             try {
                 emit(ProviderChunk(events = listOf(ProviderEvent.TextDelta("hello"))))
                 if (blockAfterDelta) awaitCancellation()
-                emit(
-                    ProviderChunk(
-                        events = listOf(
-                            ProviderEvent.Completed(
-                                stopReason = StopReason.COMPLETED,
-                                usage = ProviderUsage(inputTokens = 3, outputTokens = 1),
-                                providerMetadata = completedMetadata,
+                try {
+                    emit(
+                        ProviderChunk(
+                            events = listOf(
+                                ProviderEvent.Completed(
+                                    stopReason = StopReason.COMPLETED,
+                                    usage = ProviderUsage(inputTokens = 3, outputTokens = 1),
+                                    providerMetadata = completedMetadata,
+                                ),
                             ),
                         ),
-                    ),
-                )
+                    )
+                } finally {
+                    failureAfterCompleted?.let { throw it }
+                }
             } finally {
                 if (blockAfterDelta) cancellations += 1
             }
@@ -418,6 +964,7 @@ class GatewayStreamCoordinatorTest {
         var reservations = 0
         var completed = 0
         var failed = 0
+        var cancelled = 0
 
         override suspend fun reserve(
             principal: GatewayPrincipal,
@@ -431,7 +978,9 @@ class GatewayStreamCoordinatorTest {
                         if (failComplete) error("quota completion failed")
                     }
 
-                    override suspend fun cancel() = Unit
+                    override suspend fun cancel() {
+                        cancelled += 1
+                    }
                     override suspend fun fail() {
                         failed += 1
                     }

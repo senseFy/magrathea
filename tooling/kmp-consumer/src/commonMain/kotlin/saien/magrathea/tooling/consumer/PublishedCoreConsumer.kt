@@ -13,7 +13,7 @@ import saien.magrathea.provider.anthropic.AnthropicProviderAdapter
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import saien.magrathea.credentials.CredentialStoreFailure
-import saien.magrathea.mcp.McpToolIdentity
+import saien.magrathea.core.ToolOrigin
 import saien.magrathea.policy.ToolApprovalMode
 import saien.magrathea.policy.ToolPolicy
 import saien.magrathea.policy.ToolRiskLevel
@@ -67,18 +67,18 @@ fun publishedWebSearchFingerprint(): String {
 }
 
 fun publishedExtensionFingerprint(): String {
-    val identity = McpToolIdentity(
-        serverId = "consumer",
-        serverName = "Published consumer",
-        remoteToolName = "search",
-        toolTitle = "Search",
+    val identity = ToolOrigin(
+        sourceId = "consumer",
+        sourceLabel = "Published consumer",
+        toolId = "search",
+        toolLabel = "Search",
     )
     val policy = ToolPolicy(
-        toolName = identity.remoteToolName,
+        toolName = identity.toolId,
         riskLevel = ToolRiskLevel.LOW,
         approvalMode = ToolApprovalMode.ALLOW,
     )
-    return "${identity.serverId}:${policy.toolName}:${policy.riskLevel.name}:${policy.approvalMode.name}"
+    return "${identity.sourceId}:${policy.toolName}:${policy.riskLevel.name}:${policy.approvalMode.name}"
 }
 
 fun publishedAppleLinkFingerprint(): String = listOf(

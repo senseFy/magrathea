@@ -615,6 +615,7 @@ class ChatbotFacadeContractTest {
                     },
                     isError = true,
                     displayText = "sunny",
+                    userErrorCode = "weather-unavailable",
                     metadata = buildJsonObject {
                         put("citations", buildJsonArray {
                             add(buildJsonObject {

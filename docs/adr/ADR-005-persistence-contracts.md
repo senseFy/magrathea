@@ -21,9 +21,9 @@
 
 ## Schema evolution
 
-The Alpha supports the committed current schema. A future schema change must update the format
-version, exported Room schema, serialization fixtures, upgrade policy, and cross-platform tests as
-one reviewed change. Stable releases must not silently reinterpret an older format.
+Each schema revision updates the format version, exported Room schema, serialization fixtures,
+upgrade policy, and cross-platform tests as one reviewed contract change. Stable releases never
+silently reinterpret an older format.
 
 ## Consequences
 

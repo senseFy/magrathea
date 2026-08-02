@@ -14,10 +14,17 @@ import kotlinx.serialization.json.put
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.ReasoningContentKind
 import saien.magrathea.core.ToolCallPart
+import saien.magrathea.provider.api.ProviderAuthException
 import saien.magrathea.provider.api.ProviderChunk
+import saien.magrathea.provider.api.ProviderClientException
 import saien.magrathea.provider.api.ProviderContextLimitException
 import saien.magrathea.provider.api.ProviderEvent
+import saien.magrathea.provider.api.ProviderNetworkException
 import saien.magrathea.provider.api.ProviderProtocolException
+import saien.magrathea.provider.api.ProviderRateLimitException
+import saien.magrathea.provider.api.ProviderServerException
+import saien.magrathea.provider.api.ProviderTimeoutException
+import saien.magrathea.provider.api.ProviderTimeoutPhase
 import saien.magrathea.provider.api.ProviderUsage
 import saien.magrathea.provider.api.isProviderContextLimitError
 import saien.magrathea.provider.api.validateSemantics
@@ -65,12 +72,8 @@ internal class GeminiInteractionsCodec(
             "interaction.completed" -> decodeCompleted(root.requiredObject("interaction"))
             "error" -> {
                 val error = root["error"] as? JsonObject
-                val code = error?.optionalString("code") ?: "unknown"
-                val message = error?.optionalString("message")
-                if (isProviderContextLimitError("$code ${message.orEmpty()}")) {
-                    throw ProviderContextLimitException()
-                }
-                protocolFailure("Gemini interaction failed with code $code")
+                    ?: protocolFailure("Gemini error event is missing error details")
+                throwGeminiInteractionFailure(error)
             }
             else -> protocolFailure("Unsupported Gemini interaction event type $payloadEventType")
         }
@@ -406,6 +409,92 @@ private fun JsonObject.toProviderUsage(): ProviderUsage = ProviderUsage(
     outputTokens = (this["total_output_tokens"] as? JsonPrimitive)?.intOrNull,
     reasoningTokens = (this["total_thought_tokens"] as? JsonPrimitive)?.intOrNull,
 )
+
+private fun throwGeminiInteractionFailure(error: JsonObject): Nothing {
+    val code = error.optionalString("code")?.trim()?.takeIf(String::isNotEmpty)
+    val status = error.optionalString("status")?.trim()?.takeIf(String::isNotEmpty)
+    val providerMessage = error.optionalString("message")
+    val classification = listOfNotNull(code, status, providerMessage).joinToString(" ")
+    if (isProviderContextLimitError(classification)) {
+        throw ProviderContextLimitException()
+    }
+
+    val numericCode = code?.toIntOrNull()
+    val canonicalStatus = status?.uppercase()
+        ?: code?.takeUnless { numericCode != null }?.uppercase()
+    throw when (canonicalStatus) {
+        "UNAUTHENTICATED" -> ProviderAuthException(
+            message = "Gemini authentication failed",
+            statusCode = 401,
+        )
+        "PERMISSION_DENIED" -> ProviderAuthException(
+            message = "Gemini permission was denied",
+            statusCode = 403,
+        )
+        "RESOURCE_EXHAUSTED" -> ProviderRateLimitException(
+            message = "Gemini rate limit exceeded",
+            statusCode = 429,
+        )
+        "DEADLINE_EXCEEDED" -> ProviderTimeoutException(ProviderTimeoutPhase.PROVIDER_CALL)
+        "CANCELLED" -> ProviderNetworkException("Gemini interaction was cancelled")
+        "INVALID_ARGUMENT", "OUT_OF_RANGE" -> ProviderClientException(
+            message = "Gemini request was rejected",
+            statusCode = 400,
+        )
+        "NOT_FOUND" -> ProviderClientException(
+            message = "Gemini resource was not found",
+            statusCode = 404,
+        )
+        "ALREADY_EXISTS" -> ProviderClientException(
+            message = "Gemini resource already exists",
+            statusCode = 409,
+        )
+        "FAILED_PRECONDITION" -> ProviderClientException(
+            message = "Gemini request precondition failed",
+            statusCode = 412,
+        )
+        "UNIMPLEMENTED" -> ProviderClientException(
+            message = "Gemini request is not supported",
+            statusCode = 400,
+        )
+        "UNAVAILABLE" -> ProviderServerException(
+            message = "Gemini service is unavailable",
+            statusCode = 503,
+        )
+        "ABORTED" -> ProviderServerException(
+            message = "Gemini interaction was aborted",
+            statusCode = 503,
+        )
+        "UNKNOWN", "INTERNAL", "DATA_LOSS" -> ProviderServerException(
+            message = "Gemini service failed",
+            statusCode = 500,
+        )
+        else -> when {
+            numericCode == 401 || numericCode == 403 -> ProviderAuthException(
+                message = "Gemini authentication failed",
+                statusCode = numericCode,
+            )
+            numericCode == 408 || numericCode == 504 ->
+                ProviderTimeoutException(ProviderTimeoutPhase.PROVIDER_CALL)
+            numericCode == 429 -> ProviderRateLimitException(
+                message = "Gemini rate limit exceeded",
+                statusCode = numericCode,
+            )
+            numericCode != null && numericCode in 400..499 -> ProviderClientException(
+                message = "Gemini request was rejected",
+                statusCode = numericCode,
+            )
+            numericCode != null && numericCode >= 500 -> ProviderServerException(
+                message = "Gemini service failed",
+                statusCode = numericCode,
+            )
+            else -> ProviderServerException(
+                message = "Gemini service failed",
+                statusCode = 500,
+            )
+        }
+    }
+}
 
 private fun parseObject(payload: String, label: String): JsonObject {
     return try {

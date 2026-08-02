@@ -41,16 +41,22 @@
 - Tool execution uses a durable `PENDING` / `STARTED` / `COMPLETED` journal. Completed results are
   reused, pending calls may start, and a started call blocks recovery unless its executor declares
   `REPLAY_SAFE`.
+- Tool results may carry typed text and image content with explicit `MODEL` and `USER` audiences.
+  Runtime validates the complete canonical result, strips user-only content before Provider calls,
+  and retains it for persistence and product projection. Model-directed images require an explicit
+  model input capability.
 - Portable Web Search is an ordinary client-executed Tool with an injected backend. Search policy
   is structured and non-secret; source content is bounded, HTTPS-only, untrusted, and accompanied
   by canonical citation metadata. Provider-hosted search requires a separate protocol contract.
+- Portable Image Search follows the same host-owned backend boundary. It returns model-readable
+  metadata and user-audience image blocks with source attribution.
 
 ## Chatbot facade
 
 - Chatbot state is reduced from `AgentEvent` values and stops consuming upstream events after the
   first terminal event.
 - Public Chatbot DTOs preserve text phases, redacted reasoning markers, citations, attachments,
-  tool calls/results, timestamps, normalized stop reasons, and usage without exposing raw
+  tool calls/results, typed user-audience images, timestamps, normalized stop reasons, and usage without exposing raw
   `AgentMessage` values or Provider metadata.
 - Every Chatbot session owns an explicit Provider profile/model configuration. The optional
   `CredentialRef` is non-secret and must match the model Provider. It drives request creation,

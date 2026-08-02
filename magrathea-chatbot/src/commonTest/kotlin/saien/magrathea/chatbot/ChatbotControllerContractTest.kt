@@ -127,7 +127,11 @@ class ChatbotControllerContractTest {
             sessionId = sessionId,
             status = ChatbotStatus.INTERRUPTED,
             interruption = ChatbotInterruption(
-                reason = ChatbotInterruptionReason.PROVIDER_NETWORK,
+                reason = ChatbotInterruptionReason.PROVIDER_FAILURE,
+                provider = ChatbotProviderInterruption(
+                    failure = ChatbotFailure.NETWORK,
+                    phase = ChatbotProviderInterruptionPhase.AFTER_FIRST_EVENT,
+                ),
                 occurredAtEpochMs = 1L,
             ),
         )

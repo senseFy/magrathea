@@ -19,6 +19,7 @@ import saien.magrathea.provider.api.ProviderAuthException
 import saien.magrathea.provider.api.ProviderChunk
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRequest
+import saien.magrathea.provider.api.ProviderStreamInterruptedException
 import saien.magrathea.provider.api.ProviderTransportConfig
 import saien.magrathea.provider.api.ReferenceProviderInputCapabilities
 import saien.magrathea.provider.api.createDefaultHttpTransport
@@ -97,7 +98,11 @@ class GeminiProviderAdapter(
                 is HttpStreamFrame.RetryHint -> Unit
                 is HttpStreamFrame.JsonLine -> throw ProviderProtocolException("Gemini Interactions stream must use SSE framing")
                 HttpStreamFrame.Completed -> {
-                    codec.finish()
+                    try {
+                        codec.finish()
+                    } catch (failure: ProviderProtocolException) {
+                        throw ProviderStreamInterruptedException(failure)
+                    }
                     transportCompleted = true
                 }
             }

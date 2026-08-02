@@ -1,19 +1,17 @@
 # MCP Tool Adapter
 
 `magrathea-mcp` connects Model Context Protocol servers to Magrathea's existing Core
-`ToolRegistry`. It uses the official Kotlin MCP client SDK and currently targets protocol version
+`ToolRegistry`. It uses the official Kotlin MCP client SDK and targets protocol version
 `2025-11-25`.
 
-Every mapped Tool result carries bounded Magrathea-owned identity fields for the server and Tool.
-Presentation layers can read those fields through `JsonObject.mcpToolIdentityOrNull()`; the parser
-does not expose endpoints, authentication values, transport details, arbitrary MCP metadata, or
-stdio output. The Chatbot facade preserves this metadata while deriving the generic Tool activity
-lifecycle used by UI-neutral consumers.
+Every mapped Tool result carries a typed Core `ToolOrigin` with bounded server and source-local Tool
+identity. The Chatbot facade projects it as `ChatbotToolOrigin`, so products can render the source
+and Tool labels without parsing MCP metadata. Endpoints, authentication values, transport details,
+arbitrary MCP metadata, and stdio output do not enter the product projection. Origin labels remain
+untrusted external display text.
 
-The lifecycle reports only evidence Magrathea actually observes at the Agent/Tool boundary. It
-does not synthesize percentages, intermediate steps, or MCP progress notifications that the server
-did not send. Protocol-native progress can be added later without changing the generic activity
-model.
+The lifecycle reports only evidence Magrathea observes at the Agent/Tool boundary; percentages,
+intermediate steps, and progress notifications require corresponding server evidence.
 
 ## Scope
 
@@ -27,17 +25,17 @@ The adapter supports:
 - local stdio processes on JVM/Desktop;
 - deterministic names for multiple servers;
 - host-controlled enablement, permission, approval, timeout, and call limits;
-- structured Tool results plus canonical MCP content metadata.
+- structured Tool results plus typed MCP content with audience annotations.
 
-It deliberately does not auto-inject MCP Resources, Prompts, or server instructions into Agent
-context. Sampling, Roots, Elicitation, completion, logging, and experimental Tasks are not enabled
-by the Agent composition. A Tool whose server contract requires Tasks remains visible for
-configuration diagnostics but is not advertised to a model.
+The Agent composition imports MCP Tools. Resources, Prompts, server instructions, Sampling, Roots,
+Elicitation, completion, logging, and experimental Tasks remain host-managed. A Tool whose server
+contract requires Tasks remains visible for configuration diagnostics but is not advertised to a
+model.
 
 ## Dependency
 
 ```kotlin
-implementation("saien.magrathea:magrathea-mcp:0.1.0-alpha.1")
+implementation("saien.magrathea:magrathea-mcp:0.1.0-alpha.2")
 ```
 
 ## Streamable HTTP
@@ -166,10 +164,22 @@ Connection ownership remains with the host; `McpToolRegistry` only aggregates th
 
 ## Result mapping
 
-`structuredContent`, when present, becomes the primary Magrathea Tool result. Otherwise the
-canonical MCP content array is wrapped as JSON. Human-readable text is derived only from real MCP
-content blocks. Images, audio, embedded resources, links, errors, and MCP metadata remain
-identifiable in the result metadata. All presented content comes from the server response.
+`structuredContent`, when present, becomes the durable canonical Magrathea Tool result. Otherwise
+the serialized MCP `content` array is retained in a canonical JSON envelope.
+
+Model input is projected separately from that durable result. Text and images map to native typed
+content. Resource links map to their title, URI, and description; text resources map to text;
+binary resources, unknown resources, and audio map to explicit omission markers. Raw resource
+blobs, audio payloads, and arbitrary MCP metadata are not copied into this typed projection. MCP
+audience annotations select model and user visibility, defaulting to both when absent.
+
+For a non-empty content-only MCP result, the canonical envelope remains durable but is not sent
+directly to the model. The Provider receives supported model-audience typed content, or a neutral
+success/failure marker when no such content remains. `structuredContent` stays composable with
+independent typed blocks, and an equivalent JSON text block is emitted only once. Server-derived
+display text comes only from user-visible MCP content; otherwise the result uses a generic status
+label. Server and source-local Tool identity map to the protocol-neutral `ToolOrigin` presentation
+contract.
 
 ## Verification
 

@@ -24,6 +24,7 @@ import saien.magrathea.provider.api.ProviderEvent
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRateLimitException
 import saien.magrathea.provider.api.ProviderRequest
+import saien.magrathea.provider.api.ProviderStreamInterruptedException
 import saien.magrathea.provider.api.ReferenceProviderInputCapabilities
 
 class OpenAiProviderTransportContractTest {
@@ -256,16 +257,31 @@ class OpenAiProviderTransportContractTest {
     }
 
     @Test
-    fun adapterRejectsStreamWithoutProtocolOrTransportTerminal() = runTest {
-        val noProtocolTerminal = ScriptedOpenAiTransport(
+    fun cleanEofBeforeProtocolTerminalIsRecoverableForBothWireProtocols() = runTest {
+        val incompleteResponses = ScriptedOpenAiTransport(
             streamResponses = listOf(openAiSseFrames(OPENAI_TOOL_STREAM.dropLast(1))),
         )
-        assertFailsWith<ProviderProtocolException> {
-            OpenAiProviderAdapter(transport = noProtocolTerminal)
+        assertFailsWith<ProviderStreamInterruptedException> {
+            OpenAiProviderAdapter(transport = incompleteResponses)
                 .generate(request(streaming = true, secret = "secret"))
                 .toList()
         }
 
+        val incompleteChat = ScriptedOpenAiTransport(
+            streamResponses = listOf(openAiChatSseFrames(OPENAI_CHAT_TOOL_STREAM.dropLast(1))),
+        )
+        assertFailsWith<ProviderStreamInterruptedException> {
+            OpenAiProviderAdapter(transport = incompleteChat)
+                .generate(
+                    request(streaming = true, secret = "secret").copy(
+                        typedConfig = OpenAiTransportConfig(protocol = OpenAiWireProtocol.CHAT_COMPLETIONS),
+                    ),
+                ).toList()
+        }
+    }
+
+    @Test
+    fun transportFlowWithoutCompletionFrameRemainsProtocolFailure() = runTest {
         val noTransportTerminal = ScriptedOpenAiTransport(
             streamResponses = listOf(openAiSseFrames(OPENAI_TOOL_STREAM).dropLast(1)),
         )

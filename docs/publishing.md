@@ -1,7 +1,7 @@
 # Publishing
 
 Magrathea stages signed Maven artifacts with Gradle `maven-publish`; the release workflow promotes
-those exact files to GitHub Packages. Signed `0.1.0-alpha.1` artifacts are currently available.
+those exact files to GitHub Packages. Released artifacts are available from that registry.
 
 The current release signing key uses fingerprint
 `E868 39BB 6660 EB87 A440 ADA7 AA11 3A8A 65F1 AFD3`; the
@@ -14,17 +14,17 @@ The group and version come from `gradle.properties`:
 
 ```text
 group: saien.magrathea
-version: 0.1.0-alpha.1
+version: 0.1.0-alpha.2
 artifact: logical module name
 ```
 
 Examples:
 
 ```text
-saien.magrathea:magrathea-core:0.1.0-alpha.1
-saien.magrathea:magrathea-runtime:0.1.0-alpha.1
-saien.magrathea:magrathea-chatbot:0.1.0-alpha.1
-saien.magrathea:magrathea-provider-openai:0.1.0-alpha.1
+saien.magrathea:magrathea-core:0.1.0-alpha.2
+saien.magrathea:magrathea-runtime:0.1.0-alpha.2
+saien.magrathea:magrathea-chatbot:0.1.0-alpha.2
+saien.magrathea:magrathea-provider-openai:0.1.0-alpha.2
 ```
 
 Kotlin Multiplatform generates target variants from the 16 logical modules. Consumers declare the
@@ -67,9 +67,9 @@ repositories {
 }
 
 dependencies {
-    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.1")
-    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.1")
-    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.1")
+    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.2")
+    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.2")
+    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.2")
 }
 ```
 

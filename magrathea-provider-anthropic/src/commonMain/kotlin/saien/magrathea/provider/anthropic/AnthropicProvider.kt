@@ -20,6 +20,7 @@ import saien.magrathea.provider.api.ProviderAuthException
 import saien.magrathea.provider.api.ProviderChunk
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRequest
+import saien.magrathea.provider.api.ProviderStreamInterruptedException
 import saien.magrathea.provider.api.ProviderTransportConfig
 import saien.magrathea.provider.api.ReferenceProviderInputCapabilities
 import saien.magrathea.provider.api.createDefaultHttpTransport
@@ -84,7 +85,11 @@ class AnthropicProviderAdapter(
                 is HttpStreamFrame.RetryHint -> Unit
                 is HttpStreamFrame.JsonLine -> throw ProviderProtocolException("Anthropic Messages stream must use SSE framing")
                 HttpStreamFrame.Completed -> {
-                    codec.finish()
+                    try {
+                        codec.finish()
+                    } catch (failure: ProviderProtocolException) {
+                        throw ProviderStreamInterruptedException(failure)
+                    }
                     transportCompleted = true
                 }
             }

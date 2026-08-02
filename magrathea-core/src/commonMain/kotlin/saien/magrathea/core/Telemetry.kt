@@ -24,6 +24,12 @@ enum class TelemetryOutcome {
     SUCCESS,
     FAILURE,
     CANCELLED,
+    INTERRUPTED,
+}
+
+enum class ProviderRequestPurpose {
+    MODEL,
+    CONTEXT_SUMMARY,
 }
 
 enum class TelemetryStoreOperation {
@@ -42,19 +48,24 @@ sealed interface TelemetryEvent {
         val turn: Int,
     ) : TelemetryEvent
 
+    /** `attempt` is zero for the initial request and increases for each physical retry. */
     data class ProviderRequestStarted(
         val sessionId: AgentSessionId,
         val turn: Int,
         val attempt: Int,
+        val purpose: ProviderRequestPurpose = ProviderRequestPurpose.MODEL,
     ) : TelemetryEvent
 
+    /** `attempt` is zero for the initial request and increases for each physical retry. */
     data class ProviderFirstChunk(
         val sessionId: AgentSessionId,
         val turn: Int,
         val attempt: Int,
         val latencyMillis: Long,
+        val purpose: ProviderRequestPurpose = ProviderRequestPurpose.MODEL,
     ) : TelemetryEvent
 
+    /** `attempt` is zero for the initial request and increases for each physical retry. */
     data class ProviderRequestFinished(
         val sessionId: AgentSessionId,
         val turn: Int,
@@ -62,9 +73,12 @@ sealed interface TelemetryEvent {
         val durationMillis: Long,
         val outcome: TelemetryOutcome,
         val failureCode: AgentFailureCode?,
+        val providerEventObserved: Boolean,
         val usage: TokenUsage,
+        val purpose: ProviderRequestPurpose = ProviderRequestPurpose.MODEL,
     ) : TelemetryEvent
 
+    /** `attempt` is the one-based retry ordinal for the current Provider invocation. */
     data class RetryScheduled(
         val sessionId: AgentSessionId,
         val turn: Int,

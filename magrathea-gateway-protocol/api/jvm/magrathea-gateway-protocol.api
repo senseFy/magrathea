@@ -506,13 +506,17 @@ public final class saien/magrathea/gateway/protocol/GatewayEvent$UsageDelta$Comp
 }
 
 public final class saien/magrathea/gateway/protocol/GatewayFailureCode : java/lang/Enum {
+	public static final field AUTHENTICATION_FAILURE Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
+	public static final field CLIENT_FAILURE Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
 	public static final field CONTEXT_LIMIT Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
 	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayFailureCode$Companion;
 	public static final field INTERNAL_FAILURE Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
+	public static final field NETWORK_FAILURE Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
 	public static final field PROTOCOL_FAILURE Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
-	public static final field QUOTA_EXCEEDED Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
+	public static final field RATE_LIMIT Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
 	public static final field REPLAY_WINDOW_EXHAUSTED Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
-	public static final field UPSTREAM_FAILURE Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
+	public static final field SERVER_FAILURE Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
+	public static final field TIMEOUT Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
 	public static fun values ()[Lsaien/magrathea/gateway/protocol/GatewayFailureCode;
@@ -644,7 +648,10 @@ public final class saien/magrathea/gateway/protocol/GatewayProtocolKt {
 	public static final field GATEWAY_ATTACHMENT_URI_PREFIX Ljava/lang/String;
 	public static final field GATEWAY_CSRF_HEADER Ljava/lang/String;
 	public static final field GATEWAY_IDEMPOTENCY_HEADER Ljava/lang/String;
+	public static final field GATEWAY_INVOCATION_INVALIDATED_PROBLEM_CODE Ljava/lang/String;
+	public static final field GATEWAY_INVOCATION_UNKNOWN_PROBLEM_CODE Ljava/lang/String;
 	public static final field GATEWAY_PROTOCOL_VERSION I
+	public static final field GATEWAY_REPLAY_WINDOW_EXHAUSTED_PROBLEM_CODE Ljava/lang/String;
 	public static final field GATEWAY_SSE_EVENT Ljava/lang/String;
 	public static final field GATEWAY_VERSION_HEADER Ljava/lang/String;
 	public static final fun toGatewayEvent (Lsaien/magrathea/provider/api/ProviderEvent;)Lsaien/magrathea/gateway/protocol/GatewayEvent;
@@ -653,22 +660,23 @@ public final class saien/magrathea/gateway/protocol/GatewayProtocolKt {
 
 public final class saien/magrathea/gateway/protocol/GatewayProtocolLimits {
 	public fun <init> ()V
-	public fun <init> (IIIIIIJIIIII)V
-	public synthetic fun <init> (IIIIIIJIIIIIILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (IIIIIIIJIIIII)V
+	public synthetic fun <init> (IIIIIIIJIIIIIILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()I
 	public final fun component10 ()I
 	public final fun component11 ()I
 	public final fun component12 ()I
+	public final fun component13 ()I
 	public final fun component2 ()I
 	public final fun component3 ()I
 	public final fun component4 ()I
 	public final fun component5 ()I
 	public final fun component6 ()I
-	public final fun component7 ()J
-	public final fun component8 ()I
+	public final fun component7 ()I
+	public final fun component8 ()J
 	public final fun component9 ()I
-	public final fun copy (IIIIIIJIIIII)Lsaien/magrathea/gateway/protocol/GatewayProtocolLimits;
-	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayProtocolLimits;IIIIIIJIIIIIILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayProtocolLimits;
+	public final fun copy (IIIIIIIJIIIII)Lsaien/magrathea/gateway/protocol/GatewayProtocolLimits;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayProtocolLimits;IIIIIIIJIIIIIILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayProtocolLimits;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getMaxAttachmentBytes ()J
 	public final fun getMaxAttachments ()I
@@ -681,6 +689,7 @@ public final class saien/magrathea/gateway/protocol/GatewayProtocolLimits {
 	public final fun getMaxRequestIdChars ()I
 	public final fun getMaxRequestTextChars ()I
 	public final fun getMaxSignatureChars ()I
+	public final fun getMaxToolResultContentItems ()I
 	public final fun getMaxTools ()I
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;

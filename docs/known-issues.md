@@ -1,7 +1,6 @@
 # Known Issues and External Gates
 
-`0.1.0-alpha.1` is an Alpha release. Its APIs and persisted formats may change before the stable
-line.
+Magrathea is Alpha. Its APIs and persisted formats may change before the stable line.
 
 ## Product scope
 
@@ -11,8 +10,8 @@ line.
 - The direct KMP facade supports text, attachments, metadata, and regenerate. The JavaScript/
   TypeScript convenience wrapper currently exposes text send only; attachment upload UX and host
   tool registration remain composition-level work.
-- The minified browser entry point is 1,285,759 bytes and exceeds Webpack's default performance
-  recommendation. The package gate enforces a 1,300,000-byte ceiling; browser hosts should load the
+- The minified browser entry point is 1,394,588 bytes and exceeds Webpack's default performance
+  recommendation. The package gate enforces a 1,420,000-byte ceiling; browser hosts should load the
   client on demand, and the budget should be reduced before a production release.
 - Thirteen mobile KMP modules publish Android, JVM, `iosArm64`, and `iosSimulatorArm64`; eight also
   publish JS/Wasm, and two additional modules are Web-only. Wasm is experimental. macOS Native,
@@ -20,12 +19,14 @@ line.
 - Desktop means the JVM artifact, not a Kotlin/Native desktop target or an official UI/application
   shell. Recorded evidence includes a macOS-hosted JVM run and a defined Ubuntu CI gate, but no
   Windows host gate; Linux/Windows remain JVM-compatible rather than equally validated environments.
-- Backend Gateway v1 is defined and build-locally verified, but no Gateway has been deployed or
+- Backend Gateway v2 is defined and build-locally verified, but no Gateway has been deployed or
   subjected to a production penetration/operations review.
 - Portable Web Search requires a host-provided `WebSearchBackend`; Magrathea does not ship a search
   account or default vendor. OpenAI, Gemini, and Anthropic hosted search/grounding formats are not
   implemented as aliases for the portable function Tool. Browser hosts must execute credentialed
   search behind an application server boundary.
+- Portable Image Search likewise requires a host-provided `ImageSearchBackend`. Products own media
+  loading, caching, presentation, and attribution.
 - MCP support is an optional Tool adapter, not an automatic import of every server capability.
   Resources, Prompts, Sampling, Roots, Elicitation, and experimental Tasks are not enabled by the
   Agent composition. Streamable HTTP supports caller-supplied static headers, but the SDK does not

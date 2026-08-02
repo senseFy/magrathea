@@ -272,7 +272,7 @@ class WebChatbotBrowserContractTest {
     }
 
     @Test
-    fun invalidSessionModelFailsClosedBeforeGatewayTransportWork() = runTest {
+    fun invalidSessionModelNeverCreatesAGatewayStream() = runTest {
         withIsolatedDatabase { databaseName ->
             val transport = ScriptedGatewayTransport(StreamBehavior.COMPLETE)
             val store = createMagratheaWebStore(MagratheaWebStoreConfiguration(databaseName))
@@ -303,7 +303,9 @@ class WebChatbotBrowserContractTest {
             val snapshot = terminal.await()
             assertEquals(ChatbotStatus.FAILED, snapshot.status)
             assertEquals(ChatbotFailure.PROTOCOL, snapshot.failure)
-            assertTrue(transport.executeRequests.isEmpty())
+            assertTrue(transport.createRequests.isEmpty())
+            assertFalse(transport.streamStarted.isCompleted)
+            assertEquals(1, transport.executeRequests.count { it.method == HttpMethod.DELETE })
             composition.client.close()
         }
     }

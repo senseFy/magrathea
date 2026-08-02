@@ -1,7 +1,5 @@
 # Web Search Contract
 
-> Status: Alpha public contract for `0.1.0-alpha.1`.
-
 ## Scope
 
 Magrathea exposes Web Search as a portable, client-executed function Tool. The Runtime owns the
@@ -9,10 +7,9 @@ agent loop and hard execution limits; the host injects a `WebSearchBackend` that
 service, transport, credential, and service-specific configuration. The contract works with every
 Provider adapter that supports ordinary function calling.
 
-This design deliberately does not treat OpenAI, Gemini, and Anthropic hosted search as the same
-wire feature. Their request controls, event lifecycles, citations, continuation state, and billing
-semantics differ. Provider-hosted search requires a separate canonical hosted-tool contract and is
-not emulated by the portable Tool.
+Provider-hosted search keeps its Provider-specific request controls, event lifecycle, citations,
+continuation state, and billing semantics. The portable Tool uses an independent canonical
+function-call contract across Providers.
 
 ## Execution model
 
@@ -22,7 +19,7 @@ not emulated by the portable Tool.
 3. The model decides whether to call `web_search` and supplies only a search query.
 4. Runtime validates and authorizes the call, enforces its run-level call budget and timeout, and
    invokes the backend.
-5. The Tool validates and bounds backend output, removes disallowed or unsafe URLs, and returns
+5. The Tool validates and bounds backend output, removes malformed or disallowed URLs, and returns
    canonical JSON plus `Citation` metadata.
 6. The normal agent loop sends that result back to the selected model for synthesis.
 
@@ -70,6 +67,11 @@ run-level budget.
 Citation presentation is product-owned and intentionally is not another `WebSearchPolicy` field;
 the Tool preserves citation metadata for every source admitted into model context.
 
+`WebSearchTool` defaults to `ToolRecoveryPolicy.REPLAY_SAFE`. A host whose backend must not repeat
+an invocation with an unknown outcome, including a backend with non-repeatable billing semantics,
+sets `recoveryPolicy = ToolRecoveryPolicy.FAIL_CLOSED` when constructing the Tool. Recovery policy
+describes backend execution semantics and therefore remains separate from `WebSearchPolicy`.
+
 ## Prompt and citation behavior
 
 There is no public “search system prompt” setting. The stable Tool description tells the model to:
@@ -116,8 +118,8 @@ val search = WebSearchTool(
         maxSearchCallsPerRun = 3,
         maxResultsPerQuery = 8,
         maxSourcesInContext = 6,
-        freshness = WebSearchFreshness.AUTO,
-        safeSearch = WebSearchSafeSearch.MODERATE,
+        freshness = SearchFreshness.AUTO,
+        safeSearch = SearchSafeSearch.MODERATE,
     ),
 )
 

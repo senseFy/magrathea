@@ -1,5 +1,6 @@
 package saien.magrathea.provider.api
 
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -20,6 +21,7 @@ import saien.magrathea.core.MessageBlockPhase
 import saien.magrathea.core.MessagePart
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
+import saien.magrathea.core.ModelInputModality
 import saien.magrathea.core.ProviderOptions
 import saien.magrathea.core.ProviderCredential
 import saien.magrathea.core.ProviderTimeoutConfig
@@ -31,7 +33,97 @@ import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolCallLifecycle
 import saien.magrathea.core.ToolDefinition
+import saien.magrathea.core.ToolResultAudience
+import saien.magrathea.core.ToolResultContent
+import saien.magrathea.core.ToolResultImageContent
 import saien.magrathea.core.ToolResultPart
+import saien.magrathea.core.ToolResultTextContent
+
+/** Model-visible canonical and typed representations of one Tool result. */
+class ToolResultModelProjection internal constructor(
+    val content: List<ToolResultContent>,
+    val canonicalResult: JsonElement?,
+) {
+    init {
+        require(content.isNotEmpty() || canonicalResult != null) {
+            "Tool result projection must contain at least one representation"
+        }
+    }
+}
+
+/**
+ * Selects every model-visible representation without duplicating an equivalent JSON text block.
+ * Canonical structured data and independent typed content remain composable.
+ */
+fun ToolResultPart.modelProjection(
+    inputModalities: Set<ModelInputModality>,
+    inputCapabilities: ProviderInputCapabilities,
+): ToolResultModelProjection {
+    val acceptedContent = content
+        .filter { ToolResultAudience.MODEL in it.audiences }
+        .filter { item ->
+            if (item !is ToolResultImageContent) return@filter true
+            val mimeType = item.mimeType ?: return@filter false
+            ModelInputModality.IMAGE in inputModalities &&
+                inputCapabilities.supportsAttachment(mimeType)
+        }
+    val canonicalResult = if (modelResultVisible) {
+        result
+    } else if (acceptedContent.isEmpty()) {
+        neutralModelResult()
+    } else {
+        null
+    }
+    val deduplicatedContent = acceptedContent.filterNot { item ->
+        item is ToolResultTextContent &&
+            canonicalResult != null &&
+            item.text.isStructurallyEquivalentJson(canonicalResult)
+    }
+    return ToolResultModelProjection(
+        content = deduplicatedContent,
+        canonicalResult = canonicalResult,
+    )
+}
+
+/**
+ * Removes product-only and USER-audience data before a Tool result crosses a model boundary.
+ * Provider-specific modality filtering remains the responsibility of [modelProjection].
+ */
+fun ToolResultPart.sanitizedForModelBoundary(): ToolResultPart = copy(
+    result = if (modelResultVisible) result else neutralModelResult(),
+    displayText = null,
+    userErrorCode = null,
+    metadata = JsonObject(emptyMap()),
+    content = content.mapNotNull { item ->
+        if (ToolResultAudience.MODEL !in item.audiences) return@mapNotNull null
+        when (item) {
+            is ToolResultTextContent -> item.copy(
+                audiences = setOf(ToolResultAudience.MODEL),
+            )
+            is ToolResultImageContent -> item.copy(
+                previewSource = null,
+                previewMimeType = null,
+                attribution = null,
+                audiences = setOf(ToolResultAudience.MODEL),
+                reference = null,
+            )
+        }
+    },
+    providerMetadata = null,
+    origin = null,
+)
+
+private fun ToolResultPart.neutralModelResult(): JsonPrimitive = JsonPrimitive(
+    if (isError) {
+        "Tool failed without model-visible error details."
+    } else {
+        "Tool completed without model-visible output."
+    },
+)
+
+private fun String.isStructurallyEquivalentJson(canonical: JsonElement): Boolean =
+    (canonical as? JsonPrimitive)?.contentOrNull == this ||
+        runCatching { Json.parseToJsonElement(this) }.getOrNull() == canonical
 
 /** How a Provider resumes an invocation interrupted while its model response was pending. */
 enum class ProviderInvocationResumeMode {
@@ -41,6 +133,49 @@ enum class ProviderInvocationResumeMode {
     /** Reuse the invocation identity to reattach to a durable remote stream. */
     REATTACH,
 }
+
+/** Runtime intent for one physical Provider invocation identity. */
+@Serializable
+enum class ProviderInvocationIntent {
+    /** Begin work for a newly claimed invocation identity. */
+    @SerialName("create")
+    CREATE,
+
+    /** Resolve and continue existing work without creating it when the identity is unknown. */
+    @SerialName("reattach")
+    REATTACH,
+}
+
+/** Terminal versus recoverable intent behind cancellation of an active Provider collection. */
+enum class ProviderCancellationIntent {
+    /** Request terminal abandonment and best-effort cleanup of durable remote resources. */
+    CANCEL,
+
+    /** Pause local collection while leaving a durable invocation available for reattachment. */
+    INTERRUPT,
+}
+
+/**
+ * Read-only cancellation intent propagated through the Provider coroutine context.
+ *
+ * Runtime-owned collection always uses [ProviderCancellationIntent.INTERRUPT] for local detach;
+ * durable terminal cleanup begins only through [ProviderAdapter.abandon] after terminal state is
+ * committed. Direct Provider collection has no signal and therefore defaults to terminal
+ * [ProviderCancellationIntent.CANCEL]. Providers without durable remote work may retain normal
+ * coroutine cancellation behavior.
+ */
+interface ProviderCancellationContext : CoroutineContext.Element {
+    val intent: ProviderCancellationIntent
+
+    override val key: CoroutineContext.Key<*>
+        get() = Key
+
+    companion object Key : CoroutineContext.Key<ProviderCancellationContext>
+}
+
+/** Returns the explicit Runtime intent, defaulting direct collection cancellation to terminal. */
+fun CoroutineContext.providerCancellationIntent(): ProviderCancellationIntent =
+    this[ProviderCancellationContext]?.intent ?: ProviderCancellationIntent.CANCEL
 
 /** Converts one Provider wire protocol into the canonical Magrathea event lifecycle. */
 interface ProviderAdapter {
@@ -58,6 +193,15 @@ interface ProviderAdapter {
     /** Protocol encoder capabilities for the effective request configuration. */
     fun inputCapabilities(config: ProviderTransportConfig? = null): ProviderInputCapabilities =
         ProviderInputCapabilities()
+
+    /**
+     * Best-effort terminal abandonment of durable work identified by [invocation].
+     *
+     * Direct Providers normally have no detached work and keep the default no-op. Adapters that
+     * support [ProviderInvocationResumeMode.REATTACH] may override this to release a persisted
+     * invocation after Runtime commits the terminal state that discards it.
+     */
+    suspend fun abandon(invocation: ProviderInvocation) = Unit
 
     suspend fun generate(request: ProviderRequest): Flow<ProviderChunk>
     fun close() = Unit
@@ -80,6 +224,7 @@ data class ProviderInvocation(
 @Serializable
 data class ProviderRequest(
     val invocation: ProviderInvocation? = null,
+    val invocationIntent: ProviderInvocationIntent = ProviderInvocationIntent.CREATE,
     val model: ModelDescriptor,
     val messages: List<AgentMessage>,
     val tools: List<ToolDefinition> = emptyList(),
@@ -97,12 +242,16 @@ data class ProviderRequest(
 ) {
     init {
         endpoint?.let(::requireValidHttpEndpoint)
+        require(invocationIntent != ProviderInvocationIntent.REATTACH || invocation != null) {
+            "Provider reattachment requires an invocation identity"
+        }
     }
 
     override fun toString(): String {
         val safeEndpoint = redactHttpUrl(endpoint)
         return "ProviderRequest(" +
             "invocation=$invocation, " +
+            "invocationIntent=$invocationIntent, " +
             "model=$model, " +
             "messages=${messages.size}, " +
             "tools=${tools.size}, " +
@@ -332,7 +481,11 @@ data class ProviderUsage(
     val reasoningTokens: Int? = null,
 )
 
-open class ProviderException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
+open class ProviderException(message: String, cause: Throwable? = null) : RuntimeException(message, cause) {
+    /** Whether another physical Provider invocation may succeed without changing the request. */
+    open val retryable: Boolean
+        get() = false
+}
 
 open class ProviderHttpException(
     message: String,
@@ -346,7 +499,10 @@ class ProviderRateLimitException(
     cause: Throwable? = null,
     statusCode: Int = 429,
     retryAfterMillis: Long? = null,
-) : ProviderHttpException(message, cause, statusCode, retryAfterMillis)
+) : ProviderHttpException(message, cause, statusCode, retryAfterMillis) {
+    override val retryable: Boolean
+        get() = true
+}
 
 class ProviderAuthException(
     message: String,
@@ -379,9 +535,29 @@ class ProviderServerException(
     cause: Throwable? = null,
     statusCode: Int,
     retryAfterMillis: Long? = null,
-) : ProviderHttpException(message, cause, statusCode, retryAfterMillis)
+) : ProviderHttpException(message, cause, statusCode, retryAfterMillis) {
+    override val retryable: Boolean
+        get() = true
+}
 
-open class ProviderNetworkException(message: String, cause: Throwable? = null) : ProviderException(message, cause)
+open class ProviderNetworkException(message: String, cause: Throwable? = null) : ProviderException(message, cause) {
+    override val retryable: Boolean
+        get() = true
+}
+
+/**
+ * A remote terminal invalidated one physical invocation while leaving the logical request valid.
+ * Runtime may retry only when [retryable] is true, and any retry must use a new physical identity.
+ */
+open class ProviderInvocationInvalidatedException(
+    val failure: ProviderException,
+    override val retryable: Boolean = failure.retryable,
+) : ProviderException(failure.message ?: "Provider invocation was invalidated", failure)
+
+/** The transport ended cleanly before the Provider emitted its semantic terminal event. */
+class ProviderStreamInterruptedException(
+    cause: Throwable? = null,
+) : ProviderNetworkException("Provider stream ended before semantic completion", cause)
 
 enum class ProviderTimeoutPhase {
     CONNECT,

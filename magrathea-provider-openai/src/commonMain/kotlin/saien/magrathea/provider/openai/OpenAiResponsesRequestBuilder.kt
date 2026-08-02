@@ -12,11 +12,17 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AttachmentPart
+import saien.magrathea.core.InlineToolImageSource
 import saien.magrathea.core.JsonPart
 import saien.magrathea.core.MessageRole
+import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
+import saien.magrathea.core.ToolImageAttachmentReference
+import saien.magrathea.core.ToolImageSource
+import saien.magrathea.core.ToolResultImageContent
 import saien.magrathea.core.ToolResultPart
+import saien.magrathea.core.ToolResultTextContent
 import saien.magrathea.core.dataUrlPayload
 import saien.magrathea.core.isHttpsUrl
 import saien.magrathea.core.normalizedMimeType
@@ -25,6 +31,7 @@ import saien.magrathea.provider.api.OpenAiResponsesHostedTool
 import saien.magrathea.provider.api.OpenAiXSearchToolConfig
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRequest
+import saien.magrathea.provider.api.modelProjection
 import saien.magrathea.provider.api.ReferenceProviderInputCapabilities
 
 internal const val OPENAI_RESPONSE_OUTPUT_METADATA = "openai.responses.output"
@@ -71,7 +78,7 @@ internal class OpenAiResponsesRequestBuilder(
                 MessageRole.SYSTEM -> add(systemInput(message))
                 MessageRole.USER -> add(userInput(message))
                 MessageRole.ASSISTANT -> assistantInput(message, request).forEach(::add)
-                MessageRole.TOOL -> toolResultInput(message).forEach(::add)
+                MessageRole.TOOL -> toolResultInput(message, request).forEach(::add)
             }
         }
     }
@@ -148,7 +155,7 @@ internal class OpenAiResponsesRequestBuilder(
         }
     }
 
-    private fun toolResultInput(message: AgentMessage): List<JsonObject> {
+    private fun toolResultInput(message: AgentMessage, request: ProviderRequest): List<JsonObject> {
         val results = message.parts.filterIsInstance<ToolResultPart>()
         if (results.isEmpty() || results.size != message.parts.size) {
             throw ProviderProtocolException("OpenAI tool message must contain only tool results")
@@ -157,9 +164,49 @@ internal class OpenAiResponsesRequestBuilder(
             buildJsonObject {
                 put("type", "function_call_output")
                 put("call_id", result.toolCallId)
-                put("output", renderToolResult(result))
+                put("output", result.toResponsesOutput(request))
             }
         }
+    }
+
+    private fun ToolResultPart.toResponsesOutput(request: ProviderRequest): JsonElement {
+        val projection = modelProjection(
+            request.model.inputModalities,
+            ReferenceProviderInputCapabilities.openAiResponses,
+        )
+        if (projection.content.isEmpty()) {
+            return JsonPrimitive(renderToolResult(requireNotNull(projection.canonicalResult)))
+        }
+        return buildJsonArray {
+            projection.canonicalResult?.let { add(inputText(renderToolResult(it))) }
+            projection.content.forEach { block ->
+                when (block) {
+                    is ToolResultTextContent -> add(inputText(block.text))
+                    is ToolResultImageContent -> add(block.toInputImage())
+                }
+            }
+        }
+    }
+
+    private fun ToolResultImageContent.toInputImage(): JsonObject {
+        val imageUrl = source.toOpenAiImageUrl(mimeType)
+        return buildJsonObject {
+            put("type", "input_image")
+            put("image_url", imageUrl)
+            put("detail", "auto")
+        }
+    }
+
+    private fun ToolImageSource.toOpenAiImageUrl(mimeType: String?): String = when (this) {
+        is RemoteToolImageSource -> uri
+        is InlineToolImageSource -> {
+            val mediaType = mimeType
+                ?: throw ProviderProtocolException("OpenAI inline Tool images require a MIME type")
+            "data:$mediaType;base64,$data"
+        }
+        is ToolImageAttachmentReference -> throw ProviderProtocolException(
+            "OpenAI Tool image attachment references must be resolved before request encoding",
+        )
     }
 
     private fun buildTools(
@@ -265,7 +312,7 @@ internal class OpenAiResponsesRequestBuilder(
         return detail
     }
 
-    private fun renderToolResult(result: ToolResultPart): String = when (val value = result.result) {
+    private fun renderToolResult(value: JsonElement): String = when (value) {
         is JsonPrimitive -> value.contentOrNull ?: value.toString()
         else -> json.encodeToString(JsonElement.serializer(), value)
     }

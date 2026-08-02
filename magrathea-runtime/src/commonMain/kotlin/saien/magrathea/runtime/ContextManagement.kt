@@ -4,8 +4,10 @@ import kotlin.math.absoluteValue
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AttachmentPart
@@ -20,17 +22,26 @@ import saien.magrathea.core.ContextPreparationResult
 import saien.magrathea.core.ContextSummarizer
 import saien.magrathea.core.ContextSummaryRequest
 import saien.magrathea.core.ContextUsageObservation
+import saien.magrathea.core.InlineToolImageSource
 import saien.magrathea.core.JsonPart
 import saien.magrathea.core.MessageRole
+import saien.magrathea.core.ModelInputModality
 import saien.magrathea.core.ProviderOptions
+import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.core.ReasoningPart
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.TokenUsage
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolDefinition
+import saien.magrathea.core.ToolImageAttachmentReference
+import saien.magrathea.core.ToolResultImageContent
 import saien.magrathea.core.ToolResultPart
+import saien.magrathea.core.ToolResultTextContent
 import saien.magrathea.core.dataUrlPayload
-import saien.magrathea.core.outputText
+import saien.magrathea.provider.api.ProviderRequest
+import saien.magrathea.provider.api.ProviderInputCapabilities
+import saien.magrathea.provider.api.modelProjection
+import saien.magrathea.provider.api.sanitizedForModelBoundary
 
 /**
  * Default token-budgeted context manager.
@@ -54,6 +65,7 @@ class TokenAwareContextManager(
                     systemPrompt = request.request.systemPrompt,
                     tools = request.request.tools,
                     providerOptions = request.request.engine.provider.options,
+                    modelInputModalities = request.request.model.inputModalities,
                     charsPerToken = config.charsPerTokenEstimate,
                 ),
                 inputLimitTokens = inputLimitTokens(request),
@@ -94,6 +106,7 @@ class TokenAwareContextManager(
             systemPrompt = request.request.systemPrompt,
             tools = request.request.tools,
             providerOptions = request.request.engine.provider.options,
+            modelInputModalities = request.request.model.inputModalities,
             charsPerToken = config.charsPerTokenEstimate,
         )
         val maximumRecentTokens = inputLimit
@@ -109,6 +122,7 @@ class TokenAwareContextManager(
             baseStartIndex = baseStartIndex,
             targetRecentTokens = targetRecentTokens,
             maximumRecentTokens = maximumRecentTokens,
+            modelInputModalities = request.request.model.inputModalities,
             charsPerToken = config.charsPerTokenEstimate,
         )
         if (cutIndex == null || request.state.pendingToolCalls.isNotEmpty()) {
@@ -141,6 +155,7 @@ class TokenAwareContextManager(
                     conversation = serializeContextConversation(
                         messages = sourceMessages,
                         maxToolResultChars = config.toolResultSummaryMaxChars,
+                        modelInputModalities = request.request.model.inputModalities,
                     ),
                     previousSummary = normalizedState.compaction?.summary,
                     maxOutputTokens = config.summaryMaxTokens,
@@ -186,6 +201,7 @@ class TokenAwareContextManager(
             systemPrompt = request.request.systemPrompt,
             tools = request.request.tools,
             providerOptions = request.request.engine.provider.options,
+            modelInputModalities = request.request.model.inputModalities,
             charsPerToken = config.charsPerTokenEstimate,
         )
         if (inputLimit != null && projectedTokens > inputLimit) {
@@ -323,13 +339,18 @@ private fun estimateCurrentInputTokens(
             request.state.messages.indexOfFirst { it.id == id }.takeIf { it >= 0 }
         } ?: -1
         val delta = request.state.messages.drop(anchorIndex + 1)
-        return observation.inputTokens + estimateMessages(delta, config.charsPerTokenEstimate)
+        return observation.inputTokens + estimateMessages(
+            messages = delta,
+            modelInputModalities = request.request.model.inputModalities,
+            charsPerToken = config.charsPerTokenEstimate,
+        )
     }
     return estimateInputTokens(
         messages = projection,
         systemPrompt = request.request.systemPrompt,
         tools = request.request.tools,
         providerOptions = request.request.engine.provider.options,
+        modelInputModalities = request.request.model.inputModalities,
         charsPerToken = config.charsPerTokenEstimate,
     )
 }
@@ -350,9 +371,10 @@ internal fun estimateInputTokens(
     systemPrompt: String,
     tools: List<ToolDefinition>,
     providerOptions: ProviderOptions?,
+    modelInputModalities: Set<ModelInputModality>,
     charsPerToken: Int,
 ): Long {
-    val messageTokens = estimateMessages(messages, charsPerToken)
+    val messageTokens = estimateMessages(messages, modelInputModalities, charsPerToken)
     val systemTokens = estimateChars(systemPrompt.length.toLong(), charsPerToken)
     val toolChars = tools.sumOf { definition ->
         definition.name.length.toLong() +
@@ -369,7 +391,11 @@ internal fun estimateInputTokens(
     return messageTokens + systemTokens + toolTokens + optionTokens
 }
 
-private fun estimateMessages(messages: List<AgentMessage>, charsPerToken: Int): Long {
+private fun estimateMessages(
+    messages: List<AgentMessage>,
+    modelInputModalities: Set<ModelInputModality>,
+    charsPerToken: Int,
+): Long {
     return messages.sumOf { message ->
         MESSAGE_OVERHEAD_TOKENS + message.parts.sumOf { part ->
             when (part) {
@@ -380,15 +406,63 @@ private fun estimateMessages(messages: List<AgentMessage>, charsPerToken: Int): 
                     (part.toolName.length + part.arguments.toString().length).toLong(),
                     charsPerToken,
                 )
-                is ToolResultPart -> estimateChars(
-                    (part.toolName.length + part.result.toString().length +
-                        (part.displayText?.length ?: 0)).toLong(),
-                    charsPerToken,
+                is ToolResultPart -> estimateToolResultTokens(
+                    part = part,
+                    modelInputModalities = modelInputModalities,
+                    charsPerToken = charsPerToken,
                 )
                 is AttachmentPart -> estimateAttachmentTokens(part, charsPerToken)
             }
         }
     }
+}
+
+private fun estimateToolResultTokens(
+    part: ToolResultPart,
+    modelInputModalities: Set<ModelInputModality>,
+    charsPerToken: Int,
+): Long {
+    val projection = part
+        .sanitizedForModelBoundary()
+        .modelProjection(modelInputModalities, CONTEXT_PROJECTION_CAPABILITIES)
+    val canonicalTokens = projection.canonicalResult?.let { result ->
+        estimateChars(
+            result.providerFallbackText().length.toLong(),
+            charsPerToken,
+        )
+    } ?: 0L
+    val contentTokens = projection.content.sumOf { content ->
+        when (content) {
+            is ToolResultTextContent -> estimateChars(
+                content.text.length.toLong(),
+                charsPerToken,
+            )
+            is ToolResultImageContent -> estimateToolImageTokens(content, charsPerToken)
+        }
+    }
+    return estimateChars(part.toolName.length.toLong(), charsPerToken) +
+        canonicalTokens +
+        contentTokens
+}
+
+private fun JsonElement.providerFallbackText(): String = when (this) {
+    is JsonPrimitive -> contentOrNull ?: toString()
+    else -> toString()
+}
+
+private fun estimateToolImageTokens(content: ToolResultImageContent, charsPerToken: Int): Long {
+    val sourceTokens = when (val source = content.source) {
+        is InlineToolImageSource -> INLINE_ATTACHMENT_ESTIMATED_TOKENS
+        is RemoteToolImageSource -> REMOTE_ATTACHMENT_ESTIMATED_TOKENS +
+            estimateChars(source.uri.length.toLong(), charsPerToken)
+        is ToolImageAttachmentReference -> REMOTE_ATTACHMENT_ESTIMATED_TOKENS +
+            estimateChars(source.uri.length.toLong(), charsPerToken)
+    }
+    val descriptionTokens = estimateChars(
+        ((content.title?.length ?: 0) + (content.altText?.length ?: 0)).toLong(),
+        charsPerToken,
+    )
+    return sourceTokens + descriptionTokens
 }
 
 private fun estimateAttachmentTokens(part: AttachmentPart, charsPerToken: Int): Long {
@@ -407,10 +481,13 @@ private fun findSafeCutIndex(
     baseStartIndex: Int,
     targetRecentTokens: Long,
     maximumRecentTokens: Long?,
+    modelInputModalities: Set<ModelInputModality>,
     charsPerToken: Int,
 ): Int? {
     if (messages.size < 2 || baseStartIndex >= messages.lastIndex) return null
-    val messageTokens = messages.map { estimateMessages(listOf(it), charsPerToken) }
+    val messageTokens = messages.map {
+        estimateMessages(listOf(it), modelInputModalities, charsPerToken)
+    }
     val suffixTokens = LongArray(messages.size + 1)
     for (index in messages.lastIndex downTo 0) {
         suffixTokens[index] = suffixTokens[index + 1] + messageTokens[index]
@@ -454,6 +531,7 @@ private fun List<AgentMessage>.toolResultIds(): Set<String> = flatMap { message 
 internal fun serializeContextConversation(
     messages: List<AgentMessage>,
     maxToolResultChars: Int,
+    modelInputModalities: Set<ModelInputModality>,
 ): String = buildString {
     messages.forEach { message ->
         append(
@@ -479,8 +557,25 @@ internal fun serializeContextConversation(
                 is ToolResultPart -> {
                     append(if (part.isError) "[Tool error] " else "[Tool result] ")
                     append(part.toolName)
-                    append(' ')
-                    appendLine(part.outputText().limit(maxToolResultChars))
+                    appendLine()
+                    val projection = part
+                        .sanitizedForModelBoundary()
+                        .modelProjection(modelInputModalities, CONTEXT_PROJECTION_CAPABILITIES)
+                    projection.canonicalResult?.let { result ->
+                        appendLine(result.providerFallbackText().limit(maxToolResultChars))
+                    }
+                    projection.content.forEach { content ->
+                        when (content) {
+                            is ToolResultTextContent -> appendLine(
+                                content.text.limit(maxToolResultChars),
+                            )
+                            is ToolResultImageContent -> {
+                                append("[Tool image] ")
+                                append(content.title ?: content.altText ?: "image")
+                                appendLine()
+                            }
+                        }
+                    }
                 }
                 is AttachmentPart -> {
                     append("[Attachment] ")
@@ -496,6 +591,10 @@ internal fun serializeContextConversation(
     }
 }
 
+private val CONTEXT_PROJECTION_CAPABILITIES = ProviderInputCapabilities(
+    attachmentMimeTypePrefixes = setOf("image/"),
+)
+
 private fun String.limit(maxChars: Int): String {
     if (length <= maxChars) return this
     return take(maxChars) + "…"
@@ -506,6 +605,11 @@ internal fun contextRequestFingerprint(request: saien.magrathea.core.AgentReques
     hash = hash.updateField(request.systemPrompt)
     hash = hash.updateField(request.model.provider)
     hash = hash.updateField(request.model.model)
+    hash = hash.updateField(request.model.inputModalities.size.toString())
+    request.model.inputModalities
+        .map(ModelInputModality::name)
+        .sorted()
+        .forEach { modality -> hash = hash.updateField(modality) }
     hash = hash.updateField(
         request.engine.provider.options?.let { options ->
             CANONICAL_JSON.encodeToString(ProviderOptions.serializer(), options)
@@ -516,6 +620,24 @@ internal fun contextRequestFingerprint(request: saien.magrathea.core.AgentReques
             CANONICAL_JSON.encodeToString(ToolDefinition.serializer(), definition),
         )
     }
+    return hash.toDigestString()
+}
+
+/** Stable, non-secret identity of the logical request body associated with a Provider invocation. */
+internal fun providerRequestInputIdentity(request: ProviderRequest): String {
+    var hash = FNV_OFFSET_BASIS
+    hash = hash.updateField(
+        CANONICAL_JSON.encodeToString(
+            ProviderRequest.serializer(),
+            request.copy(
+                invocation = null,
+                invocationIntent = saien.magrathea.provider.api.ProviderInvocationIntent.CREATE,
+                credential = null,
+                endpoint = null,
+                headers = emptyMap(),
+            ),
+        ),
+    )
     return hash.toDigestString()
 }
 

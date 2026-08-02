@@ -13,17 +13,25 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AttachmentPart
+import saien.magrathea.core.InlineToolImageSource
 import saien.magrathea.core.JsonPart
 import saien.magrathea.core.MessageRole
+import saien.magrathea.core.ModelInputModality
+import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.core.ReasoningPart
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
+import saien.magrathea.core.ToolImageAttachmentReference
+import saien.magrathea.core.ToolImageSource
+import saien.magrathea.core.ToolResultImageContent
 import saien.magrathea.core.ToolResultPart
+import saien.magrathea.core.ToolResultTextContent
 import saien.magrathea.core.dataUrlPayload
 import saien.magrathea.core.isHttpsUrl
 import saien.magrathea.core.normalizedMimeType
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRequest
+import saien.magrathea.provider.api.modelProjection
 import saien.magrathea.provider.api.ReferenceProviderInputCapabilities
 
 internal const val OPENAI_CHAT_MESSAGE_METADATA = "openai.chat.message"
@@ -62,7 +70,7 @@ internal class OpenAiChatCompletionsRequestBuilder(
                 MessageRole.SYSTEM -> add(systemMessage(message))
                 MessageRole.USER -> add(userMessage(message))
                 MessageRole.ASSISTANT -> add(assistantMessage(message, request))
-                MessageRole.TOOL -> toolMessages(message).forEach(::add)
+                MessageRole.TOOL -> toolMessages(message, request).forEach(::add)
             }
         }
     }
@@ -178,18 +186,85 @@ internal class OpenAiChatCompletionsRequestBuilder(
         }
     }
 
-    private fun toolMessages(message: AgentMessage): List<JsonObject> {
+    private fun toolMessages(message: AgentMessage, request: ProviderRequest): List<JsonObject> {
         val results = message.parts.filterIsInstance<ToolResultPart>()
         if (results.isEmpty() || results.size != message.parts.size) {
             throw ProviderProtocolException("OpenAI-compatible tool messages must contain only tool results")
         }
-        return results.map { result ->
-            buildJsonObject {
-                put("role", "tool")
-                put("tool_call_id", result.toolCallId)
-                put("content", renderToolResult(result))
+        return buildList {
+            results.forEach { result ->
+                add(buildJsonObject {
+                    put("role", "tool")
+                    put("tool_call_id", result.toolCallId)
+                    put("content", result.modelText(request))
+                })
+            }
+            if (ModelInputModality.IMAGE in request.model.inputModalities) {
+                val images = results.flatMap { result ->
+                    result.modelProjection(
+                        request.model.inputModalities,
+                        ReferenceProviderInputCapabilities.openAiChatCompletions,
+                    ).content
+                        .filterIsInstance<ToolResultImageContent>()
+                }
+                if (images.isNotEmpty()) {
+                    add(buildJsonObject {
+                        put("role", "user")
+                        put("content", buildJsonArray {
+                            add(buildJsonObject {
+                                put("type", "text")
+                                put("text", "Images returned by the preceding Tool results.")
+                            })
+                            images.forEach { image ->
+                                add(buildJsonObject {
+                                    put("type", "image_url")
+                                    put("image_url", buildJsonObject {
+                                        put("url", image.source.toOpenAiImageUrl(image.mimeType))
+                                    })
+                                })
+                            }
+                        })
+                    })
+                }
             }
         }
+    }
+
+    private fun ToolResultPart.modelText(request: ProviderRequest): String {
+        val projection = modelProjection(
+            request.model.inputModalities,
+            ReferenceProviderInputCapabilities.openAiChatCompletions,
+        )
+        val modelContent = projection.content
+        val text = buildList {
+            projection.canonicalResult?.let { add(renderToolResult(it)) }
+            addAll(
+                modelContent
+                    .filterIsInstance<ToolResultTextContent>()
+                    .map(ToolResultTextContent::text),
+            )
+        }.joinToString("\n")
+        if (text.isNotBlank()) return text
+        return if (
+            ModelInputModality.IMAGE in request.model.inputModalities &&
+            modelContent.any { it is ToolResultImageContent }
+        ) {
+            "(see attached Tool images)"
+        } else {
+            renderToolResult(result)
+        }
+    }
+
+    private fun ToolImageSource.toOpenAiImageUrl(mimeType: String?): String = when (this) {
+        is RemoteToolImageSource -> uri
+        is InlineToolImageSource -> {
+            val mediaType = mimeType
+                ?: throw ProviderProtocolException("OpenAI-compatible inline Tool images require a MIME type")
+            "data:$mediaType;base64,$data"
+        }
+        is ToolImageAttachmentReference -> throw ProviderProtocolException(
+            "OpenAI-compatible Tool image attachment references must be resolved before request encoding",
+        )
     }
 
     private fun buildTools(request: ProviderRequest): JsonArray = buildJsonArray {
@@ -228,7 +303,7 @@ internal class OpenAiChatCompletionsRequestBuilder(
         }
     }
 
-    private fun renderToolResult(result: ToolResultPart): String = when (val value = result.result) {
+    private fun renderToolResult(value: JsonElement): String = when (value) {
         is JsonPrimitive -> value.contentOrNull ?: value.toString()
         else -> json.encodeToString(JsonElement.serializer(), value)
     }

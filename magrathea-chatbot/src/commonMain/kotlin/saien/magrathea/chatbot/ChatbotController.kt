@@ -425,6 +425,7 @@ internal class ChatbotController(
         if (event.sessionId() != expectedSessionId) return@withLock false
         mutableState.value = reducer.reduce(mutableState.value, event)
         when (event) {
+            is AgentEvent.CheckpointSaved -> conversation.replaceWith(event.checkpoint.state.messages)
             is AgentEvent.Completed -> conversation.replaceWith(event.state.messages)
             is AgentEvent.Interrupted -> conversation.replaceWith(event.state.messages)
             is AgentEvent.MessageEmitted -> conversation.replaceOrAppend(event.message)

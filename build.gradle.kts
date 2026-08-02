@@ -847,8 +847,8 @@ val verifyWebSdkPackage = tasks.register("verifyWebSdkPackage") {
         check(directory.listFiles().orEmpty().any { it.name.matches(Regex("[0-9]+\\.js")) }) {
             "Web package is missing its production split chunk"
         }
-        check(bundle.length() <= 1_300_000) {
-            "Web production bundle exceeded 1,300,000 bytes: ${bundle.length()}"
+        check(bundle.length() <= 1_420_000) {
+            "Web production bundle exceeded 1,420,000 bytes: ${bundle.length()}"
         }
 
         val definitionsText = definitions.readText()

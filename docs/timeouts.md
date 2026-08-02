@@ -33,13 +33,13 @@ plus Runtime first-event, stream-idle, Provider-call, and whole-run deadlines re
 ## Failure and recovery
 
 Connection, first-event, stream-idle, and Provider-call deadlines produce a recoverable
-`PROVIDER_TIMEOUT` interruption. A Tool deadline becomes a typed Tool error result so the model can
-recover on a later turn. The whole-run deadline remains terminal `AgentFailureCode.TIMEOUT` and is
-authoritative over all Tool activity.
+`PROVIDER_FAILURE` interruption whose nested `ProviderInterruption.code` is `TIMEOUT`. A Tool
+deadline becomes a typed Tool error result so the model can recover on a later turn. The whole-run
+deadline remains terminal `AgentFailureCode.TIMEOUT` and is authoritative over all Tool activity.
 
 Provider streaming keeps rendezvous backpressure: Runtime validates and emits each chunk before the
-Provider advances. Emitted partial output may be shown provisionally, but a Provider timeout rolls
-durable state back to the last checkpoint before resume.
+Provider advances. Emitted partial output may be persisted provisionally for presentation, while
+resume authority returns to the last replay-safe checkpoint.
 
 Explicit user cancellation remains terminal cancellation. Host lifecycle interruption remains
 recoverable interruption; neither is rewritten as a timeout.

@@ -11,6 +11,8 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class SerializationGoldenFixtureTest {
+    private val fixtureSdkVersion = "0.1.0-alpha.2"
+
     private val json = Json {
         classDiscriminator = "type"
         encodeDefaults = false
@@ -18,47 +20,77 @@ class SerializationGoldenFixtureTest {
     }
 
     @Test
-    fun agentMessage_matchesV4GoldenFixture() {
+    fun agentMessage_matchesV5GoldenFixture() {
         val expected = agentMessageFixture()
-        val fixture = resource("/v4/core/agent-message.json")
+        val fixture = resource("/v5/core/agent-message.json")
 
         assertGolden(fixture, json.encodeToString(AgentMessage.serializer(), expected))
         assertEquals(expected, json.decodeFromString(AgentMessage.serializer(), fixture))
     }
 
     @Test
-    fun agentSessionSnapshot_matchesV4GoldenFixture() {
+    fun typedToolResultMessage_matchesV5GoldenFixture() {
+        val expected = typedToolResultMessageFixture()
+        val fixture = resource("/v5/core/typed-tool-result-message.json")
+
+        assertGolden(fixture, json.encodeToString(AgentMessage.serializer(), expected))
+        assertEquals(expected, json.decodeFromString(AgentMessage.serializer(), fixture))
+    }
+
+    @Test
+    fun agentSessionSnapshot_matchesV5GoldenFixture() {
         val expected = sessionFixture()
-        val fixture = resource("/v4/core/agent-session-snapshot.json")
+        val fixture = resource("/v5/core/agent-session-snapshot.json")
 
         assertGolden(fixture, json.encodeToString(AgentSessionSnapshot.serializer(), expected))
         assertEquals(expected, json.decodeFromString(AgentSessionSnapshot.serializer(), fixture))
     }
 
     @Test
-    fun storedSessionEnvelope_matchesV4GoldenFixture() {
-        val expected = sessionFixture()
-        val fixture = resource("/v4/core/stored-session-envelope.json")
-        val codec = AgentSessionSnapshotCodec(json, sdkVersion = "0.1.0-alpha.1")
+    fun storedSessionEnvelope_matchesV5GoldenFixture() {
+        val expected = interruptedSessionFixture()
+        val fixture = resource("/v5/core/stored-session-envelope.json")
+        val codec = AgentSessionSnapshotCodec(json, sdkVersion = fixtureSdkVersion)
 
         assertGolden(fixture, codec.encode(expected))
         assertEquals(expected, codec.decode(fixture))
     }
 
     @Test
-    fun storedCheckpointEnvelope_matchesV4GoldenFixture() {
+    fun storedCheckpointEnvelope_matchesV5GoldenFixture() {
         val session = sessionFixture()
         val expected = AgentCheckpoint(
             sessionId = session.sessionId,
             runId = session.runId,
             cursor = AgentResumeCursor(
                 turn = session.state.turn,
-                phase = AgentResumePhase.TURN_COMMITTED,
+                phase = AgentResumePhase.MODEL_PENDING,
+                provider = AgentProviderInvocationCursor(
+                    nextPhysicalAttempt = 3,
+                    pending = AgentPendingProviderInvocation(
+                        requestId = "run-fixture-1:turn-2:attempt-2",
+                        purpose = ProviderRequestPurpose.CONTEXT_SUMMARY,
+                        inputIdentity = "context-summary-input-fixture-1",
+                    ),
+                ),
             ),
-            state = session.state,
+            state = session.state.copy(
+                status = AgentStatus.RUNNING,
+                stopReason = null,
+            ),
+            toolExecutions = listOf(
+                ToolExecutionRecord(
+                    executionId = "execution-fixture-1",
+                    toolCallId = "image-call-fixture-1",
+                    toolName = "image_search",
+                    callOrdinal = 1,
+                    state = ToolExecutionState.COMPLETED,
+                    result = journalToolResultFixture(),
+                ),
+            ),
         )
-        val fixture = resource("/v4/core/stored-checkpoint-envelope.json")
-        val codec = AgentCheckpointCodec(json, sdkVersion = "0.1.0-alpha.1")
+        val fixture = resource("/v5/core/stored-checkpoint-envelope.json")
+        val codec = AgentCheckpointCodec(json, sdkVersion = fixtureSdkVersion)
 
         assertGolden(fixture, codec.encode(expected))
         assertEquals(expected, codec.decode(fixture))
@@ -66,8 +98,8 @@ class SerializationGoldenFixtureTest {
 
     @Test
     fun corruptStoredSessionEnvelope_isRejected() {
-        val corruptFixture = resource("/v4/core/stored-session-envelope-corrupt.json")
-        val codec = AgentSessionSnapshotCodec(json, sdkVersion = "0.1.0-alpha.1")
+        val corruptFixture = resource("/v5/core/stored-session-envelope-corrupt.json")
+        val codec = AgentSessionSnapshotCodec(json, sdkVersion = fixtureSdkVersion)
 
         assertThrows(SerializationException::class.java) {
             codec.decode(corruptFixture)
@@ -94,6 +126,111 @@ class SerializationGoldenFixtureTest {
             put("model", JsonPrimitive("gemini-contract"))
         },
         stopReason = StopReason.TOOL_CALLS,
+    )
+
+    private fun typedToolResultMessageFixture() = AgentMessage(
+        id = "tool-message-fixture-1",
+        role = MessageRole.TOOL,
+        parts = listOf(
+            ToolResultPart(
+                toolCallId = "image-call-fixture-1",
+                toolName = "image_search",
+                result = buildJsonObject {
+                    put("type", JsonPrimitive("image_search_results"))
+                    put("count", JsonPrimitive(1))
+                },
+                displayText = "1 image",
+                metadata = buildJsonObject {
+                    put("query", JsonPrimitive("kmp architecture"))
+                },
+                content = listOf(
+                    ToolResultTextContent(
+                        text = "One image matched the query.",
+                        audiences = setOf(ToolResultAudience.MODEL),
+                    ),
+                    ToolResultImageContent(
+                        source = RemoteToolImageSource(
+                            "https://images.example.com/kmp-architecture.jpg",
+                        ),
+                        previewSource = ToolImageAttachmentReference("attachment-preview-fixture-1"),
+                        previewMimeType = "image/jpeg",
+                        mimeType = "image/jpeg",
+                        title = "Kotlin Multiplatform architecture",
+                        altText = "A Kotlin Multiplatform architecture diagram",
+                        width = 1_280,
+                        height = 720,
+                        attribution = ToolMediaAttribution(
+                            title = "Example source",
+                            url = "https://example.com/kmp-architecture",
+                            license = "CC BY 4.0",
+                            licenseUrl = "https://creativecommons.org/licenses/by/4.0/",
+                        ),
+                        audiences = setOf(ToolResultAudience.USER),
+                        reference = MediaReference.forToolResult(
+                            executionId = "execution-fixture-1",
+                            contentIndex = 1,
+                        ),
+                    ),
+                ),
+                providerMetadata = buildJsonObject {
+                    put("provider", JsonPrimitive("fixture"))
+                },
+                modelResultVisible = false,
+                origin = toolOriginFixture(),
+            ),
+            ToolResultPart(
+                toolCallId = "search-call-fixture-1",
+                toolName = "web_search",
+                result = buildJsonObject {
+                    put("code", JsonPrimitive("private-provider-code"))
+                },
+                isError = true,
+                displayText = "Search failed.",
+                userErrorCode = "search-unavailable",
+                modelResultVisible = false,
+            ),
+        ),
+        createdAtEpochMs = 1_700_000_000_003,
+    )
+
+    private fun journalToolResultFixture() = ToolExecutionResult(
+        toolCallId = "image-call-fixture-1",
+        toolName = "image_search",
+        result = buildJsonObject {
+            put("type", JsonPrimitive("image_search_results"))
+            put("count", JsonPrimitive(1))
+        },
+        displayText = "1 image",
+        metadata = buildJsonObject {
+            put("query", JsonPrimitive("kmp architecture"))
+        },
+        content = listOf(
+            ToolResultTextContent(
+                text = "One image matched the query.",
+                audiences = setOf(ToolResultAudience.MODEL),
+            ),
+            ToolResultImageContent(
+                source = RemoteToolImageSource(
+                    "https://images.example.com/kmp-architecture.jpg",
+                ),
+                mimeType = "image/jpeg",
+                title = "Kotlin Multiplatform architecture",
+                audiences = setOf(ToolResultAudience.USER),
+                reference = MediaReference.forToolResult(
+                    executionId = "execution-fixture-1",
+                    contentIndex = 1,
+                ),
+            ),
+        ),
+        modelResultVisible = false,
+        origin = toolOriginFixture(),
+    )
+
+    private fun toolOriginFixture() = ToolOrigin(
+        sourceId = "image-catalog-fixture",
+        sourceLabel = "Image catalog",
+        toolId = "image_search",
+        toolLabel = "Image search",
     )
 
     private fun sessionFixture(): AgentSessionSnapshot {
@@ -143,6 +280,25 @@ class SerializationGoldenFixtureTest {
                 ),
             ),
             updatedAtEpochMs = 1_700_000_000_002,
+        )
+    }
+
+    private fun interruptedSessionFixture(): AgentSessionSnapshot {
+        val session = sessionFixture()
+        return session.copy(
+            state = session.state.copy(
+                status = AgentStatus.INTERRUPTED,
+                stopReason = StopReason.INTERRUPTED,
+            ),
+            interruption = AgentInterruption(
+                reason = AgentInterruptionReason.PROVIDER_FAILURE,
+                provider = ProviderInterruption(
+                    code = AgentFailureCode.PROVIDER_NETWORK,
+                    phase = ProviderInterruptionPhase.AFTER_FIRST_EVENT,
+                    retryAtEpochMs = 1_700_000_005_002,
+                ),
+                occurredAtEpochMs = 1_700_000_000_002,
+            ),
         )
     }
 

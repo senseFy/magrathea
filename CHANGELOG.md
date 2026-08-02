@@ -3,6 +3,34 @@
 Notable changes to Magrathea are documented here. The project follows
 [Semantic Versioning](https://semver.org/) for published releases.
 
+## 0.1.0-alpha.2 — 2026-08-02
+
+### Added
+
+- Typed multimodal Tool results with explicit model/user audiences, Provider-native image mapping,
+  MCP image mapping, Chatbot image projection, and strict Runtime/Gateway limits.
+- Typed, bounded Tool origin projected through Core, MCP, and the Chatbot facade without exposing
+  protocol metadata.
+- A Provider-neutral Image Search Tool with an injectable host backend, bounded HTTPS results,
+  attribution, license metadata, Safe Search, and stable failure codes.
+- Typed, durable Provider interruptions with stable failure codes, stream phase, and optional
+  `Retry-After` recovery timing across Runtime and the Chatbot facade.
+- Durable Provider invocation identities with explicit create, reattach, interruption, and
+  terminal-abandonment contracts.
+
+### Changed
+
+- Gateway protocol and HTTP paths advance to v2 for typed Tool attachment references.
+- Session and checkpoint envelopes advance to schema v5 for typed Tool result content, Tool origin,
+  and interruption metadata.
+- Runtime retries only transient failures before the first canonical event, enforces bounded
+  error-aware backoff and `Retry-After`, and resumes post-output failures from a safe checkpoint.
+- Direct Provider adapters classify a clean stream end before semantic completion as recoverable;
+  a semantic `Completed` remains authoritative over a later transport disconnect.
+- Telemetry distinguishes interrupted sessions and records whether a Provider event was observed.
+- Runtime commits terminal state before bounded remote abandonment; failed commits preserve the
+  recovery checkpoint and pending invocation.
+
 ## 0.1.0-alpha.1 — 2026-07-26
 
 ### Added

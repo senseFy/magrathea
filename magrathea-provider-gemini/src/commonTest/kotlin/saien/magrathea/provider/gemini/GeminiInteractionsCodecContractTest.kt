@@ -16,10 +16,18 @@ import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.provider.api.HttpStreamFrame
+import saien.magrathea.provider.api.ProviderAuthException
+import saien.magrathea.provider.api.ProviderClientException
 import saien.magrathea.provider.api.ProviderContextLimitException
 import saien.magrathea.provider.api.ProviderEvent
 import saien.magrathea.provider.api.ProviderEventAssembler
+import saien.magrathea.provider.api.ProviderException
+import saien.magrathea.provider.api.ProviderNetworkException
 import saien.magrathea.provider.api.ProviderProtocolException
+import saien.magrathea.provider.api.ProviderRateLimitException
+import saien.magrathea.provider.api.ProviderServerException
+import saien.magrathea.provider.api.ProviderTimeoutException
+import saien.magrathea.provider.api.ProviderTimeoutPhase
 
 class GeminiInteractionsCodecContractTest {
     @Test
@@ -155,6 +163,58 @@ class GeminiInteractionsCodecContractTest {
 }""",
             )
         }
+    }
+
+    @Test
+    fun canonicalGoogleErrorStatusMapsToTheDirectProviderFailureHierarchy() {
+        val canary = "private-provider-error-canary"
+        val authentication = interactionFailure("UNAUTHENTICATED", "401", canary)
+        val permission = interactionFailure("PERMISSION_DENIED", "403", canary)
+        val client = interactionFailure("INVALID_ARGUMENT", "400", canary)
+        val rateLimit = interactionFailure("RESOURCE_EXHAUSTED", "429", canary)
+        val timeout = interactionFailure("DEADLINE_EXCEEDED", "504", canary)
+        val cancellation = interactionFailure("CANCELLED", "499", canary)
+        val unavailable = interactionFailure("UNAVAILABLE", "503", canary)
+        val unknown = interactionFailure("FUTURE_GOOGLE_STATUS", "unknown", canary)
+
+        assertEquals(401, assertIs<ProviderAuthException>(authentication).statusCode)
+        assertEquals(403, assertIs<ProviderAuthException>(permission).statusCode)
+        assertEquals(400, assertIs<ProviderClientException>(client).statusCode)
+        assertEquals(429, assertIs<ProviderRateLimitException>(rateLimit).statusCode)
+        assertEquals(
+            ProviderTimeoutPhase.PROVIDER_CALL,
+            assertIs<ProviderTimeoutException>(timeout).phase,
+        )
+        assertIs<ProviderNetworkException>(cancellation)
+        assertEquals(503, assertIs<ProviderServerException>(unavailable).statusCode)
+        assertEquals(500, assertIs<ProviderServerException>(unknown).statusCode)
+        listOf(
+            authentication,
+            permission,
+            client,
+            rateLimit,
+            timeout,
+            cancellation,
+            unavailable,
+            unknown,
+        ).forEach { failure ->
+            assertFalse(failure.toString().contains(canary))
+        }
+    }
+
+    @Test
+    fun numericGoogleErrorCodeMapsWithoutRequiringAStatusField() {
+        val failure = assertFailsWith<ProviderRateLimitException> {
+            GeminiInteractionsCodec(MODEL).decodeServerSentEvent(
+                "error",
+                """{
+  "event_type":"error",
+  "error":{"code":429,"message":"quota exhausted"}
+}""",
+            )
+        }
+
+        assertEquals(429, failure.statusCode)
     }
 
     @Test
@@ -304,6 +364,20 @@ data: [DONE]
             HttpStreamFrame.Completed -> codec.finish().let { emptyList() }
             else -> emptyList()
         }
+    }
+
+    private fun interactionFailure(
+        status: String,
+        code: String,
+        message: String,
+    ): ProviderException = assertFailsWith<ProviderException> {
+        GeminiInteractionsCodec(MODEL).decodeServerSentEvent(
+            "error",
+            """{
+  "event_type":"error",
+  "error":{"status":"$status","code":"$code","message":"$message"}
+}""",
+        )
     }
 
     private companion object {

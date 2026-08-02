@@ -11,9 +11,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.test.Test
+import saien.magrathea.core.AgentCheckpoint
 import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentRequest
+import saien.magrathea.core.AgentResumeCursor
+import saien.magrathea.core.AgentResumePhase
 import saien.magrathea.core.AgentRunner
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentStateSnapshot
@@ -118,6 +121,53 @@ class ChatbotControllerTest {
         assertEquals(listOf(sessionId), runner.resumed)
         assertEquals(ChatbotStatus.COMPLETED, controller.state.value.status)
         assertEquals("resumed", controller.state.value.messages.single().text)
+    }
+
+    @Test
+    fun resumeShouldReconcileConversationToTheSafeCheckpointBeforeNewInput() = runTest {
+        val sessionId = AgentSessionId("session-recovery")
+        val user = AgentMessage(
+            id = "user-1",
+            role = MessageRole.USER,
+            parts = listOf(TextPart("hello")),
+        )
+        val provisional = AgentMessage(
+            id = "assistant-provisional",
+            role = MessageRole.ASSISTANT,
+            parts = listOf(TextPart("partial")),
+        )
+        val checkpoint = AgentCheckpoint(
+            sessionId = sessionId,
+            runId = TEST_RUN_ID,
+            cursor = AgentResumeCursor(0, AgentResumePhase.MODEL_PENDING),
+            state = AgentStateSnapshot(messages = listOf(user)),
+        )
+        val runner = ScriptedAgentRunner(
+            resumeScript = {
+                listOf(
+                    AgentEvent.Started(sessionId, TEST_RUN_ID),
+                    AgentEvent.CheckpointSaved(checkpoint),
+                )
+            },
+        )
+        val controller = ChatbotController(
+            runner = runner,
+            requestFactory = DefaultChatbotRequestFactory(),
+            initialConfiguration = testChatbotConfiguration(provider = "fake", model = "fake"),
+            scope = this,
+        )
+        controller.loadHistory(
+            messages = listOf(user, provisional),
+            sessionId = sessionId,
+            status = ChatbotStatus.INTERRUPTED,
+        )
+
+        controller.resume(sessionId)
+        advanceUntilIdle()
+        controller.sendMessage("next")
+        advanceUntilIdle()
+
+        assertEquals(listOf("hello", "next"), runner.requests.single().messages.map { it.text() })
     }
 
     @Test

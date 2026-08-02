@@ -1,5 +1,7 @@
 package saien.magrathea.runtime
 
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -14,6 +16,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.channelFlow
@@ -21,8 +24,10 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.job
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -38,6 +43,8 @@ import saien.magrathea.core.AgentInterruptionReason
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentPersistence
 import saien.magrathea.core.AgentPersistenceRecord
+import saien.magrathea.core.AgentPendingProviderInvocation
+import saien.magrathea.core.AgentProviderInvocationCursor
 import saien.magrathea.core.AgentRecoveryBlockReason
 import saien.magrathea.core.AgentRecoveryDisposition
 import saien.magrathea.core.AgentRecoveryInfo
@@ -63,12 +70,17 @@ import saien.magrathea.core.ContextTransformer
 import saien.magrathea.core.CredentialProvider
 import saien.magrathea.core.FollowUpMessageProvider
 import saien.magrathea.core.IdGenerator
+import saien.magrathea.core.InlineToolImageSource
+import saien.magrathea.core.MediaReference
 import saien.magrathea.core.MagratheaTelemetry
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.MonotonicClock
 import saien.magrathea.core.NoopMagratheaTelemetry
 import saien.magrathea.core.NoopRetryPolicy
 import saien.magrathea.core.ProviderTimeoutConfig
+import saien.magrathea.core.ProviderInterruption
+import saien.magrathea.core.ProviderInterruptionPhase
+import saien.magrathea.core.ProviderRequestPurpose
 import saien.magrathea.core.ReplayPolicy
 import saien.magrathea.core.ReasoningPart
 import saien.magrathea.core.RetryPolicy
@@ -76,6 +88,7 @@ import saien.magrathea.core.RuntimeConfig
 import saien.magrathea.core.SteeringMessageProvider
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.SystemIdGenerator
+import saien.magrathea.core.SystemEpochClock
 import saien.magrathea.core.SystemMonotonicClock
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.TelemetryEvent
@@ -90,13 +103,17 @@ import saien.magrathea.core.ToolExecutionRecord
 import saien.magrathea.core.ToolExecutionRequest
 import saien.magrathea.core.ToolExecutionResult
 import saien.magrathea.core.ToolExecutionState
+import saien.magrathea.core.ToolImageSource
+import saien.magrathea.core.ToolOrigin
 import saien.magrathea.core.ToolPermissionGateway
 import saien.magrathea.core.ToolRecoveryPolicy
 import saien.magrathea.core.ToolRegistry
+import saien.magrathea.core.ToolResultContent
+import saien.magrathea.core.ToolResultImageContent
 import saien.magrathea.core.ToolResultPart
+import saien.magrathea.core.ToolResultTextContent
 import saien.magrathea.core.ToolRuntimeContext
 import saien.magrathea.core.dataUrlPayload
-import saien.magrathea.core.outputText
 import saien.magrathea.core.plus
 import saien.magrathea.core.toMessagePart
 import saien.magrathea.provider.api.AnthropicTransportConfig
@@ -107,12 +124,17 @@ import saien.magrathea.provider.api.ProviderAdapter
 import saien.magrathea.provider.api.ProviderAuthException
 import saien.magrathea.provider.api.ProviderClientException
 import saien.magrathea.provider.api.ProviderChunk
+import saien.magrathea.provider.api.ProviderCancellationContext
+import saien.magrathea.provider.api.ProviderCancellationIntent
 import saien.magrathea.provider.api.ProviderContextLimitException
 import saien.magrathea.provider.api.ProviderEvent
 import saien.magrathea.provider.api.ProviderEventAssembler
 import saien.magrathea.provider.api.ProviderException
 import saien.magrathea.provider.api.ProviderInvocation
+import saien.magrathea.provider.api.ProviderInvocationIntent
+import saien.magrathea.provider.api.ProviderInvocationInvalidatedException
 import saien.magrathea.provider.api.ProviderInvocationResumeMode
+import saien.magrathea.provider.api.ProviderHttpException
 import saien.magrathea.provider.api.ProviderNetworkException
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRateLimitException
@@ -125,6 +147,7 @@ import saien.magrathea.provider.api.ProviderTransportConfig
 import saien.magrathea.provider.api.ProviderUsage
 import saien.magrathea.provider.api.ToolCallAssembler
 import saien.magrathea.provider.api.compileProviderTransportConfig
+import saien.magrathea.provider.api.sanitizedForModelBoundary
 import saien.magrathea.provider.api.validateSemantics
 
 /**
@@ -154,6 +177,7 @@ class DefaultAgentRunner(
     private val idGenerator: IdGenerator = SystemIdGenerator,
 ) : AgentRunner {
     private val activeRuns = LinkedHashMap<String, ActiveRun>()
+    private val sessionStopOperations = LinkedHashMap<String, CompletableDeferred<Unit>>()
     private val mutex = Mutex()
     private var nextRegistrationToken: Long = 0
     private val providerEventAssembler = ProviderEventAssembler()
@@ -164,125 +188,186 @@ class DefaultAgentRunner(
     private val debugLabels = setOf("provider-request-messages", "provider-request-config", "provider-selected", "provider-chunk", "merged-assistant", "state-after-chunk")
 
     override fun run(request: AgentRequest): Flow<AgentEvent> = flow {
-        val previousState = try {
-            measureStoreOperation(request.sessionId, TelemetryStoreOperation.LOAD_STATE) {
-                persistence.load(request.sessionId)
-            }?.snapshot?.state
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Throwable) {
-            emitAll(resumeFailureFlow(request.sessionId, AgentFailureCode.STORAGE))
-            return@flow
-        }
         val runId = AgentRunId.create(idGenerator)
-        val initialState = AgentStateSnapshot(
-            messages = request.messages,
-            status = AgentStatus.RUNNING,
-            usage = previousState?.usage ?: TokenUsage(),
-            latestRequestUsage = previousState?.latestRequestUsage ?: TokenUsage(),
-            contextManagement = previousState?.contextManagement
-                ?: saien.magrathea.core.ContextManagementState(),
-        )
-        val checkpoint = AgentCheckpoint(
+        val stopController = RunStopController()
+        val registrationToken = register(
             sessionId = request.sessionId,
             runId = runId,
-            cursor = AgentResumeCursor(
-                turn = 0,
-                phase = AgentResumePhase.TURN_PREPARING,
-            ),
-            state = initialState,
+            job = currentCoroutineContext().job,
+            stopController = stopController,
         )
-        emitAll(
-            runFromState(
-                request = request,
-                runId = runId,
-                initialCheckpoint = checkpoint,
-                resumed = false,
-            ),
-        )
-    }
-
-    override suspend fun resume(sessionId: AgentSessionId): Flow<AgentEvent> {
-        val record = try {
-            measureStoreOperation(sessionId, TelemetryStoreOperation.LOAD_STATE) {
-                persistence.load(sessionId)
+        var delegatedToRun = false
+        try {
+            val previousState = try {
+                measureStoreOperation(request.sessionId, TelemetryStoreOperation.LOAD_STATE) {
+                    persistence.load(request.sessionId)
+                }?.snapshot?.state
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                emitAll(resumeFailureFlow(request.sessionId, AgentFailureCode.STORAGE))
+                return@flow
             }
+            val initialState = AgentStateSnapshot(
+                messages = request.messages,
+                status = AgentStatus.RUNNING,
+                usage = previousState?.usage ?: TokenUsage(),
+                latestRequestUsage = previousState?.latestRequestUsage ?: TokenUsage(),
+                contextManagement = previousState?.contextManagement
+                    ?: saien.magrathea.core.ContextManagementState(),
+            )
+            val checkpoint = AgentCheckpoint(
+                sessionId = request.sessionId,
+                runId = runId,
+                cursor = AgentResumeCursor(
+                    turn = 0,
+                    phase = AgentResumePhase.TURN_PREPARING,
+                ),
+                state = initialState,
+            )
+            delegatedToRun = true
+            emitAll(
+                runFromState(
+                    request = request,
+                    runId = runId,
+                    initialCheckpoint = checkpoint,
+                    resumed = false,
+                    stopController = stopController,
+                ),
+            )
         } catch (cancelled: CancellationException) {
+            if (!delegatedToRun) {
+                persistPreflightRunStop(request, runId, stopController.stopIntent)
+            }
             throw cancelled
-        } catch (_: Throwable) {
-            return resumeFailureFlow(sessionId, AgentFailureCode.STORAGE)
-        } ?: return resumeFailureFlow(sessionId, AgentFailureCode.NOT_FOUND)
-        val snapshot = record.snapshot
-        validateResumeState(snapshot.request, snapshot.state)?.let {
-            return resumeFailureFlow(sessionId, it)
+        } finally {
+            withContext(NonCancellable) {
+                unregister(request.sessionId, registrationToken)
+            }
         }
-        terminalResumeFlow(sessionId, snapshot.state)?.let {
-            recordTerminalResume(sessionId, snapshot.state)
-            return it
-        }
-        val recovery = recoveryInfo(record)
-        if (recovery.disposition == AgentRecoveryDisposition.BLOCKED) {
-            return flowOf(
-                AgentEvent.RecoveryBlocked(
-                    sessionId = sessionId,
-                    runId = snapshot.runId,
-                    reason = requireNotNull(recovery.blockedReason),
-                ),
-            )
-        }
-        val checkpoint = record.checkpoint
-            ?: return flowOf(
-                AgentEvent.RecoveryBlocked(
-                    sessionId = sessionId,
-                    runId = snapshot.runId,
-                    reason = AgentRecoveryBlockReason.CHECKPOINT_MISMATCH,
-                ),
-            )
-        val restoredState = checkpoint.state
-        validateResumeState(snapshot.request, restoredState)?.let {
-            return resumeFailureFlow(sessionId, it)
-        }
-        val resumedCursor = when (checkpoint.cursor.phase) {
-            AgentResumePhase.MODEL_PENDING -> checkpoint.cursor.copy(
-                providerAttempt = checkpoint.cursor.providerAttempt +
-                    providerAttemptIncrement(snapshot.request),
-            )
-            AgentResumePhase.TURN_COMMITTED -> AgentResumeCursor(
-                turn = checkpoint.cursor.turn + 1,
-                phase = AgentResumePhase.TURN_PREPARING,
-            )
-            AgentResumePhase.TURN_PREPARING,
-            AgentResumePhase.TOOLS_PENDING,
-            -> checkpoint.cursor
-        }
-        val resumedState = restoredState.copy(
-            turn = resumedCursor.turn,
-            status = if (resumedCursor.phase == AgentResumePhase.TOOLS_PENDING) {
-                AgentStatus.WAITING_FOR_TOOLS
-            } else {
-                AgentStatus.RUNNING
-            },
-            stopReason = restoredState.stopReason.takeUnless { it == StopReason.INTERRUPTED },
-        )
-        return runFromState(
-            request = snapshot.request.copy(messages = resumedState.messages),
-            runId = snapshot.runId,
-            initialCheckpoint = checkpoint.copy(
-                cursor = resumedCursor,
-                state = resumedState,
-                toolExecutions = if (resumedCursor.phase == AgentResumePhase.TURN_PREPARING) {
-                    emptyList()
-                } else {
-                    checkpoint.toolExecutions
-                },
-            ),
-            resumed = true,
-        )
     }
 
-    private fun providerAttemptIncrement(request: AgentRequest): Int {
-        val provider = providerRegistry.get(request.model.provider)
-        return if (provider?.invocationResumeMode == ProviderInvocationResumeMode.REATTACH) 0 else 1
+    override suspend fun resume(sessionId: AgentSessionId): Flow<AgentEvent> = flow {
+        val stopController = RunStopController()
+        val registrationToken = register(
+            sessionId = sessionId,
+            runId = null,
+            job = currentCoroutineContext().job,
+            stopController = stopController,
+        )
+        var delegatedToRun = false
+        try {
+            val record = try {
+                measureStoreOperation(sessionId, TelemetryStoreOperation.LOAD_STATE) {
+                    persistence.load(sessionId)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                emitAll(resumeFailureFlow(sessionId, AgentFailureCode.STORAGE))
+                return@flow
+            } ?: run {
+                emitAll(resumeFailureFlow(sessionId, AgentFailureCode.NOT_FOUND))
+                return@flow
+            }
+            val snapshot = record.snapshot
+            attachRunId(sessionId, registrationToken, snapshot.runId)
+            validateResumeState(snapshot.request, snapshot.state)?.let {
+                emitAll(resumeFailureFlow(sessionId, it))
+                return@flow
+            }
+            terminalResumeFlow(sessionId, snapshot.state)?.let {
+                recordTerminalResume(sessionId, snapshot.state)
+                emitAll(it)
+                return@flow
+            }
+            val recovery = recoveryInfo(record)
+            if (recovery.disposition == AgentRecoveryDisposition.BLOCKED) {
+                emit(
+                    AgentEvent.RecoveryBlocked(
+                        sessionId = sessionId,
+                        runId = snapshot.runId,
+                        reason = requireNotNull(recovery.blockedReason),
+                    ),
+                )
+                return@flow
+            }
+            val checkpoint = record.checkpoint ?: run {
+                emit(
+                    AgentEvent.RecoveryBlocked(
+                        sessionId = sessionId,
+                        runId = snapshot.runId,
+                        reason = AgentRecoveryBlockReason.CHECKPOINT_MISMATCH,
+                    ),
+                )
+                return@flow
+            }
+            val restoredState = checkpoint.state
+            validateResumeState(snapshot.request, restoredState)?.let {
+                emitAll(resumeFailureFlow(sessionId, it))
+                return@flow
+            }
+            val resumedCursor = when (checkpoint.cursor.phase) {
+                AgentResumePhase.TURN_COMMITTED -> AgentResumeCursor(
+                    turn = checkpoint.cursor.turn + 1,
+                    phase = AgentResumePhase.TURN_PREPARING,
+                )
+                AgentResumePhase.TURN_PREPARING,
+                AgentResumePhase.MODEL_PENDING,
+                AgentResumePhase.TOOLS_PENDING,
+                -> checkpoint.cursor
+            }
+            val pendingInvocation = checkpoint.cursor.provider.pending
+            val provider = providerRegistry.get(snapshot.request.model.provider)
+            val reattachingProviderInvocation =
+                pendingInvocation != null &&
+                    provider?.invocationResumeMode == ProviderInvocationResumeMode.REATTACH
+            val recoveredState = if (reattachingProviderInvocation) {
+                // The durable invocation will replay its own accounting from the checkpoint
+                // baseline. Snapshot accounting is consumed only if that invocation is replaced.
+                restoredState
+            } else {
+                restoredState.withRecoveryAccounting(snapshot.state)
+            }
+            val resumedState = recoveredState.copy(
+                turn = resumedCursor.turn,
+                status = if (resumedCursor.phase == AgentResumePhase.TOOLS_PENDING) {
+                    AgentStatus.WAITING_FOR_TOOLS
+                } else {
+                    AgentStatus.RUNNING
+                },
+                retryCount = maxOf(restoredState.retryCount, snapshot.state.retryCount),
+                stopReason = restoredState.stopReason.takeUnless { it == StopReason.INTERRUPTED },
+            )
+            delegatedToRun = true
+            emitAll(
+                runFromState(
+                    request = snapshot.request.copy(messages = resumedState.messages),
+                    runId = snapshot.runId,
+                    initialCheckpoint = checkpoint.copy(
+                        cursor = resumedCursor,
+                        state = resumedState,
+                        toolExecutions = if (resumedCursor.phase == AgentResumePhase.TURN_PREPARING) {
+                            emptyList()
+                        } else {
+                            checkpoint.toolExecutions
+                        },
+                    ),
+                    resumed = true,
+                    recoveryAccountingState = snapshot.state.takeIf { reattachingProviderInvocation },
+                    stopController = stopController,
+                ),
+            )
+        } catch (cancelled: CancellationException) {
+            if (!delegatedToRun) {
+                persistPreflightExistingStop(sessionId, stopController.stopIntent)
+            }
+            throw cancelled
+        } finally {
+            withContext(NonCancellable) {
+                unregister(sessionId, registrationToken)
+            }
+        }
     }
 
     private fun terminalResumeFlow(
@@ -337,26 +422,28 @@ class DefaultAgentRunner(
     }
 
     override suspend fun cancel(sessionId: AgentSessionId) {
-        val active = mutex.withLock {
-            activeRuns[sessionId.value]?.also { it.stopIntent = StopIntent.CANCEL }
-        }
-        if (active != null) {
-            active.job.cancelAndJoin()
-        } else {
+        val operation = acquireStopOperation(sessionId, StopIntent.CANCEL)
+        try {
+            operation.activeRun?.job?.cancelAndJoin()
             markPersistedCancelled(sessionId)
+        } finally {
+            withContext(NonCancellable) {
+                releaseStopOperation(sessionId, operation.gate)
+            }
         }
     }
 
     override suspend fun interrupt(sessionId: AgentSessionId): AgentRecoveryInfo {
-        val active = mutex.withLock {
-            activeRuns[sessionId.value]?.also { it.stopIntent = StopIntent.INTERRUPT }
-        }
-        if (active != null) {
-            active.job.cancelAndJoin()
-        } else {
+        val operation = acquireStopOperation(sessionId, StopIntent.INTERRUPT)
+        return try {
+            operation.activeRun?.job?.cancelAndJoin()
             markOrphanInterrupted(sessionId)
+            inspectRecovery(sessionId)
+        } finally {
+            withContext(NonCancellable) {
+                releaseStopOperation(sessionId, operation.gate)
+            }
         }
-        return inspectRecovery(sessionId)
     }
 
     override suspend fun inspectRecovery(sessionId: AgentSessionId): AgentRecoveryInfo {
@@ -478,12 +565,124 @@ class DefaultAgentRunner(
             status = AgentStatus.CANCELLED,
             stopReason = StopReason.CANCELLED,
         )
-        commitState(
+        commitTerminalStateWithAbandon(
             request = record.snapshot.request.copy(messages = cancelledState.messages),
             runId = record.snapshot.runId,
             state = cancelledState,
+            recoveryCheckpoint = record.checkpoint,
+        )
+    }
+
+    private suspend fun commitTerminalStateWithAbandon(
+        request: AgentRequest,
+        runId: AgentRunId,
+        state: AgentStateSnapshot,
+        recoveryCheckpoint: AgentCheckpoint?,
+    ) {
+        require(state.status == AgentStatus.CANCELLED || state.status == AgentStatus.FAILED) {
+            "Pending invocation abandonment requires a cancelled or failed terminal state"
+        }
+        require(
+            (state.status == AgentStatus.CANCELLED && state.stopReason == StopReason.CANCELLED) ||
+                (state.status == AgentStatus.FAILED && state.stopReason == StopReason.ERROR),
+        ) { "Terminal status and stop reason must agree before abandonment" }
+        commitState(
+            request = request,
+            runId = runId,
+            state = state,
             checkpoint = null,
         )
+        abandonPendingInvocation(request, recoveryCheckpoint)
+    }
+
+    private suspend fun abandonPendingInvocation(
+        request: AgentRequest,
+        checkpoint: AgentCheckpoint?,
+    ) {
+        val pending = checkpoint?.cursor?.provider?.pending ?: return
+        try {
+            val provider = providerRegistry.get(request.model.provider) ?: return
+            val timeoutMillis = request.engine.provider.timeouts.connectTimeoutMillis
+                .coerceAtMost(MAX_PROVIDER_ABANDON_TIMEOUT_MILLIS)
+            withTimeoutOrNull(timeoutMillis) {
+                provider.abandon(
+                    ProviderInvocation(
+                        requestId = pending.requestId,
+                        sessionId = request.sessionId,
+                        turn = checkpoint.cursor.turn,
+                    ),
+                )
+            }
+        } catch (cancelled: CancellationException) {
+            currentCoroutineContext().ensureActive()
+        } catch (_: Throwable) {
+            // The committed terminal state remains authoritative when cleanup is unavailable.
+        }
+    }
+
+    private suspend fun persistPreflightExistingStop(
+        sessionId: AgentSessionId,
+        stopIntent: StopIntent,
+    ) = withContext(NonCancellable) {
+        when (stopIntent) {
+            StopIntent.INTERRUPT -> runCatching { markOrphanInterrupted(sessionId) }
+            StopIntent.ACTIVE,
+            StopIntent.CANCEL,
+            -> runCatching { markPersistedCancelled(sessionId) }
+        }
+        Unit
+    }
+
+    private suspend fun persistPreflightRunStop(
+        request: AgentRequest,
+        runId: AgentRunId,
+        stopIntent: StopIntent,
+    ) = withContext(NonCancellable) {
+        val previousState = runCatching {
+            measureStoreOperation(request.sessionId, TelemetryStoreOperation.LOAD_STATE) {
+                persistence.load(request.sessionId)
+            }?.snapshot?.state
+        }.getOrNull()
+        val checkpointState = AgentStateSnapshot(
+            messages = request.messages,
+            status = AgentStatus.RUNNING,
+            usage = previousState?.usage ?: TokenUsage(),
+            latestRequestUsage = previousState?.latestRequestUsage ?: TokenUsage(),
+            contextManagement = previousState?.contextManagement
+                ?: saien.magrathea.core.ContextManagementState(),
+        )
+        val checkpoint = AgentCheckpoint(
+            sessionId = request.sessionId,
+            runId = runId,
+            cursor = AgentResumeCursor(0, AgentResumePhase.TURN_PREPARING),
+            state = checkpointState,
+        )
+        runCatching {
+            if (stopIntent == StopIntent.INTERRUPT) {
+                val interruptedState = checkpointState.copy(
+                    status = AgentStatus.INTERRUPTED,
+                    stopReason = StopReason.INTERRUPTED,
+                )
+                commitState(
+                    request = request,
+                    runId = runId,
+                    state = interruptedState,
+                    checkpoint = checkpoint,
+                    interruption = AgentInterruption(AgentInterruptionReason.HOST_REQUESTED),
+                )
+            } else {
+                commitTerminalStateWithAbandon(
+                    request = request,
+                    runId = runId,
+                    state = checkpointState.copy(
+                        status = AgentStatus.CANCELLED,
+                        stopReason = StopReason.CANCELLED,
+                    ),
+                    recoveryCheckpoint = checkpoint,
+                )
+            }
+        }
+        Unit
     }
 
     private fun runFromState(
@@ -491,13 +690,15 @@ class DefaultAgentRunner(
         runId: AgentRunId,
         initialCheckpoint: AgentCheckpoint,
         resumed: Boolean,
+        recoveryAccountingState: AgentStateSnapshot? = null,
+        stopController: RunStopController,
     ): Flow<AgentEvent> = channelFlow {
         require(initialCheckpoint.sessionId == request.sessionId)
         require(initialCheckpoint.runId == runId)
-        val registrationToken = register(request.sessionId, runId, currentCoroutineContext().job)
         val runState = RunState(initialCheckpoint.state)
         var activeRequest = request.copy(messages = initialCheckpoint.state.messages)
         var safeCheckpoint = initialCheckpoint
+        var pendingRecoveryAccountingState = recoveryAccountingState
         var terminalStatePersisted = false
         try {
             val completedWithinDeadline = withContext(dispatcher) {
@@ -508,6 +709,99 @@ class DefaultAgentRunner(
                     send(AgentEvent.Started(request.sessionId, runId))
                     send(AgentEvent.CheckpointSaved(safeCheckpoint))
                     var cursor = safeCheckpoint.cursor
+                    suspend fun consumeDeferredRecoveryAccounting() {
+                        pendingRecoveryAccountingState?.let { observedState ->
+                            runState.value = runState.value.withRecoveryAccounting(observedState)
+                            pendingRecoveryAccountingState = null
+                        }
+                    }
+                    suspend fun persistProviderCursor() {
+                        safeCheckpoint = safeCheckpoint.copy(
+                            cursor = cursor,
+                            state = safeCheckpoint.state.withRecoveryAccounting(runState.value),
+                        )
+                        commitState(activeRequest, runId, runState.value, safeCheckpoint)
+                        send(AgentEvent.CheckpointSaved(safeCheckpoint))
+                    }
+                    suspend fun claimProviderInvocation(
+                        purpose: ProviderRequestPurpose,
+                        inputIdentity: String,
+                        provider: ProviderAdapter,
+                        forceNew: Boolean = false,
+                    ): ProviderInvocationClaim {
+                        val pending = cursor.provider.pending
+                        if (
+                            !forceNew &&
+                            provider.invocationResumeMode == ProviderInvocationResumeMode.REATTACH &&
+                            pending?.purpose == purpose &&
+                            pending.inputIdentity == inputIdentity
+                        ) {
+                            return ProviderInvocationClaim(
+                                invocation = ProviderInvocation(
+                                    requestId = pending.requestId,
+                                    sessionId = request.sessionId,
+                                    turn = cursor.turn,
+                                ),
+                                intent = ProviderInvocationIntent.REATTACH,
+                            )
+                        }
+                        if (pending != null) consumeDeferredRecoveryAccounting()
+                        val physicalAttempt = cursor.provider.nextPhysicalAttempt
+                        val requestId = buildString {
+                            append(runId.value)
+                            append(':')
+                            append(cursor.turn)
+                            append(':')
+                            append(physicalAttempt)
+                            if (purpose == ProviderRequestPurpose.CONTEXT_SUMMARY) {
+                                append(":context-summary:")
+                                append(inputIdentity)
+                            }
+                        }
+                        cursor = cursor.copy(
+                            phase = AgentResumePhase.MODEL_PENDING,
+                            provider = AgentProviderInvocationCursor(
+                                nextPhysicalAttempt = physicalAttempt + 1,
+                                pending = AgentPendingProviderInvocation(
+                                    requestId = requestId,
+                                    purpose = purpose,
+                                    inputIdentity = inputIdentity,
+                                ),
+                            ),
+                        )
+                        persistProviderCursor()
+                        return ProviderInvocationClaim(
+                            invocation = ProviderInvocation(
+                                requestId = requestId,
+                                sessionId = request.sessionId,
+                                turn = cursor.turn,
+                            ),
+                            intent = ProviderInvocationIntent.CREATE,
+                        )
+                    }
+                    fun markProviderInvocationCompleted(requestId: String) {
+                        val pending = cursor.provider.pending
+                        check(pending?.requestId == requestId) {
+                            "Completed Provider invocation does not match the durable cursor"
+                        }
+                        // Persist this clear only with the next semantic phase or terminal state.
+                        // Until then, the durable invocation remains the recovery anchor.
+                        pendingRecoveryAccountingState = null
+                        cursor = cursor.copy(
+                            provider = cursor.provider.copy(pending = null),
+                        )
+                    }
+                    suspend fun invalidateProviderInvocation(requestId: String) {
+                        val pending = cursor.provider.pending
+                        check(pending?.requestId == requestId) {
+                            "Invalidated Provider invocation does not match the durable cursor"
+                        }
+                        consumeDeferredRecoveryAccounting()
+                        cursor = cursor.copy(
+                            provider = cursor.provider.copy(pending = null),
+                        )
+                        persistProviderCursor()
+                    }
                     var completedNormally = false
                     while (cursor.turn < activeRequest.engine.runtime.maxTurns) {
                         val turn = cursor.turn
@@ -646,15 +940,40 @@ class DefaultAgentRunner(
                         var overflowRetries = 0
                         var turnResult: TurnResult
                         while (true) {
+                            val summaryAccounting = ContextSummaryUsageAccounting()
+                            var completedSummaryRequestId: String? = null
+                            val summaryInvocationLifecycle = ContextSummaryInvocationLifecycle(
+                                maxProviderRetries = activeRequest.engine.runtime.maxProviderRetries,
+                                claim = { inputIdentity ->
+                                    claimProviderInvocation(
+                                        purpose = ProviderRequestPurpose.CONTEXT_SUMMARY,
+                                        inputIdentity = inputIdentity,
+                                        provider = provider,
+                                    )
+                                },
+                                replace = { inputIdentity ->
+                                    claimProviderInvocation(
+                                        purpose = ProviderRequestPurpose.CONTEXT_SUMMARY,
+                                        inputIdentity = inputIdentity,
+                                        provider = provider,
+                                        forceNew = true,
+                                    )
+                                },
+                                invalidate = ::invalidateProviderInvocation,
+                                complete = { requestId -> completedSummaryRequestId = requestId },
+                            )
+                            var observedSummaryUsage: TokenUsage? = null
                             val preparation = try {
-                                effectiveContextManager.prepare(
-                                    ContextPreparationRequest(
-                                        request = turnRequest.copy(messages = runState.value.messages),
-                                        state = runState.value,
-                                        turn = turn,
-                                        reason = preparationReason,
-                                    ),
-                                )
+                                withContext(summaryAccounting + summaryInvocationLifecycle) {
+                                    effectiveContextManager.prepare(
+                                        ContextPreparationRequest(
+                                            request = turnRequest.copy(messages = runState.value.messages),
+                                            state = runState.value,
+                                            turn = turn,
+                                            reason = preparationReason,
+                                        ),
+                                    )
+                                }
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
                             } catch (failure: Throwable) {
@@ -662,11 +981,25 @@ class DefaultAgentRunner(
                                     throw AgentRuntimeFailure(AgentFailureCode.CONTEXT_LIMIT, failure)
                                 }
                                 throw failure
+                            } finally {
+                                observedSummaryUsage = summaryAccounting.cumulativeUsageOrNull()
+                                observedSummaryUsage?.let { usage ->
+                                    runState.value = runState.value.copy(
+                                        usage = runState.value.usage + usage,
+                                    )
+                                }
                             }
                             runState.value = runState.value.copy(
                                 contextManagement = preparation.state,
-                                usage = runState.value.usage + preparation.summaryUsage,
+                                usage = runState.value.usage + if (observedSummaryUsage == null) {
+                                    preparation.summaryUsage
+                                } else {
+                                    TokenUsage()
+                                },
                             )
+                            completedSummaryRequestId?.let { requestId ->
+                                markProviderInvocationCompleted(requestId)
+                            }
                             if (
                                 preparationReason == ContextPreparationReason.OVERFLOW_RECOVERY &&
                                 preparation.action == ContextPreparationAction.FAILED_OPEN
@@ -700,38 +1033,25 @@ class DefaultAgentRunner(
                                 activeRequest.engine.runtime,
                                 AgentFailureCode.INVALID_STATE,
                             )
+                            val projectedMessages = transformedMessages.projectForProvider()
                             send(
                                 AgentEvent.ContextTransformed(
                                     request.sessionId,
                                     turn,
-                                    transformedMessages.size,
+                                    projectedMessages.size,
                                 ),
                             )
                             emitDebug(
                                 request.sessionId,
                                 "provider-request-messages",
-                                describeMessages(transformedMessages),
+                                describeMessages(projectedMessages),
                                 ::send,
                             )
                             val inputAnchorId = runState.value.messages.lastOrNull()?.id
-                            val providerRequest = ProviderRequest(
-                                invocation = ProviderInvocation(
-                                    requestId = buildString {
-                                        append(runId.value)
-                                        append(':')
-                                        append(turn)
-                                        append(':')
-                                        append(cursor.providerAttempt)
-                                        if (overflowRetries > 0) {
-                                            append(":context-retry-")
-                                            append(overflowRetries)
-                                        }
-                                    },
-                                    sessionId = request.sessionId,
-                                    turn = turn,
-                                ),
+                            val providerRequestBase = ProviderRequest(
+                                invocation = null,
                                 model = activeRequest.model,
-                                messages = transformedMessages,
+                                messages = projectedMessages,
                                 tools = turnTools,
                                 credentialRef = activeRequest.engine.provider.credentialRef,
                                 credential = resolvedProviderConfig.credential,
@@ -745,6 +1065,16 @@ class DefaultAgentRunner(
                                 ),
                                 timeouts = activeRequest.engine.provider.timeouts,
                             )
+                            val providerInputIdentity = providerRequestInputIdentity(providerRequestBase)
+                            val providerInvocation = claimProviderInvocation(
+                                purpose = ProviderRequestPurpose.MODEL,
+                                inputIdentity = providerInputIdentity,
+                                provider = provider,
+                            )
+                            val providerRequest = providerRequestBase.copy(
+                                invocation = providerInvocation.invocation,
+                                invocationIntent = providerInvocation.intent,
+                            )
                             emitDebug(
                                 request.sessionId,
                                 "provider-request-config",
@@ -753,16 +1083,34 @@ class DefaultAgentRunner(
                             )
                             emitDebug(request.sessionId, "provider-selected", provider.key, ::send)
                             try {
+                                val recoveryAccountingForAttempt = pendingRecoveryAccountingState
                                 turnResult = runProviderTurn(
                                     request = turnRequest,
                                     provider = provider,
-                                    providerRequest = providerRequest,
+                                    providerRequestForInvocation = { claimed ->
+                                        providerRequest.copy(
+                                            invocation = claimed.invocation,
+                                            invocationIntent = claimed.intent,
+                                        )
+                                    },
+                                    initialInvocation = providerInvocation,
                                     initialState = runState.value,
+                                    recoveryAccountingState = recoveryAccountingForAttempt,
                                     inputAnchorId = inputAnchorId,
                                     turn = turn,
                                     emit = ::send,
                                     onStateChanged = { runState.value = it },
+                                    onPhysicalInvocationChanged = {
+                                        claimProviderInvocation(
+                                            purpose = ProviderRequestPurpose.MODEL,
+                                            inputIdentity = providerInputIdentity,
+                                            provider = provider,
+                                            forceNew = true,
+                                        )
+                                    },
+                                    onPhysicalInvocationInvalidated = ::invalidateProviderInvocation,
                                 )
+                                markProviderInvocationCompleted(turnResult.invocation.requestId)
                                 break
                             } catch (failure: ProviderContextLimitException) {
                                 if (
@@ -796,7 +1144,7 @@ class DefaultAgentRunner(
                             cursor = AgentResumeCursor(
                                 turn = turn,
                                 phase = AgentResumePhase.TOOLS_PENDING,
-                                providerAttempt = cursor.providerAttempt,
+                                provider = cursor.provider,
                             )
                             safeCheckpoint = AgentCheckpoint(
                                 request.sessionId,
@@ -866,19 +1214,21 @@ class DefaultAgentRunner(
             }
         } catch (cancelled: CancellationException) {
             if (!terminalStatePersisted) {
-                when (stopIntent(request.sessionId, registrationToken)) {
-                    StopIntent.CANCEL -> {
+                when (stopController.stopIntent) {
+                    StopIntent.ACTIVE,
+                    StopIntent.CANCEL,
+                    -> {
                         runState.value = runState.value.copy(
                             status = AgentStatus.CANCELLED,
                             stopReason = StopReason.CANCELLED,
                         )
                         try {
                             withContext(NonCancellable) {
-                                commitState(
+                                commitTerminalStateWithAbandon(
                                     activeRequest,
                                     runId,
                                     runState.value,
-                                    checkpoint = null,
+                                    recoveryCheckpoint = safeCheckpoint,
                                 )
                             }
                         } catch (_: AgentRuntimeFailure) {
@@ -898,8 +1248,14 @@ class DefaultAgentRunner(
                     StopIntent.INTERRUPT -> {
                         val interruption =
                             AgentInterruption(AgentInterruptionReason.HOST_REQUESTED)
-                        val interruptedState = safeCheckpoint.state.copy(
+                        val interruptedState = safeCheckpoint.state.withRecoveryAccounting(
+                            runState.value,
+                        ).copy(
                             status = AgentStatus.INTERRUPTED,
+                            retryCount = maxOf(
+                                safeCheckpoint.state.retryCount,
+                                runState.value.retryCount,
+                            ),
                             stopReason = StopReason.INTERRUPTED,
                         )
                         withContext(NonCancellable) {
@@ -919,28 +1275,64 @@ class DefaultAgentRunner(
                                 interruptedState,
                             ),
                         )
+                        recordTelemetry(
+                            TelemetryEvent.SessionFinished(
+                                sessionId = request.sessionId,
+                                turn = interruptedState.turn,
+                                outcome = TelemetryOutcome.INTERRUPTED,
+                                failureCode = null,
+                                usage = interruptedState.usage,
+                            ),
+                        )
                     }
                 }
             }
             throw cancelled
         } catch (t: Throwable) {
-            if (t is ProviderNetworkException || t is ProviderTimeoutException) {
-                val reason = if (t is ProviderTimeoutException) {
-                    AgentInterruptionReason.PROVIDER_TIMEOUT
-                } else {
-                    AgentInterruptionReason.PROVIDER_NETWORK
-                }
-                val interruption = AgentInterruption(reason)
-                val interruptedState = safeCheckpoint.state.copy(
+            val interruptedAtEpochMs = SystemEpochClock.nowEpochMs()
+            val providerInterruption = t.toProviderInterruptionOrNull(interruptedAtEpochMs)
+            if (providerInterruption != null) {
+                val interruption = AgentInterruption(
+                    reason = AgentInterruptionReason.PROVIDER_FAILURE,
+                    provider = providerInterruption,
+                    occurredAtEpochMs = interruptedAtEpochMs,
+                )
+                // Preserve observed output for presentation while the checkpoint stays replay-safe.
+                val interruptedState = runState.value.copy(
                     status = AgentStatus.INTERRUPTED,
                     stopReason = StopReason.INTERRUPTED,
                 )
-                commitState(
-                    activeRequest,
-                    runId,
-                    interruptedState,
-                    safeCheckpoint,
-                    interruption,
+                try {
+                    commitState(
+                        activeRequest,
+                        runId,
+                        interruptedState,
+                        safeCheckpoint,
+                        interruption,
+                    )
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Throwable) {
+                    recordTelemetry(
+                        TelemetryEvent.SessionFinished(
+                            sessionId = request.sessionId,
+                            turn = interruptedState.turn,
+                            outcome = TelemetryOutcome.FAILURE,
+                            failureCode = AgentFailureCode.STORAGE,
+                            usage = interruptedState.usage,
+                        ),
+                    )
+                    send(AgentEvent.Failed(request.sessionId, AgentFailureCode.STORAGE))
+                    return@channelFlow
+                }
+                recordTelemetry(
+                    TelemetryEvent.SessionFinished(
+                        sessionId = request.sessionId,
+                        turn = interruptedState.turn,
+                        outcome = TelemetryOutcome.INTERRUPTED,
+                        failureCode = providerInterruption.code,
+                        usage = interruptedState.usage,
+                    ),
                 )
                 send(
                     AgentEvent.Interrupted(
@@ -954,12 +1346,16 @@ class DefaultAgentRunner(
             }
             runState.value = runState.value.copy(
                 status = AgentStatus.FAILED,
-                retryCount = runState.value.retryCount + 1,
                 stopReason = StopReason.ERROR,
             )
             var failureCode = t.toAgentFailureCode()
             try {
-                commitState(activeRequest, runId, runState.value, checkpoint = null)
+                commitTerminalStateWithAbandon(
+                    activeRequest,
+                    runId,
+                    runState.value,
+                    recoveryCheckpoint = safeCheckpoint,
+                )
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: AgentRuntimeFailure) {
@@ -979,10 +1375,6 @@ class DefaultAgentRunner(
                 ),
             )
             send(AgentEvent.Failed(request.sessionId, failureCode))
-        } finally {
-            withContext(NonCancellable) {
-                unregister(request.sessionId, registrationToken)
-            }
         }
     }.buffer(capacity = 0)
 
@@ -1026,22 +1418,54 @@ class DefaultAgentRunner(
     private suspend fun runProviderTurn(
         request: AgentRequest,
         provider: ProviderAdapter,
-        providerRequest: ProviderRequest,
+        providerRequestForInvocation: (ProviderInvocationClaim) -> ProviderRequest,
+        initialInvocation: ProviderInvocationClaim,
         initialState: AgentStateSnapshot,
+        recoveryAccountingState: AgentStateSnapshot?,
         inputAnchorId: String?,
         turn: Int,
         emit: suspend (AgentEvent) -> Unit,
         onStateChanged: (AgentStateSnapshot) -> Unit,
+        onPhysicalInvocationChanged: suspend () -> ProviderInvocationClaim,
+        onPhysicalInvocationInvalidated: suspend (String) -> Unit,
     ): TurnResult {
         var state = initialState
         val inputHistory = initialState.messages
-        var attempt = state.retryCount
-        var retriesThisInvocation = 0
+        // Provider attempt ordinals are local to this invocation. AgentStateSnapshot.retryCount is
+        // a cumulative diagnostic count and must not shift retry policy or backoff in later turns.
+        var retryAttempt = 0
+        var countedRetryAttempt = 0
+        var invocation = initialInvocation
+        var claimFreshInvocationBeforeRequest = false
+        var uncommittedRecoveryAccounting = recoveryAccountingState
         fun updateState(updated: AgentStateSnapshot) {
             state = updated
             onStateChanged(updated)
         }
+        suspend fun advancePhysicalInvocation() {
+            uncommittedRecoveryAccounting?.let { observedState ->
+                updateState(state.withRecoveryAccounting(observedState))
+                uncommittedRecoveryAccounting = null
+            }
+            invocation = onPhysicalInvocationChanged()
+        }
+        suspend fun invalidatePhysicalInvocation() {
+            uncommittedRecoveryAccounting?.let { observedState ->
+                updateState(state.withRecoveryAccounting(observedState))
+                uncommittedRecoveryAccounting = null
+            }
+            onPhysicalInvocationInvalidated(invocation.invocation.requestId)
+        }
         while (true) {
+            if (retryAttempt > countedRetryAttempt) {
+                updateState(state.copy(retryCount = state.retryCount + 1))
+                countedRetryAttempt = retryAttempt
+            }
+            if (claimFreshInvocationBeforeRequest) {
+                advancePhysicalInvocation()
+                claimFreshInvocationBeforeRequest = false
+            }
+            val providerRequest = providerRequestForInvocation(invocation)
             var providerChunkObserved = false
             var providerTerminalObserved = false
             val usageBeforeTurn = state.usage
@@ -1053,7 +1477,8 @@ class DefaultAgentRunner(
                 TelemetryEvent.ProviderRequestStarted(
                     sessionId = request.sessionId,
                     turn = turn,
-                    attempt = attempt,
+                    attempt = retryAttempt,
+                    purpose = ProviderRequestPurpose.MODEL,
                 ),
             )
             fun finishProviderRequest(
@@ -1066,38 +1491,49 @@ class DefaultAgentRunner(
                     TelemetryEvent.ProviderRequestFinished(
                         sessionId = request.sessionId,
                         turn = turn,
-                        attempt = attempt,
+                        attempt = retryAttempt,
                         durationMillis = elapsedMillis(requestStartedAt),
                         outcome = outcome,
                         failureCode = failureCode,
+                        providerEventObserved = providerChunkObserved,
                         usage = turnUsage,
+                        purpose = ProviderRequestPurpose.MODEL,
                     ),
                 )
             }
             try {
                 var mergedAssistant: AgentMessage? = null
-                val providerCallCompleted = withTimeoutOrNull(providerRequest.timeouts.callTimeoutMillis) {
-                    provider.generate(providerRequest).collectWithProgressTimeouts(providerRequest.timeouts) { chunk ->
+                try {
+                    collectProviderWithProgressTimeouts(
+                        timeouts = providerRequest.timeouts,
+                        flow = { provider.generate(providerRequest) },
+                    ) { chunk ->
                         if (providerTerminalObserved) {
-                            throw ProviderProtocolException("Provider emitted a chunk after Completed")
+                            throw ProviderProtocolException(
+                                "Provider emitted a chunk after Completed",
+                            )
                         }
+                        try {
+                            chunk.validateSemantics()
+                        } catch (failure: IllegalArgumentException) {
+                            throw ProviderProtocolException(
+                                "Provider chunk violated the canonical event contract",
+                                failure,
+                            )
+                        }
+                        val chunkCompletes = chunk.events.last() is ProviderEvent.Completed
                         if (!providerChunkObserved) {
                             providerChunkObserved = true
                             recordTelemetry(
                                 TelemetryEvent.ProviderFirstChunk(
                                     sessionId = request.sessionId,
                                     turn = turn,
-                                    attempt = attempt,
+                                    attempt = retryAttempt,
                                     latencyMillis = elapsedMillis(requestStartedAt),
+                                    purpose = ProviderRequestPurpose.MODEL,
                                 ),
                             )
                         }
-                        try {
-                            chunk.validateSemantics()
-                        } catch (failure: IllegalArgumentException) {
-                            throw ProviderProtocolException("Provider chunk violated the canonical event contract", failure)
-                        }
-                        providerTerminalObserved = chunk.events.last() is ProviderEvent.Completed
                         chunk.usageObservation()?.let { observation ->
                             turnUsage = if (observation.authoritative) {
                                 turnUsage.overlayKnown(observation.usage)
@@ -1118,7 +1554,14 @@ class DefaultAgentRunner(
                             )
                         }
                         emitDebug(request.sessionId, "provider-chunk", describeChunk(chunk), emit)
-                        mergedAssistant = handleChunk(request, state, turn, mergedAssistant, chunk, emit)
+                        mergedAssistant = handleChunk(
+                            request,
+                            state,
+                            turn,
+                            mergedAssistant,
+                            chunk,
+                            emit,
+                        )
                         emitDebug(
                             request.sessionId,
                             "merged-assistant",
@@ -1126,20 +1569,33 @@ class DefaultAgentRunner(
                             emit,
                         )
                         mergedAssistant?.let { message ->
-                            updateState(state.copy(messages = replaceOrAppend(state.messages, message), turn = turn, status = AgentStatus.RUNNING, stopReason = message.stopReason))
-                            emitDebug(request.sessionId, "state-after-chunk", describeMessages(state.messages), emit)
+                            updateState(
+                                state.copy(
+                                    messages = replaceOrAppend(state.messages, message),
+                                    turn = turn,
+                                    status = AgentStatus.RUNNING,
+                                    stopReason = message.stopReason,
+                                ),
+                            )
+                            emitDebug(
+                                request.sessionId,
+                                "state-after-chunk",
+                                describeMessages(state.messages),
+                                emit,
+                            )
                         }
+                        providerTerminalObserved = chunkCompletes
                     }
-                    true
-                }
-                if (providerCallCompleted != true) {
-                    throw ProviderTimeoutException(ProviderTimeoutPhase.PROVIDER_CALL)
-                }
-                if (!providerChunkObserved) {
-                    throw ProviderProtocolException("Provider flow completed without any chunks")
-                }
-                if (!providerTerminalObserved) {
-                    throw ProviderProtocolException("Provider flow completed without a Completed event")
+                    if (!providerChunkObserved) {
+                        throw ProviderProtocolException("Provider flow completed without any chunks")
+                    }
+                    if (!providerTerminalObserved) {
+                        throw ProviderProtocolException("Provider flow completed without a Completed event")
+                    }
+                } catch (failure: Throwable) {
+                    if (!providerTerminalObserved || !failure.isRecoverableProviderFailure()) {
+                        throw failure
+                    }
                 }
                 var assistant = mergedAssistant
                 if (assistant != null) {
@@ -1171,9 +1627,13 @@ class DefaultAgentRunner(
                             stopReason = StopReason.TOOL_CALLS,
                         ),
                     )
-                    return TurnResult(state, true)
+                    return TurnResult(state, true, invocation.invocation)
                 }
-                return TurnResult(state.copy(stopReason = assistant?.stopReason ?: StopReason.COMPLETED), false)
+                return TurnResult(
+                    state.copy(stopReason = assistant?.stopReason ?: StopReason.COMPLETED),
+                    false,
+                    invocation.invocation,
+                )
             } catch (timeout: TimeoutCancellationException) {
                 finishProviderRequest(TelemetryOutcome.FAILURE, AgentFailureCode.TIMEOUT)
                 throw timeout
@@ -1182,6 +1642,12 @@ class DefaultAgentRunner(
                 throw cancelled
             } catch (t: Throwable) {
                 finishProviderRequest(TelemetryOutcome.FAILURE, t.toAgentFailureCode())
+                val invocationInvalidated = t is ProviderInvocationInvalidatedException
+                if (invocationInvalidated) {
+                    // Once the Provider confirms that this physical invocation cannot be resumed,
+                    // clear its durable recovery anchor before consulting any suspending policy.
+                    invalidatePhysicalInvocation()
+                }
                 if (t is ProviderContextLimitException) {
                     if (providerChunkObserved) {
                         throw ProviderProtocolException(
@@ -1191,22 +1657,57 @@ class DefaultAgentRunner(
                     }
                     throw t
                 }
-                if (providerChunkObserved) throw t
-                if (retriesThisInvocation >= request.engine.runtime.maxProviderRetries) throw t
-                if (!retryPolicy.shouldRetry(attempt, t)) throw t
-                retriesThisInvocation += 1
-                attempt += 1
-                updateState(state.copy(retryCount = attempt, stopReason = StopReason.RETRY))
-                emit(AgentEvent.RetryScheduled(request.sessionId, attempt, t.toAgentFailureCode()))
+                if (providerChunkObserved) {
+                    throw t.asProviderInterruptionSignal(ProviderInterruptionPhase.AFTER_FIRST_EVENT) ?: t
+                }
+                if (!t.isRecoverableProviderFailure()) {
+                    throw t
+                }
+                if (retryAttempt >= request.engine.runtime.maxProviderRetries) {
+                    throw requireNotNull(
+                        t.asProviderInterruptionSignal(ProviderInterruptionPhase.BEFORE_FIRST_EVENT),
+                    )
+                }
+                val retryOrdinal = retryAttempt + 1
+                val policyFailure = t.providerFailureCause() ?: t
+                if (!retryPolicy.shouldRetry(retryOrdinal, policyFailure)) {
+                    throw requireNotNull(
+                        t.asProviderInterruptionSignal(ProviderInterruptionPhase.BEFORE_FIRST_EVENT),
+                    )
+                }
+                val requiresFreshInvocation =
+                    provider.invocationResumeMode == ProviderInvocationResumeMode.NEW_ATTEMPT ||
+                        invocationInvalidated
+                if (!requiresFreshInvocation &&
+                    provider.invocationResumeMode == ProviderInvocationResumeMode.REATTACH
+                ) {
+                    invocation = invocation.copy(intent = ProviderInvocationIntent.REATTACH)
+                }
+                retryAttempt = retryOrdinal
+                updateState(state.copy(stopReason = StopReason.RETRY))
+                emit(
+                    AgentEvent.RetryScheduled(
+                        request.sessionId,
+                        retryOrdinal,
+                        t.toAgentFailureCode(),
+                    ),
+                )
                 recordTelemetry(
                     TelemetryEvent.RetryScheduled(
                         sessionId = request.sessionId,
                         turn = turn,
-                        attempt = attempt,
+                        attempt = retryOrdinal,
                         failureCode = t.toAgentFailureCode(),
                     ),
                 )
-                delay(retryPolicy.backoffDelayMs(attempt))
+                val policyDelayMillis = retryPolicy.backoffDelayMs(retryOrdinal, policyFailure)
+                    .coerceAtLeast(0L)
+                val providerDelayMillis = (policyFailure as? ProviderHttpException)
+                    ?.retryAfterMillis
+                    ?.coerceAtLeast(0L)
+                    ?: 0L
+                delay(maxOf(policyDelayMillis, providerDelayMillis))
+                claimFreshInvocationBeforeRequest = requiresFreshInvocation
             }
         }
     }
@@ -1437,13 +1938,14 @@ class DefaultAgentRunner(
             )
             val timeoutMs = definition.timeoutMs ?: request.engine.runtime.defaultToolTimeoutMillis
             var result = withTimeoutOrNull(timeoutMs) { executor.execute(executionRequest) }
+                ?.withRuntimeMediaReferences(executionId)
                 ?: return rejectToolCall(toolCall, "Tool execution timed out")
             interceptors.forEach { result = it.afterToolCall(context, result) }
             if (result.toolCallId != toolCall.toolCallId || result.toolName != toolCall.toolName) {
                 rejectToolCall(toolCall, "Tool result identity mismatch")
             } else {
-                val normalized = result.normalize()
-                if (normalized.exceedsCharacterLimit(request.engine.runtime.maxToolResultChars)) {
+                val normalized = result.withRuntimeMediaReferences(executionId).normalize()
+                if (!normalized.isWithinRuntimeLimits(request.engine.runtime)) {
                     rejectToolCall(toolCall, "Tool result exceeded runtime limit")
                 } else {
                     normalized
@@ -1610,19 +2112,18 @@ class DefaultAgentRunner(
         val provider = providerRegistry.get(request.model.provider)
             ?: throw AgentRuntimeFailure(AgentFailureCode.PROVIDER_NOT_FOUND)
         val resolved = resolveProviderConfig(request.model.provider, request.provider)
-        val providerRequest = ProviderRequest(
-            invocation = ProviderInvocation(
-                requestId = "${request.sessionId.value}:context-summary:${request.generation}",
-                sessionId = request.sessionId,
-                turn = request.turn,
-            ),
+        val providerRequestBase = ProviderRequest(
+            invocation = null,
             model = request.model,
             messages = listOf(
                 AgentMessage(
+                    id = "context-summary-system-${request.generation}",
                     role = MessageRole.SYSTEM,
                     parts = listOf(TextPart(CONTEXT_SUMMARY_SYSTEM_PROMPT)),
+                    createdAtEpochMs = 0,
                 ),
                 AgentMessage(
+                    id = "context-summary-input-${request.generation}",
                     role = MessageRole.USER,
                     parts = listOf(
                         TextPart(
@@ -1632,6 +2133,7 @@ class DefaultAgentRunner(
                             ),
                         ),
                     ),
+                    createdAtEpochMs = 0,
                 ),
             ),
             tools = emptyList(),
@@ -1647,54 +2149,168 @@ class DefaultAgentRunner(
             ).forContextSummary(),
             timeouts = request.provider.timeouts,
         )
-
-        val assembler = ProviderEventAssembler()
-        var summaryMessage: AgentMessage? = null
-        var usage = TokenUsage()
-        var terminalObserved = false
-        var chunkObserved = false
-        val completedWithinDeadline =
-            withTimeoutOrNull(providerRequest.timeouts.callTimeoutMillis) {
-                provider.generate(providerRequest)
-                    .collectWithProgressTimeouts(providerRequest.timeouts) { chunk ->
+        val inputIdentity = providerRequestInputIdentity(providerRequestBase)
+        val lifecycle = currentCoroutineContext()[ContextSummaryInvocationLifecycle]
+            ?: error("Context summary invocation lifecycle is unavailable")
+        var invocation = lifecycle.claim(inputIdentity)
+        var retryAttempt = 0
+        var claimFreshInvocationBeforeRequest = false
+        val usageAccounting = currentCoroutineContext()[ContextSummaryUsageAccounting]
+        while (true) {
+            if (claimFreshInvocationBeforeRequest) {
+                invocation = lifecycle.replace(inputIdentity)
+                claimFreshInvocationBeforeRequest = false
+            }
+            val providerRequest = providerRequestBase.copy(
+                invocation = invocation.invocation,
+                invocationIntent = invocation.intent,
+            )
+            val assembler = ProviderEventAssembler()
+            var summaryMessage: AgentMessage? = null
+            var usage = TokenUsage()
+            var terminalObserved = false
+            var chunkObserved = false
+            val requestStartedAt = monotonicClock.nowMillis()
+            var requestFinished = false
+            recordTelemetry(
+                TelemetryEvent.ProviderRequestStarted(
+                    sessionId = request.sessionId,
+                    turn = request.turn,
+                    attempt = retryAttempt,
+                    purpose = ProviderRequestPurpose.CONTEXT_SUMMARY,
+                ),
+            )
+            fun finishSummaryRequest(
+                outcome: TelemetryOutcome,
+                failureCode: AgentFailureCode?,
+            ) {
+                if (requestFinished) return
+                requestFinished = true
+                recordTelemetry(
+                    TelemetryEvent.ProviderRequestFinished(
+                        sessionId = request.sessionId,
+                        turn = request.turn,
+                        attempt = retryAttempt,
+                        durationMillis = elapsedMillis(requestStartedAt),
+                        outcome = outcome,
+                        failureCode = failureCode,
+                        providerEventObserved = chunkObserved,
+                        usage = usage,
+                        purpose = ProviderRequestPurpose.CONTEXT_SUMMARY,
+                    ),
+                )
+            }
+            try {
+                try {
+                    collectProviderWithProgressTimeouts(
+                        timeouts = providerRequest.timeouts,
+                        flow = { provider.generate(providerRequest) },
+                    ) { chunk ->
                         if (terminalObserved) {
                             throw ProviderProtocolException(
                                 "Context summarizer emitted output after completion",
                             )
                         }
                         chunk.validateSemantics()
-                        chunkObserved = true
-                        terminalObserved = chunk.events.last() is ProviderEvent.Completed
+                        if (!chunkObserved) {
+                            chunkObserved = true
+                            recordTelemetry(
+                                TelemetryEvent.ProviderFirstChunk(
+                                    sessionId = request.sessionId,
+                                    turn = request.turn,
+                                    attempt = retryAttempt,
+                                    latencyMillis = elapsedMillis(requestStartedAt),
+                                    purpose = ProviderRequestPurpose.CONTEXT_SUMMARY,
+                                ),
+                            )
+                        }
+                        val chunkCompletes = chunk.events.last() is ProviderEvent.Completed
                         chunk.usageObservation()?.let { observation ->
                             usage = if (observation.authoritative) {
                                 usage.overlayKnown(observation.usage)
                             } else {
                                 usage + observation.usage
                             }
+                            usageAccounting?.observe(invocation.invocation.requestId, usage)
                         }
                         summaryMessage = assembler.apply(summaryMessage, chunk.events)
+                        terminalObserved = chunkCompletes
                     }
-                true
+                    if (!chunkObserved || !terminalObserved) {
+                        throw ProviderProtocolException("Context summarizer did not complete")
+                    }
+                } catch (failure: Throwable) {
+                    if (!terminalObserved || !failure.isRecoverableProviderFailure()) {
+                        throw failure
+                    }
+                }
+                val message = summaryMessage
+                    ?: throw ProviderProtocolException("Context summarizer returned no message")
+                if (message.parts.any { it is ToolCallPart }) {
+                    throw ProviderProtocolException("Context summarizer unexpectedly requested a Tool")
+                }
+                val summary = message.parts
+                    .filterIsInstance<TextPart>()
+                    .joinToString(separator = "") { it.text }
+                    .trim()
+                if (summary.isBlank()) {
+                    throw ProviderProtocolException("Context summarizer returned no summary text")
+                }
+                finishSummaryRequest(TelemetryOutcome.SUCCESS, failureCode = null)
+                lifecycle.complete(invocation.invocation.requestId)
+                return ContextSummaryResult(summary = summary, usage = usage)
+            } catch (timeout: TimeoutCancellationException) {
+                finishSummaryRequest(TelemetryOutcome.FAILURE, AgentFailureCode.TIMEOUT)
+                throw timeout
+            } catch (cancelled: CancellationException) {
+                finishSummaryRequest(TelemetryOutcome.CANCELLED, failureCode = null)
+                throw cancelled
+            } catch (failure: Throwable) {
+                finishSummaryRequest(TelemetryOutcome.FAILURE, failure.toAgentFailureCode())
+                val invocationInvalidated = failure is ProviderInvocationInvalidatedException
+                if (invocationInvalidated) {
+                    // A rejected reattachment is no longer a valid durable recovery anchor.
+                    lifecycle.invalidate(invocation.invocation.requestId)
+                }
+                if (chunkObserved) {
+                    throw failure.asProviderInterruptionSignal(
+                        ProviderInterruptionPhase.AFTER_FIRST_EVENT,
+                    ) ?: failure
+                }
+                if (!failure.isRecoverableProviderFailure()) {
+                    throw failure
+                }
+                if (retryAttempt >= lifecycle.maxProviderRetries) {
+                    throw failure.asProviderInterruptionSignal(
+                        ProviderInterruptionPhase.BEFORE_FIRST_EVENT,
+                    ) ?: failure
+                }
+                val retryOrdinal = retryAttempt + 1
+                val policyFailure = failure.providerFailureCause() ?: failure
+                if (!retryPolicy.shouldRetry(retryOrdinal, policyFailure)) {
+                    throw failure.asProviderInterruptionSignal(
+                        ProviderInterruptionPhase.BEFORE_FIRST_EVENT,
+                    ) ?: failure
+                }
+                val requiresFreshInvocation =
+                    provider.invocationResumeMode == ProviderInvocationResumeMode.NEW_ATTEMPT ||
+                        invocationInvalidated
+                if (!requiresFreshInvocation &&
+                    provider.invocationResumeMode == ProviderInvocationResumeMode.REATTACH
+                ) {
+                    invocation = invocation.copy(intent = ProviderInvocationIntent.REATTACH)
+                }
+                retryAttempt = retryOrdinal
+                val policyDelayMillis = retryPolicy.backoffDelayMs(retryOrdinal, policyFailure)
+                    .coerceAtLeast(0L)
+                val providerDelayMillis = (policyFailure as? ProviderHttpException)
+                    ?.retryAfterMillis
+                    ?.coerceAtLeast(0L)
+                    ?: 0L
+                delay(maxOf(policyDelayMillis, providerDelayMillis))
+                claimFreshInvocationBeforeRequest = requiresFreshInvocation
             }
-        if (completedWithinDeadline != true) {
-            throw ProviderTimeoutException(ProviderTimeoutPhase.PROVIDER_CALL)
         }
-        if (!chunkObserved || !terminalObserved) {
-            throw ProviderProtocolException("Context summarizer did not complete")
-        }
-        val message = summaryMessage
-            ?: throw ProviderProtocolException("Context summarizer returned no message")
-        if (message.parts.any { it is ToolCallPart }) {
-            throw ProviderProtocolException("Context summarizer unexpectedly requested a Tool")
-        }
-        val summary = message.parts
-            .filterIsInstance<TextPart>()
-            .joinToString(separator = "") { it.text }
-            .trim()
-        if (summary.isBlank()) {
-            throw ProviderProtocolException("Context summarizer returned no summary text")
-        }
-        return ContextSummaryResult(summary = summary, usage = usage)
     }
 
     private suspend fun resolveProviderConfig(request: AgentRequest): ResolvedProviderConfig {
@@ -1743,19 +2359,86 @@ class DefaultAgentRunner(
 
     private suspend fun register(
         sessionId: AgentSessionId,
-        runId: AgentRunId,
+        runId: AgentRunId?,
         job: Job,
+        stopController: RunStopController,
     ): Long {
-        return mutex.withLock {
-            check(activeRuns[sessionId.value] == null) { "Session ${sessionId.value} is already running" }
-            nextRegistrationToken += 1
-            nextRegistrationToken.also { token ->
-                activeRuns[sessionId.value] = ActiveRun(
-                    registrationToken = token,
-                    runId = runId,
-                    job = job,
-                )
+        while (true) {
+            val result = mutex.withLock {
+                sessionStopOperations[sessionId.value]?.let(RegistrationResult::Wait)
+                    ?: run {
+                        check(activeRuns[sessionId.value] == null) {
+                            "Session ${sessionId.value} is already running"
+                        }
+                        nextRegistrationToken += 1
+                        val token = nextRegistrationToken
+                        activeRuns[sessionId.value] = ActiveRun(
+                            registrationToken = token,
+                            runId = runId,
+                            job = job,
+                            stopController = stopController,
+                        )
+                        RegistrationResult.Registered(token)
+                    }
             }
+            when (result) {
+                is RegistrationResult.Registered -> return result.token
+                is RegistrationResult.Wait -> result.gate.await()
+            }
+        }
+    }
+
+    private suspend fun acquireStopOperation(
+        sessionId: AgentSessionId,
+        stopIntent: StopIntent,
+    ): SessionStopOperation {
+        while (true) {
+            val result = mutex.withLock {
+                sessionStopOperations[sessionId.value]?.let(StopOperationResult::Wait)
+                    ?: run {
+                        val gate = CompletableDeferred<Unit>()
+                        sessionStopOperations[sessionId.value] = gate
+                        val activeRun = activeRuns[sessionId.value]
+                        when (stopIntent) {
+                            StopIntent.CANCEL -> activeRun?.stopController?.cancel()
+                            StopIntent.INTERRUPT -> activeRun?.stopController?.interrupt()
+                            StopIntent.ACTIVE -> error("An active state cannot begin a stop operation")
+                        }
+                        StopOperationResult.Acquired(
+                            SessionStopOperation(gate, activeRun),
+                        )
+                    }
+            }
+            when (result) {
+                is StopOperationResult.Acquired -> return result.operation
+                is StopOperationResult.Wait -> result.gate.await()
+            }
+        }
+    }
+
+    private suspend fun releaseStopOperation(
+        sessionId: AgentSessionId,
+        gate: CompletableDeferred<Unit>,
+    ) {
+        mutex.withLock {
+            if (sessionStopOperations[sessionId.value] === gate) {
+                sessionStopOperations.remove(sessionId.value)
+            }
+        }
+        gate.complete(Unit)
+    }
+
+    private suspend fun attachRunId(
+        sessionId: AgentSessionId,
+        registrationToken: Long,
+        runId: AgentRunId,
+    ) {
+        mutex.withLock {
+            val active = activeRuns[sessionId.value]
+            check(active?.registrationToken == registrationToken) {
+                "Session ${sessionId.value} is no longer owned by this collector"
+            }
+            active.runId = runId
         }
     }
 
@@ -1767,16 +2450,6 @@ class DefaultAgentRunner(
         }
     }
 
-    private suspend fun stopIntent(
-        sessionId: AgentSessionId,
-        registrationToken: Long,
-    ): StopIntent = mutex.withLock {
-        activeRuns[sessionId.value]
-            ?.takeIf { it.registrationToken == registrationToken }
-            ?.stopIntent
-            ?: StopIntent.INTERRUPT
-    }
-
     internal suspend fun isSessionActive(sessionId: AgentSessionId): Boolean {
         return mutex.withLock { activeRuns.containsKey(sessionId.value) }
     }
@@ -1784,6 +2457,7 @@ class DefaultAgentRunner(
     private data class TurnResult(
         val state: AgentStateSnapshot,
         val shouldContinue: Boolean,
+        val invocation: ProviderInvocation,
     )
 
     private data class AppendedMessages(
@@ -1797,14 +2471,47 @@ class DefaultAgentRunner(
 
     private data class ActiveRun(
         val registrationToken: Long,
-        val runId: AgentRunId,
+        var runId: AgentRunId?,
         val job: Job,
-        var stopIntent: StopIntent = StopIntent.INTERRUPT,
+        val stopController: RunStopController,
     )
 
+    private data class SessionStopOperation(
+        val gate: CompletableDeferred<Unit>,
+        val activeRun: ActiveRun?,
+    )
+
+    private sealed interface RegistrationResult {
+        data class Registered(val token: Long) : RegistrationResult
+
+        data class Wait(val gate: CompletableDeferred<Unit>) : RegistrationResult
+    }
+
+    private sealed interface StopOperationResult {
+        data class Acquired(val operation: SessionStopOperation) : StopOperationResult
+
+        data class Wait(val gate: CompletableDeferred<Unit>) : StopOperationResult
+    }
+
     private enum class StopIntent {
+        ACTIVE,
         CANCEL,
         INTERRUPT,
+    }
+
+    private class RunStopController {
+        private val state = MutableStateFlow(StopIntent.ACTIVE)
+
+        val stopIntent: StopIntent
+            get() = state.value
+
+        fun interrupt() {
+            state.compareAndSet(StopIntent.ACTIVE, StopIntent.INTERRUPT)
+        }
+
+        fun cancel() {
+            state.value = StopIntent.CANCEL
+        }
     }
 
     private data class ResolvedProviderConfig(
@@ -1814,18 +2521,103 @@ class DefaultAgentRunner(
     )
 }
 
-private fun ToolExecutionResult.normalize(): ToolExecutionResult {
-    if (displayText != null) return this
-    return copy(displayText = outputText())
+private class ContextSummaryUsageAccounting :
+    AbstractCoroutineContextElement(ContextSummaryUsageAccounting) {
+    private val usageByRequest = LinkedHashMap<String, TokenUsage>()
+
+    fun observe(requestId: String, usage: TokenUsage) {
+        usageByRequest[requestId] = usage
+    }
+
+    fun cumulativeUsageOrNull(): TokenUsage? {
+        if (usageByRequest.isEmpty()) return null
+        return usageByRequest.values.fold(TokenUsage()) { cumulative, usage ->
+            cumulative + usage
+        }
+    }
+
+    companion object Key : CoroutineContext.Key<ContextSummaryUsageAccounting>
 }
 
-private fun ToolExecutionResult.exceedsCharacterLimit(maxChars: Int): Boolean {
+private class ContextSummaryInvocationLifecycle(
+    val maxProviderRetries: Int,
+    private val claim: suspend (String) -> ProviderInvocationClaim,
+    private val replace: suspend (String) -> ProviderInvocationClaim,
+    private val invalidate: suspend (String) -> Unit,
+    private val complete: (String) -> Unit,
+) : AbstractCoroutineContextElement(ContextSummaryInvocationLifecycle) {
+    suspend fun claim(inputIdentity: String): ProviderInvocationClaim = claim.invoke(inputIdentity)
+
+    suspend fun replace(inputIdentity: String): ProviderInvocationClaim = replace.invoke(inputIdentity)
+
+    suspend fun invalidate(requestId: String) = invalidate.invoke(requestId)
+
+    fun complete(requestId: String) = complete.invoke(requestId)
+
+    companion object Key : CoroutineContext.Key<ContextSummaryInvocationLifecycle>
+}
+
+private data class ProviderInvocationClaim(
+    val invocation: ProviderInvocation,
+    val intent: ProviderInvocationIntent,
+)
+
+private fun List<AgentMessage>.projectForProvider(): List<AgentMessage> = map { message ->
+    val projectedParts = message.parts.map { part ->
+        if (part is ToolResultPart) part.sanitizedForModelBoundary() else part
+    }
+    if (projectedParts == message.parts) message else message.copy(parts = projectedParts)
+}
+
+private fun ToolExecutionResult.normalize(): ToolExecutionResult {
+    return copy(
+        content = content.toList(),
+    )
+}
+
+private fun ToolExecutionResult.withRuntimeMediaReferences(executionId: String): ToolExecutionResult {
+    val claimed = mutableSetOf<MediaReference>()
+    content.filterIsInstance<ToolResultImageContent>().mapNotNull { it.reference }.forEach { reference ->
+        require(reference.value.startsWith("tool-result:$executionId:")) {
+            "Tool media reference does not belong to this execution"
+        }
+        require(claimed.add(reference)) { "Tool media references must be unique" }
+    }
+
+    fun nextReference(preferredIndex: Int): MediaReference {
+        var index = preferredIndex
+        while (true) {
+            val candidate = MediaReference.forToolResult(executionId, index)
+            if (claimed.add(candidate)) return candidate
+            index += 1
+        }
+    }
+
+    return copy(
+        content = content.mapIndexed { index, item ->
+            if (item is ToolResultImageContent) {
+                item.copy(reference = item.reference ?: nextReference(index))
+            } else {
+                item
+            }
+        },
+    )
+}
+
+private fun ToolExecutionResult.isWithinRuntimeLimits(config: RuntimeConfig): Boolean {
+    if (content.size > config.maxToolResultContentItems) return false
     val characterCount = toolCallId.length.toLong() +
         toolName.length.toLong() +
         result.toString().length.toLong() +
         (displayText?.length?.toLong() ?: 0L) +
-        metadata.toString().length.toLong()
-    return characterCount > maxChars.toLong()
+        (userErrorCode?.length?.toLong() ?: 0L) +
+        metadata.toString().length.toLong() +
+        (origin?.characterWeight() ?: 0L) +
+        content.sumOf(ToolResultContent::characterWeight)
+    if (characterCount > config.maxToolResultChars.toLong()) return false
+    return content.inlineImageBytesOrNull()
+        ?.let { it <= config.maxInlineToolResultBytes.toLong() }
+        ?: false
 }
 
 private fun validateRuntimePayloads(request: AgentRequest, state: AgentStateSnapshot) {
@@ -1850,6 +2642,24 @@ private fun validateMessages(
     failureCode: AgentFailureCode,
 ) {
     messages.forEach { message ->
+        message.parts.filterIsInstance<ToolResultPart>().forEach { result ->
+            if (
+                !ToolExecutionResult(
+                    toolCallId = result.toolCallId,
+                    toolName = result.toolName,
+                    result = result.result,
+                    isError = result.isError,
+                    displayText = result.displayText,
+                    userErrorCode = result.userErrorCode,
+                    metadata = result.metadata,
+                    content = result.content,
+                    modelResultVisible = result.modelResultVisible,
+                    origin = result.origin,
+                ).isWithinRuntimeLimits(config)
+            ) {
+                throw AgentRuntimeFailure(failureCode)
+            }
+        }
         message.parts.filterIsInstance<AttachmentPart>().forEach { attachment ->
             if (attachment.uri.startsWith("data:", ignoreCase = true)) {
                 val maxEncodedChars = (config.maxInlineAttachmentBytes.toLong() + 2L) / 3L * 4L
@@ -1868,7 +2678,52 @@ private fun validateMessages(
     }
 }
 
+private fun ToolOrigin.characterWeight(): Long =
+    sourceId.length.toLong() +
+        sourceLabel.length.toLong() +
+        toolId.length.toLong() +
+        toolLabel.length.toLong()
+
+private fun ToolResultContent.characterWeight(): Long = when (this) {
+    is ToolResultTextContent -> text.length.toLong()
+    is ToolResultImageContent ->
+        source.characterWeight() +
+            (previewSource?.characterWeight() ?: 0L) +
+            (mimeType?.length?.toLong() ?: 0L) +
+            (previewMimeType?.length?.toLong() ?: 0L) +
+            (title?.length?.toLong() ?: 0L) +
+            (altText?.length?.toLong() ?: 0L) +
+            (reference?.value?.length?.toLong() ?: 0L) +
+            (attribution?.title?.length?.toLong() ?: 0L) +
+            (attribution?.url?.length?.toLong() ?: 0L) +
+            (attribution?.license?.length?.toLong() ?: 0L) +
+            (attribution?.licenseUrl?.length?.toLong() ?: 0L)
+}
+
+private fun ToolImageSource.characterWeight(): Long = when (this) {
+    is InlineToolImageSource -> 0L
+    is saien.magrathea.core.RemoteToolImageSource -> uri.length.toLong()
+    is saien.magrathea.core.ToolImageAttachmentReference -> uri.length.toLong()
+}
+
+private fun List<ToolResultContent>.inlineImageBytesOrNull(): Long? {
+    var total = 0L
+    forEach { block ->
+        if (block !is ToolResultImageContent) return@forEach
+        for (source in listOfNotNull(block.source, block.previewSource)) {
+            if (source !is InlineToolImageSource) continue
+            val bytes = canonicalBase64DecodedBytes(source.data) ?: return null
+            total += bytes
+            if (total < 0) return null
+        }
+        if (block.source is InlineToolImageSource && block.mimeType == null) return null
+        if (block.previewSource is InlineToolImageSource && block.previewMimeType == null) return null
+    }
+    return total
+}
+
 private const val MAX_DATA_URL_HEADER_CHARS = 1_024L
+private const val MAX_PROVIDER_ABANDON_TIMEOUT_MILLIS = 15_000L
 
 private fun canonicalBase64DecodedBytes(value: String): Long? {
     if (value.isEmpty() || value.length % 4 != 0) return null
@@ -2191,16 +3046,63 @@ private fun TokenUsage.overlayKnown(authoritative: TokenUsage): TokenUsage = Tok
     reasoningTokens = authoritative.reasoningTokens ?: reasoningTokens,
 )
 
-private suspend fun Flow<ProviderChunk>.collectWithProgressTimeouts(
+/**
+ * Restores accounting that advanced after the replay-safe checkpoint without replaying stateful
+ * output. The observed cumulative value already includes the checkpoint baseline, so dimensions
+ * are merged monotonically instead of added. Callers retain checkpoint accounting instead when a
+ * durable Provider stream will replay its canonical events during reattachment.
+ */
+private fun AgentStateSnapshot.withRecoveryAccounting(
+    observedState: AgentStateSnapshot,
+): AgentStateSnapshot = copy(
+    usage = usage.mergeCumulativeKnown(observedState.usage),
+    latestRequestUsage = observedState.latestRequestUsage,
+    contextManagement = contextManagement.copy(
+        usageObservation = observedState.contextManagement.usageObservation
+            ?: contextManagement.usageObservation,
+    ),
+)
+
+private fun TokenUsage.mergeCumulativeKnown(other: TokenUsage): TokenUsage = TokenUsage(
+    inputTokens = inputTokens.maxKnown(other.inputTokens),
+    outputTokens = outputTokens.maxKnown(other.outputTokens),
+    reasoningTokens = reasoningTokens.maxKnown(other.reasoningTokens),
+)
+
+private fun Long?.maxKnown(other: Long?): Long? = when {
+    this == null -> other
+    other == null -> this
+    else -> maxOf(this, other)
+}
+
+private object RuntimeProviderCollectionCancellationContext : ProviderCancellationContext {
+    override val intent: ProviderCancellationIntent = ProviderCancellationIntent.INTERRUPT
+}
+
+private data class ProviderChunkDelivery(
+    val chunk: ProviderChunk,
+    val processed: CompletableDeferred<Unit>,
+)
+
+private sealed interface ProviderCollectionSignal {
+    data class Delivery(val value: ProviderChunkDelivery) : ProviderCollectionSignal
+
+    data class Closed(val failure: Throwable?) : ProviderCollectionSignal
+
+    data class Deadline(val phase: ProviderTimeoutPhase) : ProviderCollectionSignal
+}
+
+private suspend fun collectProviderWithProgressTimeouts(
     timeouts: ProviderTimeoutConfig,
+    flow: suspend () -> Flow<ProviderChunk>,
     collector: suspend (ProviderChunk) -> Unit,
 ) = coroutineScope {
-    val channel = Channel<Pair<ProviderChunk, CompletableDeferred<Unit>>>(Channel.RENDEZVOUS)
-    val producer = launch {
+    val channel = Channel<ProviderChunkDelivery>(Channel.RENDEZVOUS)
+    val producer = launch(RuntimeProviderCollectionCancellationContext) {
         try {
-            this@collectWithProgressTimeouts.collect { chunk ->
+            flow().collect { chunk ->
                 val processed = CompletableDeferred<Unit>()
-                channel.send(chunk to processed)
+                channel.send(ProviderChunkDelivery(chunk, processed))
                 processed.await()
             }
             channel.close()
@@ -2211,29 +3113,59 @@ private suspend fun Flow<ProviderChunk>.collectWithProgressTimeouts(
             channel.close(failure)
         }
     }
+    val callDeadline = async {
+        delay(timeouts.callTimeoutMillis)
+        ProviderCollectionSignal.Deadline(ProviderTimeoutPhase.PROVIDER_CALL)
+    }
     var awaitingFirstEvent = true
     try {
         while (true) {
-            val timeoutMillis = if (awaitingFirstEvent) {
+            val progressPhase = if (awaitingFirstEvent) {
+                ProviderTimeoutPhase.FIRST_EVENT
+            } else {
+                ProviderTimeoutPhase.STREAM_IDLE
+            }
+            val progressTimeoutMillis = if (awaitingFirstEvent) {
                 timeouts.firstEventTimeoutMillis
             } else {
                 timeouts.streamIdleTimeoutMillis
             }
-            val received = withTimeoutOrNull(timeoutMillis) { channel.receiveCatching() }
-                ?: throw ProviderTimeoutException(
-                    if (awaitingFirstEvent) ProviderTimeoutPhase.FIRST_EVENT
-                    else ProviderTimeoutPhase.STREAM_IDLE,
-                )
-            if (received.isClosed) {
-                received.exceptionOrNull()?.let { throw it }
-                break
+            val progressDeadline = async {
+                delay(progressTimeoutMillis)
+                ProviderCollectionSignal.Deadline(progressPhase)
             }
-            val (chunk, processed) = received.getOrThrow()
-            collector(chunk)
-            processed.complete(Unit)
-            awaitingFirstEvent = false
+            val signal = try {
+                select {
+                    channel.onReceiveCatching { received ->
+                        if (received.isClosed) {
+                            ProviderCollectionSignal.Closed(received.exceptionOrNull())
+                        } else {
+                            ProviderCollectionSignal.Delivery(received.getOrThrow())
+                        }
+                    }
+                    callDeadline.onAwait { it }
+                    progressDeadline.onAwait { it }
+                }
+            } finally {
+                progressDeadline.cancel()
+            }
+            when (signal) {
+                is ProviderCollectionSignal.Closed -> {
+                    signal.failure?.let { throw it }
+                    break
+                }
+                is ProviderCollectionSignal.Deadline -> {
+                    throw ProviderTimeoutException(signal.phase)
+                }
+                is ProviderCollectionSignal.Delivery -> {
+                    collector(signal.value.chunk)
+                    signal.value.processed.complete(Unit)
+                    awaitingFirstEvent = false
+                }
+            }
         }
     } finally {
+        callDeadline.cancel()
         channel.cancel()
         producer.cancelAndJoin()
     }
@@ -2244,8 +3176,55 @@ private class AgentRuntimeFailure(
     cause: Throwable? = null,
 ) : RuntimeException(code.name, cause)
 
-private fun Throwable.toAgentFailureCode(): AgentFailureCode = when (this) {
-    is AgentRuntimeFailure -> code
+private class ProviderInterruptionSignal(
+    val failure: Throwable,
+    val phase: ProviderInterruptionPhase,
+) : RuntimeException("Recoverable Provider failure", failure)
+
+private fun Throwable.asProviderInterruptionSignal(
+    phase: ProviderInterruptionPhase,
+): ProviderInterruptionSignal? = takeIf(Throwable::isRecoverableProviderFailure)
+    ?.let { ProviderInterruptionSignal(it, phase) }
+
+private fun Throwable.toProviderInterruptionOrNull(
+    occurredAtEpochMs: Long,
+): ProviderInterruption? {
+    val failure = (this as? ProviderInterruptionSignal)?.failure ?: this
+    if (!failure.isRecoverableProviderFailure()) return null
+    val phase = (this as? ProviderInterruptionSignal)?.phase
+        ?: ProviderInterruptionPhase.BEFORE_FIRST_EVENT
+    val retryAfterMillis = (failure.providerFailureCause() as? ProviderHttpException)
+        ?.retryAfterMillis
+        ?.takeIf { it >= 0L }
+    val retryAtEpochMs = retryAfterMillis?.let { delayMillis ->
+        if (delayMillis > Long.MAX_VALUE - occurredAtEpochMs) {
+            Long.MAX_VALUE
+        } else {
+            occurredAtEpochMs + delayMillis
+        }
+    }
+    return ProviderInterruption(
+        code = failure.toAgentFailureCode(),
+        phase = phase,
+        retryAtEpochMs = retryAtEpochMs,
+    )
+}
+
+private fun Throwable.isRecoverableProviderFailure(): Boolean = when (this) {
+    is ProviderInterruptionSignal -> failure.isRecoverableProviderFailure()
+    is ProviderException -> retryable
+    else -> false
+}
+
+private fun Throwable.providerFailureCause(): ProviderException? = when (this) {
+    is ProviderInterruptionSignal -> failure.providerFailureCause()
+    is ProviderInvocationInvalidatedException -> failure
+    is ProviderException -> this
+    else -> null
+}
+
+private fun Throwable.toAgentFailureCode(): AgentFailureCode = when (val failure = providerFailureCause() ?: this) {
+    is AgentRuntimeFailure -> failure.code
     is ProviderContextLimitException -> AgentFailureCode.CONTEXT_LIMIT
     is ProviderAuthException -> AgentFailureCode.PROVIDER_AUTH
     is ProviderRateLimitException -> AgentFailureCode.PROVIDER_RATE_LIMIT

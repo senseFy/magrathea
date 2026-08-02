@@ -148,6 +148,36 @@ idempotent creation and durable stream replay under the same invocation identity
 Register it through a `ProviderRegistry` like a reference adapter. Runtime routes every adapter
 uniformly through the registry.
 
+## Invocation identity and cancellation
+
+Runtime assigns each physical Provider attempt a `ProviderInvocation` and an explicit
+`ProviderInvocationIntent`:
+
+- `CREATE` permits the adapter to start work, or idempotently resolve work already created under
+  that identity;
+- `REATTACH` permits only resolving and replaying that existing invocation. It must never create
+  replacement work when the identity is unknown, expired, or invalidated.
+
+An adapter that cannot reattach must report `ProviderInvocationResumeMode.NEW_ATTEMPT`. A durable
+adapter may report `REATTACH`; Runtime then keeps the same identity across recoverable
+interruptions and sends `REATTACH` on the next collection. If the remote invocation can no longer
+be resolved, the adapter throws `ProviderInvocationInvalidatedException`. Runtime clears that
+recovery anchor and starts a fresh `CREATE` only when the failure is retryable and retry policy
+allows it. An unknown identity fails closed.
+
+Cancellation intent is available through `providerCancellationIntent()` while a Provider flow is
+being collected:
+
+- Runtime-owned collection always uses `INTERRUPT`: it stops local collection but leaves durable
+  work available until the Runtime commits its next authoritative state;
+- direct adapter collection has no Runtime signal and defaults to `CANCEL`, which permits
+  best-effort cleanup by that direct consumer.
+
+When cancellation or failure terminally discards a pending invocation, Runtime removes its
+checkpoint before calling `ProviderAdapter.abandon(invocation)`. Direct Providers normally keep the
+default no-op; durable adapters use it to release retained remote work. A failed terminal commit is
+not followed by abandonment, and cleanup failure does not make a committed terminal run resumable.
+
 ## Model and attachment capabilities
 
 `ProviderAdapter.inputCapabilities(config)` is the effective protocol encoder's upper bound. For

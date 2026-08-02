@@ -19,16 +19,22 @@ import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolDefinition
+import saien.magrathea.core.ToolImageAttachmentReference
+import saien.magrathea.core.ToolResultImageContent
 import saien.magrathea.core.ToolResultPart
+import saien.magrathea.core.ToolResultTextContent
 import saien.magrathea.provider.api.ProviderEvent
 import saien.magrathea.provider.api.ProviderUsage
 
-const val GATEWAY_PROTOCOL_VERSION: Int = 1
-const val GATEWAY_SSE_EVENT: String = "magrathea.gateway.v1"
+const val GATEWAY_PROTOCOL_VERSION: Int = 2
+const val GATEWAY_SSE_EVENT: String = "magrathea.gateway.v2"
 const val GATEWAY_ATTACHMENT_URI_PREFIX: String = "magrathea-attachment:"
 const val GATEWAY_VERSION_HEADER: String = "X-Magrathea-Gateway-Version"
 const val GATEWAY_IDEMPOTENCY_HEADER: String = "Idempotency-Key"
 const val GATEWAY_CSRF_HEADER: String = "X-CSRF-Token"
+const val GATEWAY_INVOCATION_INVALIDATED_PROBLEM_CODE: String = "invocation_invalidated"
+const val GATEWAY_INVOCATION_UNKNOWN_PROBLEM_CODE: String = "invocation_unknown"
+const val GATEWAY_REPLAY_WINDOW_EXHAUSTED_PROBLEM_CODE: String = "replay_window_exhausted"
 
 data class GatewayProtocolLimits(
     val maxIdChars: Int = 128,
@@ -37,6 +43,7 @@ data class GatewayProtocolLimits(
     val maxMessages: Int = 256,
     val maxTools: Int = 128,
     val maxAttachments: Int = 32,
+    val maxToolResultContentItems: Int = 32,
     val maxAttachmentBytes: Long = 25L * 1024 * 1024,
     val maxRequestTextChars: Int = 4 * 1024 * 1024,
     val maxJsonChars: Int = 2 * 1024 * 1024,
@@ -51,6 +58,7 @@ data class GatewayProtocolLimits(
         require(maxMessages > 0)
         require(maxTools > 0)
         require(maxAttachments > 0)
+        require(maxToolResultContentItems > 0)
         require(maxAttachmentBytes > 0)
         require(maxRequestTextChars > 0)
         require(maxJsonChars > 0)
@@ -140,13 +148,13 @@ data class GatewayCreateStreamRequest(
                 part.providerMetadata?.let { validateSafeMetadata(it, limits, "part.providerMetadata") }
                 part.validateWireFields(limits)
                 if (part is ToolResultPart) validateSafeMetadata(part.metadata, limits, "toolResult.metadata")
-                if (part is AttachmentPart) {
-                    protocolCheck(part.uri.startsWith(GATEWAY_ATTACHMENT_URI_PREFIX)) {
+                part.gatewayAttachmentReferences().forEach { reference ->
+                    protocolCheck(reference.uri.startsWith(GATEWAY_ATTACHMENT_URI_PREFIX)) {
                         "Gateway attachment URI must use $GATEWAY_ATTACHMENT_URI_PREFIX"
                     }
-                    val attachmentId = part.uri.removePrefix(GATEWAY_ATTACHMENT_URI_PREFIX)
+                    val attachmentId = reference.uri.removePrefix(GATEWAY_ATTACHMENT_URI_PREFIX)
                     referencedAttachmentIds += attachmentId
-                    protocolCheck(attachmentMediaTypes[attachmentId] == part.mimeType) {
+                    protocolCheck(attachmentMediaTypes[attachmentId] == reference.mediaType) {
                         "message attachment mediaType does not match its descriptor"
                     }
                 }
@@ -301,9 +309,13 @@ data class GatewayUsage(
 
 @Serializable
 enum class GatewayFailureCode {
-    UPSTREAM_FAILURE,
+    AUTHENTICATION_FAILURE,
+    CLIENT_FAILURE,
     CONTEXT_LIMIT,
-    QUOTA_EXCEEDED,
+    RATE_LIMIT,
+    NETWORK_FAILURE,
+    TIMEOUT,
+    SERVER_FAILURE,
     PROTOCOL_FAILURE,
     REPLAY_WINDOW_EXHAUSTED,
     INTERNAL_FAILURE,
@@ -504,7 +516,7 @@ private fun validateEnvelope(value: GatewayStreamEnvelope, limits: GatewayProtoc
 private fun GatewayEvent.validate(limits: GatewayProtocolLimits) {
     when (this) {
         is GatewayEvent.StreamOpened -> protocolCheck(replayFromSequence == 0L) {
-            "replayFromSequence must be zero in Gateway v1"
+            "replayFromSequence must be zero in Gateway v2"
         }
         is GatewayEvent.TextStart -> validateOptionalOpaque("text signature", signature, limits.maxSignatureChars)
         is GatewayEvent.TextDelta -> {
@@ -542,6 +554,19 @@ private fun GatewayEvent.validate(limits: GatewayProtocolLimits) {
         }
         is GatewayEvent.Failed -> {
             protocolCheck(retryAfterMillis == null || retryAfterMillis >= 0) { "retryAfterMillis must not be negative" }
+            protocolCheck(code != GatewayFailureCode.CONTEXT_LIMIT || !retryable) {
+                "context-limit failures use semantic context recovery, not physical retry"
+            }
+            protocolCheck(retryAfterMillis == null || retryable) {
+                "retryAfterMillis requires a retryable failure"
+            }
+            protocolCheck(
+                retryAfterMillis == null ||
+                    code == GatewayFailureCode.AUTHENTICATION_FAILURE ||
+                    code == GatewayFailureCode.CLIENT_FAILURE ||
+                    code == GatewayFailureCode.RATE_LIMIT ||
+                    code == GatewayFailureCode.SERVER_FAILURE,
+            ) { "retryAfterMillis is not valid for this failure code" }
         }
         is GatewayEvent.Cancelled -> protocolCheck((reason?.length ?: 0) <= limits.maxFailureMessageChars) {
             "cancellation reason exceeds configured limit"
@@ -575,7 +600,20 @@ private fun MessagePart.textWeight(): Long = when (this) {
     is TextPart -> text.length.toLong()
     is ReasoningPart -> text.length.toLong()
     is ToolCallPart -> arguments.toString().length.toLong()
-    is ToolResultPart -> result.toString().length.toLong()
+    is ToolResultPart -> {
+        result.toString().length.toLong() +
+            (displayText?.length?.toLong() ?: 0L) +
+            content.sumOf { block ->
+                when (block) {
+                    is ToolResultTextContent -> block.text.length.toLong()
+                    is ToolResultImageContent ->
+                        (
+                            (block.title?.length ?: 0) +
+                                (block.altText?.length ?: 0)
+                            ).toLong()
+                }
+            }
+    }
     else -> 0L
 }
 
@@ -604,9 +642,50 @@ private fun MessagePart.validateWireFields(limits: GatewayProtocolLimits) {
             protocolCheck((displayText?.length ?: 0) <= limits.maxRequestTextChars) {
                 "tool result display text exceeds configured limit"
             }
+            protocolCheck(content.size <= limits.maxToolResultContentItems) {
+                "tool result content count exceeds configured limit"
+            }
+            content.forEach { block ->
+                when (block) {
+                    is ToolResultTextContent -> protocolCheck(block.text.length <= limits.maxRequestTextChars) {
+                        "tool result text content exceeds configured limit"
+                    }
+                    is ToolResultImageContent -> {
+                        val mediaType = block.mimeType
+                        protocolCheck(mediaType != null && MEDIA_TYPE.matches(mediaType)) {
+                            "Gateway Tool image result requires a valid mediaType"
+                        }
+                        protocolCheck(block.source is ToolImageAttachmentReference) {
+                            "Gateway Tool image result must use an uploaded attachment reference"
+                        }
+                        protocolCheck(block.previewSource == null && block.attribution == null) {
+                            "Gateway Tool image result must not carry user presentation fields"
+                        }
+                        protocolCheck(block.reference == null) {
+                            "Gateway Tool image result must not carry a product media reference"
+                        }
+                    }
+                }
+            }
         }
         is AttachmentPart -> protocolCheck(MEDIA_TYPE.matches(mimeType)) { "attachment mediaType is invalid" }
     }
+}
+
+private data class GatewayMessageAttachmentReference(
+    val uri: String,
+    val mediaType: String,
+)
+
+private fun MessagePart.gatewayAttachmentReferences(): List<GatewayMessageAttachmentReference> = when (this) {
+    is AttachmentPart -> listOf(GatewayMessageAttachmentReference(uri, mimeType))
+    is ToolResultPart -> content.mapNotNull { block ->
+        val image = block as? ToolResultImageContent ?: return@mapNotNull null
+        val source = image.source as? ToolImageAttachmentReference ?: return@mapNotNull null
+        val mediaType = image.mimeType ?: return@mapNotNull null
+        GatewayMessageAttachmentReference(source.uri, mediaType)
+    }
+    else -> emptyList()
 }
 
 private fun GatewayProblem.validate(limits: GatewayProtocolLimits) {

@@ -20,6 +20,7 @@ import saien.magrathea.provider.api.DefaultHttpTransportConfig
 import saien.magrathea.provider.api.HttpTransport
 import saien.magrathea.provider.api.ProviderAdapter
 import saien.magrathea.provider.api.ProviderChunk
+import saien.magrathea.provider.api.ProviderInvocation
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRegistry
 import saien.magrathea.provider.api.ProviderRequest
@@ -188,6 +189,10 @@ private class GatewayRoute(
 ) : ProviderAdapter {
     override val invocationResumeMode
         get() = gateway.invocationResumeMode
+
+    override suspend fun abandon(invocation: ProviderInvocation) {
+        gateway.abandon(invocation)
+    }
 
     override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> {
         if (request.model.provider != key) {

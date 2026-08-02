@@ -5,6 +5,7 @@ public abstract interface class saien/magrathea/provider/gateway/GatewayAttachme
 public final class saien/magrathea/provider/gateway/GatewayProviderAdapter : saien/magrathea/provider/api/ProviderAdapter {
 	public fun <init> (Ljava/lang/String;Lsaien/magrathea/provider/gateway/GatewayProviderConfig;Lsaien/magrathea/provider/gateway/GatewaySessionHeadersProvider;Lsaien/magrathea/provider/gateway/GatewayAttachmentCatalog;Lsaien/magrathea/provider/gateway/GatewayReconnectGate;Lsaien/magrathea/provider/api/HttpTransport;ZLsaien/magrathea/gateway/protocol/GatewayProtocolCodec;)V
 	public synthetic fun <init> (Ljava/lang/String;Lsaien/magrathea/provider/gateway/GatewayProviderConfig;Lsaien/magrathea/provider/gateway/GatewaySessionHeadersProvider;Lsaien/magrathea/provider/gateway/GatewayAttachmentCatalog;Lsaien/magrathea/provider/gateway/GatewayReconnectGate;Lsaien/magrathea/provider/api/HttpTransport;ZLsaien/magrathea/gateway/protocol/GatewayProtocolCodec;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun abandon (Lsaien/magrathea/provider/api/ProviderInvocation;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun close ()V
 	public fun generate (Lsaien/magrathea/provider/api/ProviderRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun getInvocationResumeMode ()Lsaien/magrathea/provider/api/ProviderInvocationResumeMode;
@@ -34,10 +35,6 @@ public final class saien/magrathea/provider/gateway/GatewayProviderConfig {
 
 public abstract interface class saien/magrathea/provider/gateway/GatewayReconnectGate {
 	public abstract fun awaitReconnectPermission (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
-public final class saien/magrathea/provider/gateway/GatewayRemoteCancellationException : java/util/concurrent/CancellationException {
-	public fun <init> (Ljava/lang/String;)V
 }
 
 public final class saien/magrathea/provider/gateway/GatewaySessionHeaders {

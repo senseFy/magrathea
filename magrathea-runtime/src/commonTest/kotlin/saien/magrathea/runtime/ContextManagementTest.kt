@@ -1,6 +1,7 @@
 package saien.magrathea.runtime
 
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -18,16 +19,26 @@ import saien.magrathea.core.ContextPreparationFailure
 import saien.magrathea.core.ContextPreparationReason
 import saien.magrathea.core.ContextPreparationRequest
 import saien.magrathea.core.ContextSummaryResult
+import saien.magrathea.core.InlineToolImageSource
 import saien.magrathea.core.MessageRole
+import saien.magrathea.core.MediaReference
 import saien.magrathea.core.ModelDescriptor
+import saien.magrathea.core.ModelInputModality
 import saien.magrathea.core.ProviderConfig
+import saien.magrathea.core.ProviderCredential
 import saien.magrathea.core.ProviderOptions
 import saien.magrathea.core.ReasoningPart
 import saien.magrathea.core.RuntimeConfig
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.TokenUsage
 import saien.magrathea.core.ToolCallPart
+import saien.magrathea.core.ToolMediaAttribution
+import saien.magrathea.core.ToolResultAudience
+import saien.magrathea.core.ToolResultContent
+import saien.magrathea.core.ToolResultImageContent
 import saien.magrathea.core.ToolResultPart
+import saien.magrathea.core.ToolResultTextContent
+import saien.magrathea.provider.api.ProviderRequest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -37,6 +48,55 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class ContextManagementTest {
+    @Test
+    fun providerRequestIdentityExcludesTransientCredentialAndTransportMaterial() {
+        val logicalRequest = ProviderRequest(
+            model = ModelDescriptor(provider = "test", model = "test-model"),
+            messages = listOf(message("u1", MessageRole.USER, "same logical input")),
+        )
+        val firstTransport = logicalRequest.copy(
+            credential = ProviderCredential(
+                value = "first-secret",
+                endpoint = "https://first.example.com/v1",
+                headers = mapOf("X-Credential-Header" to "first-header-secret"),
+            ),
+            endpoint = "https://first.example.com/v1",
+            headers = mapOf(
+                "Authorization" to "Bearer first-secret",
+                "X-Routing" to "first-route",
+            ),
+        )
+        val secondTransport = logicalRequest.copy(
+            credential = ProviderCredential(
+                value = "second-secret",
+                endpoint = "https://second.example.com/v1",
+                headers = mapOf("X-Credential-Header" to "second-header-secret"),
+            ),
+            endpoint = "https://second.example.com/v1",
+            headers = mapOf(
+                "Authorization" to "Bearer second-secret",
+                "X-Routing" to "second-route",
+            ),
+        )
+
+        assertEquals(
+            providerRequestInputIdentity(logicalRequest),
+            providerRequestInputIdentity(firstTransport),
+        )
+        assertEquals(
+            providerRequestInputIdentity(logicalRequest),
+            providerRequestInputIdentity(secondTransport),
+        )
+        assertFalse(
+            providerRequestInputIdentity(logicalRequest) ==
+                providerRequestInputIdentity(
+                    logicalRequest.copy(
+                        messages = listOf(message("u1", MessageRole.USER, "different input")),
+                    ),
+                ),
+        )
+    }
+
     @Test
     fun belowTokenBudget_keepsCanonicalHistoryAndSkipsSummary() = runTest {
         var summaryCalls = 0
@@ -280,6 +340,31 @@ class ContextManagementTest {
     }
 
     @Test
+    fun changedModelInputModalities_invalidatesObservedUsage() {
+        val messages = listOf(message("u1", MessageRole.USER, "hello"))
+        val original = request(messages)
+        val observed = ContextManagementState().withUsageObservation(
+            request = original,
+            messages = messages,
+            throughMessageId = "u1",
+            inputTokens = 80,
+        )
+        val changed = original.copy(
+            model = original.model.copy(
+                inputModalities = setOf(ModelInputModality.TEXT, ModelInputModality.IMAGE),
+            ),
+        )
+
+        val normalized = normalizeContextState(
+            state = observed,
+            messages = messages,
+            request = preparation(changed),
+        )
+
+        assertNull(normalized.usageObservation)
+    }
+
+    @Test
     fun summaryInput_omitsReasoningSignaturesProviderMetadataAndInlineData() {
         val serialized = serializeContextConversation(
             messages = listOf(
@@ -305,6 +390,7 @@ class ContextManagementTest {
                 ),
             ),
             maxToolResultChars = 8,
+            modelInputModalities = setOf(ModelInputModality.TEXT),
         )
 
         assertFalse(serialized.contains("private reasoning"))
@@ -313,6 +399,164 @@ class ContextManagementTest {
         assertFalse(serialized.contains("provider-secret"))
         assertTrue(serialized.contains("[inline data omitted]"))
         assertTrue(serialized.contains("01234567…"))
+    }
+
+    @Test
+    fun summaryInputUsesOnlyModelAudienceToolContentAndNeverSerializesImageBytes() {
+        val serialized = serializeContextConversation(
+            messages = listOf(
+                AgentMessage(
+                    id = "tool-1",
+                    role = MessageRole.TOOL,
+                    parts = listOf(
+                        ToolResultPart(
+                            toolCallId = "call-1",
+                            toolName = "inspect_image",
+                            result = JsonPrimitive("canonical result"),
+                            content = listOf(
+                                ToolResultTextContent(
+                                    "model-visible text",
+                                    setOf(ToolResultAudience.MODEL),
+                                ),
+                                ToolResultImageContent(
+                                    source = InlineToolImageSource("SECRET_MODEL_IMAGE_BYTES"),
+                                    previewSource = InlineToolImageSource("SECRET_PREVIEW_BYTES"),
+                                    previewMimeType = "image/png",
+                                    mimeType = "image/png",
+                                    title = "Model image",
+                                    attribution = ToolMediaAttribution(
+                                        "Example",
+                                        "https://example.com/model-image",
+                                    ),
+                                    audiences = setOf(ToolResultAudience.MODEL),
+                                    reference = MediaReference("PRIVATE_MEDIA_REFERENCE"),
+                                ),
+                                ToolResultImageContent(
+                                    source = InlineToolImageSource("SECRET_USER_IMAGE_BYTES"),
+                                    title = "User image",
+                                    audiences = setOf(ToolResultAudience.USER),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            maxToolResultChars = 100,
+            modelInputModalities = setOf(
+                ModelInputModality.TEXT,
+                ModelInputModality.IMAGE,
+            ),
+        )
+
+        assertTrue(serialized.contains("model-visible text"))
+        assertTrue(serialized.contains("Model image"))
+        assertFalse(serialized.contains("https://example.com/model-image"))
+        assertTrue(serialized.contains("canonical result"))
+        assertFalse(serialized.contains("User image"))
+        assertFalse(serialized.contains("SECRET_MODEL_IMAGE_BYTES"))
+        assertFalse(serialized.contains("SECRET_PREVIEW_BYTES"))
+        assertFalse(serialized.contains("PRIVATE_MEDIA_REFERENCE"))
+        assertFalse(serialized.contains("SECRET_USER_IMAGE_BYTES"))
+    }
+
+    @Test
+    fun tokenEstimateForUserOnlyToolContentUsesCanonicalResult() {
+        val result = buildJsonObject {
+            put("query", "city skyline")
+            put("count", 6)
+        }
+        val userOnly = toolResultMessage(
+            result = result,
+            displayText = "Images ready",
+            content = listOf(
+                ToolResultImageContent(
+                    source = InlineToolImageSource("USER_PREVIEW_BYTES"),
+                    title = "City skyline",
+                    audiences = setOf(ToolResultAudience.USER),
+                ),
+            ),
+        )
+        val canonicalOnly = toolResultMessage(result = result)
+
+        assertEquals(
+            estimateTokens(canonicalOnly, setOf(ModelInputModality.TEXT)),
+            estimateTokens(userOnly, setOf(ModelInputModality.TEXT)),
+        )
+    }
+
+    @Test
+    fun tokenEstimateForTextOnlyModelUsesCanonicalResultWhenImageIsFilteredOut() {
+        val result = buildJsonObject {
+            put("source", "https://example.com/full-result")
+            put("description", "structured result visible to a text-only model")
+        }
+        val modelImage = toolResultMessage(
+            result = result,
+            displayText = "Image ready",
+            content = listOf(
+                ToolResultImageContent(
+                    source = InlineToolImageSource("MODEL_IMAGE_BYTES"),
+                    mimeType = "image/png",
+                    title = "Model image",
+                    audiences = setOf(ToolResultAudience.MODEL),
+                ),
+            ),
+        )
+        val canonicalOnly = toolResultMessage(result = result)
+
+        assertEquals(
+            estimateTokens(canonicalOnly, setOf(ModelInputModality.TEXT)),
+            estimateTokens(modelImage, setOf(ModelInputModality.TEXT)),
+        )
+    }
+
+    @Test
+    fun tokenEstimateForImageModelIncludesCanonicalAndTypedContent() {
+        val imageContent = listOf(
+            ToolResultImageContent(
+                source = InlineToolImageSource("MODEL_IMAGE_BYTES"),
+                mimeType = "image/png",
+                title = "Model image",
+                audiences = setOf(ToolResultAudience.MODEL),
+            ),
+        )
+        val first = toolResultMessage(
+            result = JsonPrimitive("short result"),
+            content = imageContent,
+        )
+        val second = toolResultMessage(
+            result = JsonPrimitive("different canonical result ${"x".repeat(2_000)}"),
+            content = imageContent,
+        )
+        val imageModel = setOf(ModelInputModality.TEXT, ModelInputModality.IMAGE)
+
+        assertTrue(estimateTokens(second, imageModel) > estimateTokens(first, imageModel))
+    }
+
+    @Test
+    fun summaryInputForTextOnlyModelUsesCanonicalResultWhenModelImageIsFilteredOut() {
+        val serialized = serializeContextConversation(
+            messages = listOf(
+                toolResultMessage(
+                    result = JsonPrimitive("canonical result"),
+                    displayText = "UI-only display text",
+                    content = listOf(
+                        ToolResultImageContent(
+                            source = InlineToolImageSource("SECRET_MODEL_IMAGE_BYTES"),
+                            title = "Model image",
+                            audiences = setOf(ToolResultAudience.MODEL),
+                        ),
+                    ),
+                ),
+            ),
+            maxToolResultChars = 100,
+            modelInputModalities = setOf(ModelInputModality.TEXT),
+        )
+
+        assertTrue(serialized.contains("canonical result"))
+        assertFalse(serialized.contains("UI-only display text"))
+        assertFalse(serialized.contains("Model image"))
+        assertFalse(serialized.contains("SECRET_MODEL_IMAGE_BYTES"))
     }
 
     @Test
@@ -388,5 +632,35 @@ class ContextManagementTest {
         id = id,
         role = role,
         parts = listOf(TextPart(text)),
+    )
+
+    private fun toolResultMessage(
+        result: JsonElement,
+        displayText: String? = null,
+        content: List<ToolResultContent> = emptyList(),
+    ) = AgentMessage(
+        id = "tool-result",
+        role = MessageRole.TOOL,
+        parts = listOf(
+            ToolResultPart(
+                toolCallId = "call-1",
+                toolName = "image_search",
+                result = result,
+                displayText = displayText,
+                content = content,
+            ),
+        ),
+    )
+
+    private fun estimateTokens(
+        message: AgentMessage,
+        modelInputModalities: Set<ModelInputModality>,
+    ): Long = estimateInputTokens(
+        messages = listOf(message),
+        systemPrompt = "",
+        tools = emptyList(),
+        providerOptions = null,
+        modelInputModalities = modelInputModalities,
+        charsPerToken = 1,
     )
 }

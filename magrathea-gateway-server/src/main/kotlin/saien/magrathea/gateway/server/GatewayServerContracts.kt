@@ -33,8 +33,10 @@ fun interface GatewayAuthenticator {
 
 enum class GatewayOperation {
     CREATE_STREAM,
+    RESOLVE_INVOCATION,
     READ_STREAM,
     CANCEL_STREAM,
+    ABANDON_INVOCATION,
 }
 
 fun interface GatewayAuthorizer {
@@ -132,6 +134,11 @@ class GatewayOriginException : RuntimeException("Gateway origin is not allowed")
 class GatewayRateLimitException(val retryAfterMillis: Long?) : RuntimeException("Gateway rate limit exceeded")
 class GatewayQuotaException(val retryAfterMillis: Long?) : RuntimeException("Gateway quota exceeded")
 class GatewayIdempotencyConflictException : RuntimeException("Idempotency key was reused with a different request")
+class GatewayInvocationInvalidatedException : RuntimeException("Gateway invocation is no longer reattachable")
+internal class GatewayInvocationReplayUnavailableException :
+    RuntimeException("Gateway invocation completed after its replay window expired")
+internal class GatewayInvocationUnknownException :
+    RuntimeException("Gateway invocation identity is not retained")
 class GatewayStreamNotFoundException : RuntimeException("Gateway stream not found")
 class GatewayReplayWindowException : RuntimeException("Gateway replay cursor is outside the retained window")
 class GatewayCursorException : RuntimeException("Gateway replay cursor is invalid")

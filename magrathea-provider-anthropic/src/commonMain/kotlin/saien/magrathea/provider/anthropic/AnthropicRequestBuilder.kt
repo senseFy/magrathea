@@ -12,17 +12,24 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AttachmentPart
+import saien.magrathea.core.InlineToolImageSource
 import saien.magrathea.core.JsonPart
 import saien.magrathea.core.MessageRole
+import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
+import saien.magrathea.core.ToolImageAttachmentReference
+import saien.magrathea.core.ToolImageSource
+import saien.magrathea.core.ToolResultImageContent
 import saien.magrathea.core.ToolResultPart
+import saien.magrathea.core.ToolResultTextContent
 import saien.magrathea.core.dataUrlPayload
 import saien.magrathea.core.isHttpsUrl
 import saien.magrathea.core.normalizedMimeType
 import saien.magrathea.provider.api.AnthropicTransportConfig
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRequest
+import saien.magrathea.provider.api.modelProjection
 import saien.magrathea.provider.api.ReferenceProviderInputCapabilities
 
 internal const val ANTHROPIC_CONTENT_METADATA = "anthropic.messages.content"
@@ -61,7 +68,7 @@ internal class AnthropicRequestBuilder(
                 MessageRole.SYSTEM -> Unit
                 MessageRole.USER -> add(userMessage(message))
                 MessageRole.ASSISTANT -> add(assistantMessage(message, request))
-                MessageRole.TOOL -> add(toolResultMessage(message))
+                MessageRole.TOOL -> add(toolResultMessage(message, request))
             }
         }
     }
@@ -120,7 +127,7 @@ internal class AnthropicRequestBuilder(
         put("content", content)
     }
 
-    private fun toolResultMessage(message: AgentMessage): JsonObject = buildJsonObject {
+    private fun toolResultMessage(message: AgentMessage, request: ProviderRequest): JsonObject = buildJsonObject {
         val results = message.parts.filterIsInstance<ToolResultPart>()
         if (results.isEmpty() || results.size != message.parts.size) {
             throw ProviderProtocolException("Anthropic tool message must contain only tool results")
@@ -132,10 +139,50 @@ internal class AnthropicRequestBuilder(
                     put("type", "tool_result")
                     put("tool_use_id", result.toolCallId)
                     put("is_error", result.isError)
-                    put("content", buildJsonArray { add(textBlock(renderToolResult(result))) })
+                    put("content", result.toAnthropicToolContent(request))
                 })
             }
         })
+    }
+
+    private fun ToolResultPart.toAnthropicToolContent(request: ProviderRequest): JsonArray {
+        val projection = modelProjection(
+            request.model.inputModalities,
+            ReferenceProviderInputCapabilities.anthropicMessages,
+        )
+        return buildJsonArray {
+            projection.canonicalResult?.let { add(textBlock(renderToolResult(it))) }
+            projection.content.forEach { block ->
+                when (block) {
+                    is ToolResultTextContent -> add(textBlock(block.text))
+                    is ToolResultImageContent -> add(block.toAnthropicImage())
+                }
+            }
+        }
+    }
+
+    private fun ToolResultImageContent.toAnthropicImage(): JsonObject = buildJsonObject {
+        put("type", "image")
+        put("source", source.toAnthropicImageSource(mimeType))
+    }
+
+    private fun ToolImageSource.toAnthropicImageSource(mimeType: String?): JsonObject = buildJsonObject {
+        when (this@toAnthropicImageSource) {
+            is RemoteToolImageSource -> {
+                put("type", "url")
+                put("url", uri)
+            }
+            is InlineToolImageSource -> {
+                val mediaType = mimeType
+                    ?: throw ProviderProtocolException("Anthropic inline Tool images require a MIME type")
+                put("type", "base64")
+                put("media_type", mediaType)
+                put("data", data)
+            }
+            is ToolImageAttachmentReference -> throw ProviderProtocolException(
+                "Anthropic Tool image attachment references must be resolved before request encoding",
+            )
+        }
     }
 
     private fun buildTools(request: ProviderRequest): JsonArray = buildJsonArray {
@@ -231,7 +278,7 @@ internal class AnthropicRequestBuilder(
         }
     }
 
-    private fun renderToolResult(result: ToolResultPart): String = when (val value = result.result) {
+    private fun renderToolResult(value: JsonElement): String = when (value) {
         is JsonPrimitive -> value.contentOrNull ?: value.toString()
         else -> json.encodeToString(JsonElement.serializer(), value)
     }

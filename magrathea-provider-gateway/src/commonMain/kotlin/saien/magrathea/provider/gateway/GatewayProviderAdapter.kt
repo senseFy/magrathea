@@ -1,16 +1,24 @@
 package saien.magrathea.provider.gateway
 
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
+import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AttachmentPart
+import saien.magrathea.core.ToolImageAttachmentReference
+import saien.magrathea.core.ToolResultImageContent
+import saien.magrathea.core.ToolResultPart
 import saien.magrathea.gateway.protocol.GATEWAY_ATTACHMENT_URI_PREFIX
 import saien.magrathea.gateway.protocol.GATEWAY_CSRF_HEADER
 import saien.magrathea.gateway.protocol.GATEWAY_IDEMPOTENCY_HEADER
+import saien.magrathea.gateway.protocol.GATEWAY_INVOCATION_INVALIDATED_PROBLEM_CODE
+import saien.magrathea.gateway.protocol.GATEWAY_INVOCATION_UNKNOWN_PROBLEM_CODE
+import saien.magrathea.gateway.protocol.GATEWAY_REPLAY_WINDOW_EXHAUSTED_PROBLEM_CODE
 import saien.magrathea.gateway.protocol.GATEWAY_PROTOCOL_VERSION
 import saien.magrathea.gateway.protocol.GATEWAY_SSE_EVENT
 import saien.magrathea.gateway.protocol.GATEWAY_VERSION_HEADER
@@ -37,18 +45,27 @@ import saien.magrathea.provider.api.HttpTransport
 import saien.magrathea.provider.api.ProviderAdapter
 import saien.magrathea.provider.api.ProviderAuthException
 import saien.magrathea.provider.api.ProviderChunk
+import saien.magrathea.provider.api.ProviderCancellationIntent
 import saien.magrathea.provider.api.ProviderClientException
 import saien.magrathea.provider.api.ProviderContextLimitException
 import saien.magrathea.provider.api.ProviderException
+import saien.magrathea.provider.api.ProviderHttpException
+import saien.magrathea.provider.api.ProviderInvocation
+import saien.magrathea.provider.api.ProviderInvocationIntent
+import saien.magrathea.provider.api.ProviderInvocationInvalidatedException
 import saien.magrathea.provider.api.ProviderInvocationResumeMode
 import saien.magrathea.provider.api.ProviderNetworkException
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRateLimitException
 import saien.magrathea.provider.api.ProviderRequest
 import saien.magrathea.provider.api.ProviderServerException
-import saien.magrathea.provider.api.toHttpTimeoutConfig
+import saien.magrathea.provider.api.ProviderTimeoutException
+import saien.magrathea.provider.api.ProviderTimeoutPhase
 import saien.magrathea.provider.api.createDefaultHttpTransport
+import saien.magrathea.provider.api.providerCancellationIntent
+import saien.magrathea.provider.api.toHttpTimeoutConfig
 import saien.magrathea.provider.api.requireSuccessful
+import saien.magrathea.provider.api.sanitizedForModelBoundary
 
 data class GatewayProviderConfig(
     val baseUrl: String,
@@ -106,7 +123,8 @@ fun interface GatewayReconnectGate {
     suspend fun awaitReconnectPermission()
 }
 
-class GatewayRemoteCancellationException(message: String) : CancellationException(message)
+internal class GatewayRemoteCancellationException(message: String) :
+    ProviderInvocationInvalidatedException(ProviderNetworkException(message))
 
 class GatewayProviderAdapter(
     override val key: String,
@@ -127,37 +145,70 @@ class GatewayProviderAdapter(
         require(key.isNotBlank()) { "Gateway Provider key must not be blank" }
     }
 
+    override suspend fun abandon(invocation: ProviderInvocation) {
+        var attempt = 0
+        while (true) {
+            try {
+                abandonByRequestId(invocation.requestId)
+                return
+            } catch (failure: ProviderException) {
+                if (!failure.retryable || attempt >= config.maxReconnectAttempts) throw failure
+                reconnectGate.awaitReconnectPermission()
+                delay(
+                    maxOf(
+                        reconnectDelayMillis(attempt),
+                        (failure as? ProviderHttpException)?.retryAfterMillis ?: 0,
+                    ),
+                )
+                attempt += 1
+            }
+        }
+    }
+
     override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
         validateProviderBoundary(request)
         val invocation = requireNotNull(request.invocation) {
             "Gateway Provider requires a stable ProviderInvocation"
         }
-        val attachmentReferences = resolveAttachments(request)
-        val createRequest = GatewayCreateStreamRequest(
-            requestId = invocation.requestId,
-            sessionId = invocation.sessionId.value,
-            turn = invocation.turn,
-            model = GatewayModelReference(
-                provider = request.model.provider,
-                model = request.model.model,
-            ),
-            messages = request.messages,
-            tools = request.tools,
-            options = GatewayGenerationOptions(
-                temperature = request.temperature,
-                maxTokens = request.maxTokens,
-            ),
-            attachments = attachmentReferences,
-        )
         val httpTimeouts = request.timeouts.toHttpTimeoutConfig()
-        val descriptor = createWithRetry(createRequest, httpTimeouts)
-        var lastSequence = -1L
-        var reconnectAttempt = 0
-        var terminal = false
+        var descriptor: GatewayStreamDescriptor? = null
+        var remoteCompleted = false
         try {
-            while (!terminal) {
+            val createRequest = if (request.invocationIntent == ProviderInvocationIntent.CREATE) {
+                val messages = request.messages.map(AgentMessage::projectForGateway)
+                GatewayCreateStreamRequest(
+                    requestId = invocation.requestId,
+                    sessionId = invocation.sessionId.value,
+                    turn = invocation.turn,
+                    model = GatewayModelReference(
+                        provider = request.model.provider,
+                        model = request.model.model,
+                    ),
+                    messages = messages,
+                    tools = request.tools,
+                    options = GatewayGenerationOptions(
+                        temperature = request.temperature,
+                        maxTokens = request.maxTokens,
+                    ),
+                    attachments = resolveAttachments(messages),
+                )
+            } else {
+                null
+            }
+            var activeDescriptor = when (request.invocationIntent) {
+                ProviderInvocationIntent.CREATE -> create(requireNotNull(createRequest), httpTimeouts)
+                ProviderInvocationIntent.REATTACH -> resolveExistingWithRetry(
+                    invocation = invocation,
+                    timeouts = httpTimeouts,
+                )
+            }
+            descriptor = activeDescriptor
+            var lastSequence = -1L
+            var reconnectAttempt = 0
+            var completedDelivered = false
+            while (!completedDelivered) {
                 val validator = GatewayStreamValidator(
-                    descriptor = descriptor,
+                    descriptor = activeDescriptor,
                     firstExpectedSequence = lastSequence + 1,
                     requireOpenedEvent = lastSequence < 0,
                 )
@@ -167,7 +218,7 @@ class GatewayProviderAdapter(
                     transport.stream(
                         request = HttpRequestSpec(
                             method = HttpMethod.GET,
-                            url = eventsUrl(descriptor.streamId, lastSequence),
+                            url = eventsUrl(activeDescriptor.streamId, lastSequence),
                             headers = requestHeaders(accept = "text/event-stream"),
                             timeouts = httpTimeouts,
                         ),
@@ -198,8 +249,13 @@ class GatewayProviderAdapter(
                                     else -> {
                                         val providerEvent = event.toProviderEventOrNull()
                                             ?: throw ProviderProtocolException("Gateway event cannot map to ProviderEvent")
+                                        val completes = event is GatewayEvent.Completed
+                                        if (completes) remoteCompleted = true
                                         emit(ProviderChunk(events = listOf(providerEvent)))
-                                        terminal = event is GatewayEvent.Completed
+                                        if (completes) {
+                                            completedDelivered = true
+                                            throw GatewayCompletedCollected
+                                        }
                                     }
                                 }
                             }
@@ -210,43 +266,138 @@ class GatewayProviderAdapter(
                             )
                         }
                     }
-                    if (terminal) break
+                    if (completedDelivered) break
                     if (!transportCompleted) {
                         throw ProviderNetworkException("Gateway event stream disconnected")
                     }
                     throw ProviderNetworkException("Gateway event stream ended before terminal event")
+                } catch (_: GatewayCompletedCollected) {
+                    break
+                } catch (_: GatewayStreamMissing) {
+                    if (completedDelivered) break
+                    val retainedDescriptor = resolveExistingWithRetry(
+                        invocation = invocation,
+                        timeouts = httpTimeouts,
+                    )
+                    if (retainedDescriptor.streamId != activeDescriptor.streamId) {
+                        throw ProviderProtocolException(
+                            "Gateway idempotency identity resolved to a different stream",
+                        )
+                    }
+                    activeDescriptor = retainedDescriptor
+                    descriptor = retainedDescriptor
+                    if (reconnectAttempt >= config.maxReconnectAttempts) {
+                        throw ProviderNetworkException(
+                            "Gateway retained invocation stream is temporarily unavailable",
+                        )
+                    }
+                    reconnectGate.awaitReconnectPermission()
+                    delay(reconnectDelayMillis(reconnectAttempt))
+                    reconnectAttempt += 1
+                } catch (cancelled: CancellationException) {
+                    if (completedDelivered) break
+                    throw cancelled
                 } catch (network: ProviderNetworkException) {
+                    if (completedDelivered) break
                     if (reconnectAttempt >= config.maxReconnectAttempts) throw network
                     reconnectGate.awaitReconnectPermission()
                     delay(reconnectDelayMillis(reconnectAttempt))
                     reconnectAttempt += 1
+                } catch (failure: Throwable) {
+                    if (completedDelivered) break
+                    throw failure
                 }
             }
         } catch (cancelled: CancellationException) {
-            withContext(NonCancellable) {
-                try {
-                    transport.execute(
-                        HttpRequestSpec(
-                            method = HttpMethod.DELETE,
-                            url = streamUrl(descriptor.streamId),
-                            headers = requestHeaders(accept = "application/json"),
-                            timeouts = httpTimeouts,
-                        ),
-                    ).requireSuccessful()
-                } catch (_: Throwable) {
-                    // Cancellation must remain cancellation even if the best-effort remote DELETE fails.
+            if (
+                !remoteCompleted &&
+                coroutineContext.providerCancellationIntent() == ProviderCancellationIntent.CANCEL
+            ) {
+                withContext(NonCancellable) {
+                    try {
+                        val createdDescriptor = descriptor
+                        if (createdDescriptor == null) {
+                            abandonByRequestId(invocation.requestId, httpTimeouts)
+                        } else {
+                            cancelByStreamId(createdDescriptor.streamId, httpTimeouts)
+                        }
+                    } catch (_: Throwable) {
+                        // Cancellation remains authoritative if best-effort remote cleanup fails.
+                    }
                 }
             }
             throw cancelled
         }
     }
 
+    private suspend fun abandonByRequestId(
+        requestId: String,
+        timeouts: HttpTimeoutConfig? = null,
+    ) {
+        transport.execute(
+            HttpRequestSpec(
+                method = HttpMethod.DELETE,
+                url = streamsUrl(),
+                headers = requestHeaders(
+                    accept = "application/json",
+                    additional = listOf(HttpHeader(GATEWAY_IDEMPOTENCY_HEADER, requestId)),
+                ),
+                timeouts = timeouts,
+            ),
+        ).requireSuccessful()
+    }
+
+    private suspend fun cancelByStreamId(
+        streamId: String,
+        timeouts: HttpTimeoutConfig,
+    ) {
+        transport.execute(
+            HttpRequestSpec(
+                method = HttpMethod.DELETE,
+                url = streamUrl(streamId),
+                headers = requestHeaders(accept = "application/json"),
+                timeouts = timeouts,
+            ),
+        ).requireSuccessful()
+    }
+
     override fun close() {
         if (closeTransport) transport.close()
     }
 
-    private suspend fun createWithRetry(
+    private suspend fun create(
         request: GatewayCreateStreamRequest,
+        timeouts: HttpTimeoutConfig,
+    ): GatewayStreamDescriptor {
+        val response = transport.execute(
+            HttpRequestSpec(
+                method = HttpMethod.POST,
+                url = streamsUrl(),
+                headers = requestHeaders(
+                    accept = "application/json",
+                    additional = listOf(
+                        HttpHeader("Content-Type", "application/json"),
+                        HttpHeader(GATEWAY_IDEMPOTENCY_HEADER, request.requestId),
+                    ),
+                ),
+                body = codec.encodeCreateRequest(request),
+                timeouts = timeouts,
+            ),
+        )
+        if (response.statusCode !in 200..299) {
+            throwKnownInvocationProblem(response)
+            response.requireSuccessful()
+        }
+        validateJsonResponse(response)
+        return codec.decodeDescriptor(response.body).also { descriptor ->
+            if (descriptor.requestId != request.requestId || descriptor.sessionId != request.sessionId) {
+                throw ProviderProtocolException("Gateway descriptor identity does not match request")
+            }
+        }
+    }
+
+    private suspend fun resolveExistingWithRetry(
+        invocation: ProviderInvocation,
         timeouts: HttpTimeoutConfig,
     ): GatewayStreamDescriptor {
         var attempt = 0
@@ -254,23 +405,28 @@ class GatewayProviderAdapter(
             try {
                 val response = transport.execute(
                     HttpRequestSpec(
-                        method = HttpMethod.POST,
+                        method = HttpMethod.GET,
                         url = streamsUrl(),
                         headers = requestHeaders(
                             accept = "application/json",
                             additional = listOf(
-                                HttpHeader("Content-Type", "application/json"),
-                                HttpHeader(GATEWAY_IDEMPOTENCY_HEADER, request.requestId),
+                                HttpHeader(GATEWAY_IDEMPOTENCY_HEADER, invocation.requestId),
                             ),
                         ),
-                        body = codec.encodeCreateRequest(request),
                         timeouts = timeouts,
                     ),
-                ).requireSuccessful()
+                )
+                if (response.statusCode !in 200..299) {
+                    throwKnownInvocationProblem(response)
+                    response.requireSuccessful()
+                }
                 validateJsonResponse(response)
                 return codec.decodeDescriptor(response.body).also { descriptor ->
-                    if (descriptor.requestId != request.requestId || descriptor.sessionId != request.sessionId) {
-                        throw ProviderProtocolException("Gateway descriptor identity does not match request")
+                    if (
+                        descriptor.requestId != invocation.requestId ||
+                        descriptor.sessionId != invocation.sessionId.value
+                    ) {
+                        throw ProviderProtocolException("Gateway descriptor identity does not match invocation")
                     }
                 }
             } catch (network: ProviderNetworkException) {
@@ -279,6 +435,31 @@ class GatewayProviderAdapter(
                 delay(reconnectDelayMillis(attempt))
                 attempt += 1
             }
+        }
+    }
+
+    private fun throwKnownInvocationProblem(response: HttpResponseSpec) {
+        if (response.statusCode != 404 && response.statusCode != 409 && response.statusCode != 410) return
+        validateJsonResponse(response)
+        when (codec.decodeProblem(response.body).code) {
+            GATEWAY_INVOCATION_INVALIDATED_PROBLEM_CODE ->
+                throw ProviderInvocationInvalidatedException(
+                    ProviderNetworkException("Gateway invocation is no longer reattachable"),
+                )
+            GATEWAY_REPLAY_WINDOW_EXHAUSTED_PROBLEM_CODE ->
+                throw ProviderInvocationInvalidatedException(
+                    failure = ProviderProtocolException(
+                        "Gateway terminal replay is no longer retained",
+                    ),
+                    retryable = false,
+                )
+            GATEWAY_INVOCATION_UNKNOWN_PROBLEM_CODE ->
+                throw ProviderInvocationInvalidatedException(
+                    failure = ProviderProtocolException(
+                        "Gateway invocation identity is not retained",
+                    ),
+                    retryable = false,
+                )
         }
     }
 
@@ -294,9 +475,24 @@ class GatewayProviderAdapter(
         }
     }
 
-    private suspend fun resolveAttachments(request: ProviderRequest): List<GatewayAttachmentReference> {
-        val attachments = request.messages.flatMap { message ->
-            message.parts.filterIsInstance<AttachmentPart>()
+    private suspend fun resolveAttachments(messages: List<AgentMessage>): List<GatewayAttachmentReference> {
+        val attachments = messages.flatMap { message ->
+            message.parts.flatMap { part ->
+                when (part) {
+                    is AttachmentPart -> listOf(GatewayAttachmentIdentity(part.uri, part.mimeType))
+                    is ToolResultPart -> part.content.mapNotNull { content ->
+                        val image = content as? ToolResultImageContent ?: return@mapNotNull null
+                        val source = image.source as? ToolImageAttachmentReference
+                            ?: throw ProviderProtocolException(
+                                "Gateway Tool image result must use an uploaded attachment reference",
+                            )
+                        val mediaType = image.mimeType
+                            ?: throw ProviderProtocolException("Gateway Tool image result requires a MIME type")
+                        GatewayAttachmentIdentity(source.uri, mediaType)
+                    }
+                    else -> emptyList()
+                }
+            }
         }
         if (attachments.isEmpty()) return emptyList()
         val catalog = attachmentCatalog
@@ -306,8 +502,8 @@ class GatewayProviderAdapter(
                 throw ProviderProtocolException("Gateway attachment must be an uploaded reference")
             }
             val id = attachment.uri.removePrefix(GATEWAY_ATTACHMENT_URI_PREFIX)
-            catalog.describe(id, attachment.mimeType).also { reference ->
-                if (reference.id != id || reference.mediaType != attachment.mimeType) {
+            catalog.describe(id, attachment.mediaType).also { reference ->
+                if (reference.id != id || reference.mediaType != attachment.mediaType) {
                     throw ProviderProtocolException("Gateway attachment descriptor identity mismatch")
                 }
             }
@@ -335,8 +531,20 @@ class GatewayProviderAdapter(
     }
 
     private fun validateStreamResponse(statusCode: Int, headers: List<HttpHeader>) {
+        if (statusCode == 404) {
+            validateVersionHeader(headers)
+            throw GatewayStreamMissing
+        }
+        if (statusCode == 410) {
+            validateVersionHeader(headers)
+            throw ProviderInvocationInvalidatedException(
+                failure = ProviderProtocolException("Gateway replay window is no longer retained"),
+                retryable = false,
+            )
+        }
         if (statusCode !in 200..299) {
-            throw ProviderClientException("Gateway stream returned HTTP $statusCode", statusCode = statusCode)
+            HttpResponseSpec(statusCode = statusCode, headers = headers, body = "")
+                .requireSuccessful()
         }
         validateVersionHeader(headers)
         val contentType = headers.firstValue("Content-Type")?.substringBefore(';')?.trim()?.lowercase()
@@ -357,25 +565,64 @@ class GatewayProviderAdapter(
         return value
     }
 
-    private fun streamsUrl(): String = "${config.normalizedBaseUrl}/v1/streams"
+    private fun streamsUrl(): String = "${config.normalizedBaseUrl}/v2/streams"
     private fun streamUrl(streamId: String): String = "${streamsUrl()}/$streamId"
     private fun eventsUrl(streamId: String, afterSequence: Long): String =
         "${streamUrl(streamId)}/events?afterSequence=$afterSequence"
 }
 
-private fun GatewayEvent.Failed.toProviderFailure(): ProviderException = when (code) {
-    GatewayFailureCode.CONTEXT_LIMIT -> ProviderContextLimitException()
-    GatewayFailureCode.QUOTA_EXCEEDED -> ProviderRateLimitException(
-        message = "Gateway quota exceeded",
-        retryAfterMillis = retryAfterMillis,
-    )
-    GatewayFailureCode.UPSTREAM_FAILURE, GatewayFailureCode.INTERNAL_FAILURE -> ProviderServerException(
-        message = "Gateway upstream request failed",
-        statusCode = 502,
-        retryAfterMillis = retryAfterMillis,
-    )
-    GatewayFailureCode.PROTOCOL_FAILURE, GatewayFailureCode.REPLAY_WINDOW_EXHAUSTED ->
-        ProviderProtocolException("Gateway protocol request failed")
+private data class GatewayAttachmentIdentity(
+    val uri: String,
+    val mediaType: String,
+)
+
+private object GatewayCompletedCollected : RuntimeException()
+
+private object GatewayStreamMissing : RuntimeException()
+
+private fun AgentMessage.projectForGateway(): AgentMessage = copy(
+    parts = parts.map { part ->
+        if (part is ToolResultPart) part.sanitizedForModelBoundary() else part
+    },
+)
+
+private fun GatewayEvent.Failed.toProviderFailure(): ProviderException {
+    if (code == GatewayFailureCode.CONTEXT_LIMIT) return ProviderContextLimitException()
+    val failure = when (code) {
+        GatewayFailureCode.AUTHENTICATION_FAILURE -> ProviderAuthException(
+            message = "Gateway Provider authentication failed",
+            statusCode = 401,
+            retryAfterMillis = retryAfterMillis,
+        )
+        GatewayFailureCode.CLIENT_FAILURE -> ProviderClientException(
+            message = "Gateway Provider rejected the request",
+            statusCode = 400,
+            retryAfterMillis = retryAfterMillis,
+        )
+        GatewayFailureCode.RATE_LIMIT -> ProviderRateLimitException(
+            message = "Gateway Provider rate limit exceeded",
+            retryAfterMillis = retryAfterMillis,
+        )
+        GatewayFailureCode.NETWORK_FAILURE -> ProviderNetworkException(
+            message = "Gateway Provider network request failed",
+        )
+        GatewayFailureCode.TIMEOUT -> ProviderTimeoutException(
+            phase = ProviderTimeoutPhase.PROVIDER_CALL,
+        )
+        GatewayFailureCode.SERVER_FAILURE -> ProviderServerException(
+            message = "Gateway Provider request failed",
+            statusCode = 502,
+            retryAfterMillis = retryAfterMillis,
+        )
+        GatewayFailureCode.PROTOCOL_FAILURE, GatewayFailureCode.REPLAY_WINDOW_EXHAUSTED ->
+            ProviderProtocolException("Gateway Provider response violated the protocol")
+        GatewayFailureCode.INTERNAL_FAILURE -> ProviderServerException(
+            message = "Gateway could not complete the Provider request",
+            statusCode = 500,
+        )
+        GatewayFailureCode.CONTEXT_LIMIT -> error("Handled above")
+    }
+    return ProviderInvocationInvalidatedException(failure, retryable)
 }
 
 private fun List<HttpHeader>.firstValue(name: String): String? =

@@ -38,21 +38,26 @@ import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.AgentStatus
 import saien.magrathea.core.AttachmentPart
+import saien.magrathea.core.MagratheaTelemetry
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.RetryPolicy
 import saien.magrathea.core.RuntimeConfig
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
+import saien.magrathea.core.TelemetryEvent
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolDefinition
 import saien.magrathea.core.ToolExecutionRequest
 import saien.magrathea.core.ToolExecutionResult
 import saien.magrathea.core.ToolExecutionState
 import saien.magrathea.core.ToolExecutor
+import saien.magrathea.core.ToolOrigin
+import saien.magrathea.core.ToolResultPart
 import saien.magrathea.provider.api.InMemoryProviderRegistry
 import saien.magrathea.provider.api.ProviderAdapter
 import saien.magrathea.provider.api.ProviderChunk
+import saien.magrathea.provider.api.ProviderNetworkException
 import saien.magrathea.provider.api.ProviderRequest
 
 class RuntimeStateMachineContractTest {
@@ -305,7 +310,79 @@ class RuntimeStateMachineContractTest {
         assertEquals(3, provider.callCount)
         assertEquals(2, retryPolicy.decisionCount)
         assertEquals(2, events.filterIsInstance<AgentEvent.RetryScheduled>().size)
-        assertEquals(1, events.filterIsInstance<AgentEvent.Failed>().size)
+        assertEquals(1, events.filterIsInstance<AgentEvent.Interrupted>().size)
+    }
+
+    @Test
+    fun providerRetryOrdinalRestartsForEachProviderInvocation() = runTest {
+        val provider = RetryBeforeEachTurnProvider()
+        val retryPolicy = OrdinalRecordingRetryPolicy()
+        val tool = CountingTool()
+        val telemetryEvents = mutableListOf<TelemetryEvent>()
+        val runner = DefaultAgentRunner(
+            providerRegistry = InMemoryProviderRegistry(listOf(provider)),
+            toolRegistry = InMemoryToolRegistry(listOf(tool)),
+            persistence = InMemoryAgentPersistence(),
+            retryPolicy = retryPolicy,
+            telemetry = MagratheaTelemetry(telemetryEvents::add),
+        )
+
+        val events = runner.run(
+            request(
+                tools = listOf(tool.definition),
+                runtimeConfig = RuntimeConfig(maxTurns = 3, maxProviderRetries = 1),
+            ),
+        ).toList()
+
+        assertEquals(listOf(1, 1), retryPolicy.decisionOrdinals)
+        assertEquals(listOf(1, 1), retryPolicy.backoffOrdinals)
+        assertEquals(
+            listOf(1, 1),
+            events.filterIsInstance<AgentEvent.RetryScheduled>().map { it.attempt },
+        )
+        assertEquals(4, provider.callCount)
+        assertEquals(1, tool.executionCount)
+        assertEquals(2, events.filterIsInstance<AgentEvent.Completed>().single().state.retryCount)
+        assertEquals(
+            listOf(0, 1, 0, 1),
+            telemetryEvents.filterIsInstance<TelemetryEvent.ProviderRequestStarted>()
+                .map { it.attempt },
+        )
+        assertEquals(
+            listOf(0, 1, 0, 1),
+            telemetryEvents.filterIsInstance<TelemetryEvent.ProviderRequestFinished>()
+                .map { it.attempt },
+        )
+    }
+
+    @Test
+    fun hostInterruptionDuringBackoffDoesNotCountAnUnstartedRetry() = runTest {
+        val sessionId = AgentSessionId("retry-backoff-interruption")
+        val persistence = InMemoryAgentPersistence()
+        val retryScheduled = CompletableDeferred<Unit>()
+        val runner = DefaultAgentRunner(
+            providerRegistry = InMemoryProviderRegistry(listOf(AlwaysFailProvider())),
+            toolRegistry = InMemoryToolRegistry(),
+            persistence = persistence,
+            retryPolicy = LongBackoffRetryPolicy(),
+            dispatcher = StandardTestDispatcher(testScheduler),
+        )
+        val collection = launch {
+            try {
+                runner.run(request(sessionId = sessionId)).collect { event ->
+                    if (event is AgentEvent.RetryScheduled) retryScheduled.complete(Unit)
+                }
+            } catch (_: CancellationException) {
+                // Host interruption is represented by durable recovery state.
+            }
+        }
+        retryScheduled.await()
+
+        val recovery = runner.interrupt(sessionId)
+        withTimeout(2_000L) { collection.join() }
+
+        assertEquals(0, recovery.state?.retryCount)
+        assertEquals(0, assertNotNull(persistence.load(sessionId)).snapshot.state.retryCount)
     }
 
     @Test
@@ -364,6 +441,48 @@ class RuntimeStateMachineContractTest {
             assertTrue(provider.requests.isEmpty())
             assertEquals(null, persistence.load(request.sessionId))
         }
+    }
+
+    @Test
+    fun oversizedToolOriginInInitialMessages_failsBeforeProviderOrPersistence() = runTest {
+        val provider = RecordingCompleteProvider()
+        val persistence = InMemoryAgentPersistence()
+        val request = request(
+            sessionId = AgentSessionId("oversized-tool-origin"),
+            messages = listOf(
+                AgentMessage(
+                    role = MessageRole.TOOL,
+                    parts = listOf(
+                        ToolResultPart(
+                            toolCallId = "call-1",
+                            toolName = "lookup",
+                            result = JsonPrimitive("ok"),
+                            origin = ToolOrigin(
+                                sourceId = "s".repeat(32),
+                                sourceLabel = "s".repeat(32),
+                                toolId = "t".repeat(32),
+                                toolLabel = "t".repeat(32),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            runtimeConfig = RuntimeConfig(maxToolResultChars = 128),
+        )
+        val runner = DefaultAgentRunner(
+            providerRegistry = InMemoryProviderRegistry(listOf(provider)),
+            toolRegistry = InMemoryToolRegistry(),
+            persistence = persistence,
+        )
+
+        val events = runner.run(request).toList()
+
+        assertEquals(
+            AgentFailureCode.INVALID_STATE,
+            events.filterIsInstance<AgentEvent.Failed>().single().code,
+        )
+        assertTrue(provider.requests.isEmpty())
+        assertEquals(null, persistence.load(request.sessionId))
     }
 
     @Test
@@ -552,7 +671,7 @@ class RuntimeStateMachineContractTest {
     }
 
     @Test
-    fun providerErrorBeforeOutput_canRetryOnce() = runTest {
+    fun transientProviderErrorBeforeOutput_canRetryOnce() = runTest {
         val provider = FailThenCompleteProvider()
         val retryPolicy = RetryOncePolicy()
         val runner = DefaultAgentRunner(
@@ -677,6 +796,31 @@ class RuntimeStateMachineContractTest {
         }
     }
 
+    private class RetryBeforeEachTurnProvider : ProviderAdapter {
+        override val key: String = PROVIDER_KEY
+        var callCount: Int = 0
+
+        override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+            callCount += 1
+            when (callCount) {
+                1, 3 -> throw ProviderNetworkException("transient failure before output")
+                2 -> emit(
+                    providerChunk(
+                        toolCalls = listOf(
+                            ToolCallPart(
+                                toolCallId = "retry-ordinal-tool-call",
+                                toolName = TOOL_NAME,
+                                arguments = buildJsonObject { put("value", "first turn") },
+                            ),
+                        ),
+                        completed = true,
+                    ),
+                )
+                else -> emit(providerChunk(text = "complete", completed = true))
+            }
+        }
+    }
+
     private class CancellableProvider : ProviderAdapter {
         override val key: String = PROVIDER_KEY
         val started = CompletableDeferred<Unit>()
@@ -736,7 +880,7 @@ class RuntimeStateMachineContractTest {
 
         override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
             val call = ++callCount
-            if (call == 1) error("failed before output")
+            if (call == 1) throw ProviderNetworkException("failed before output")
             emit(completedChunk())
         }
     }
@@ -747,7 +891,7 @@ class RuntimeStateMachineContractTest {
 
         override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
             callCount += 1
-            error("failed before output")
+            throw ProviderNetworkException("failed before output")
         }
     }
 
@@ -770,7 +914,28 @@ class RuntimeStateMachineContractTest {
             return true
         }
 
-        override suspend fun backoffDelayMs(attempt: Int): Long = 0
+        override suspend fun backoffDelayMs(attempt: Int, error: Throwable): Long = 0
+    }
+
+    private class OrdinalRecordingRetryPolicy : RetryPolicy {
+        val decisionOrdinals = mutableListOf<Int>()
+        val backoffOrdinals = mutableListOf<Int>()
+
+        override suspend fun shouldRetry(attempt: Int, error: Throwable): Boolean {
+            decisionOrdinals += attempt
+            return true
+        }
+
+        override suspend fun backoffDelayMs(attempt: Int, error: Throwable): Long {
+            backoffOrdinals += attempt
+            return 0L
+        }
+    }
+
+    private class LongBackoffRetryPolicy : RetryPolicy {
+        override suspend fun shouldRetry(attempt: Int, error: Throwable): Boolean = true
+
+        override suspend fun backoffDelayMs(attempt: Int, error: Throwable): Long = 60_000L
     }
 
     private class RetryOncePolicy : RetryPolicy {
@@ -781,7 +946,7 @@ class RuntimeStateMachineContractTest {
             return decisionCount == 1
         }
 
-        override suspend fun backoffDelayMs(attempt: Int): Long = 0
+        override suspend fun backoffDelayMs(attempt: Int, error: Throwable): Long = 0
     }
 
     private class CountingTool : ToolExecutor {

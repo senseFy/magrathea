@@ -19,6 +19,7 @@
 | [Interruption and recovery](recovery.md) | Backgrounding, process loss, resume, and Tool replay safety |
 | [MCP](mcp.md) | Tool discovery, transports, policy, security, and lifecycle |
 | [Web Search](web-search.md) | Portable search Tool contract and citation boundary |
+| [Image Search](image-search.md) | Portable image discovery, typed media results, and chatbot projection |
 | [X Search](x-search.md) | Cross-model X Search Tool and xAI hosted wire |
 | [Behavior contracts](behavior-contracts.md) | Executable invariants and their nearest verification boundary |
 
@@ -30,9 +31,9 @@
 | [Known issues](known-issues.md) | Alpha limitations and external gates |
 | [Publishing](publishing.md) | Coordinates, local publication, and registry configuration |
 | [Release process](release-process.md) | Maintainer gates, evidence, immutable release, and rollback |
-| [Release notes](releases/v0.1.0-alpha.1.md) | First public Alpha |
+| [Release notes](releases/v0.1.0-alpha.2.md) | Current Alpha release notes |
 | [Android device baseline](android-device-baseline.md) | Recorded physical-device evidence |
-| [Performance baseline](performance-baseline.md) | Current deterministic performance measurements |
+| [Performance baseline](performance-baseline.md) | Recorded Alpha.1 deterministic measurements |
 | [Architecture decisions](adr/README.md) | Accepted design decisions |
 
 Security reports follow [SECURITY.md](../SECURITY.md). Contributions follow

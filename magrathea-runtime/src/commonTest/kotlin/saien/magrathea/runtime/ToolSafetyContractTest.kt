@@ -16,8 +16,10 @@ import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentEngineConfig
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentRequest
+import saien.magrathea.core.InlineToolImageSource
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
+import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.core.RuntimeConfig
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
@@ -28,11 +30,17 @@ import saien.magrathea.core.ToolDefinition
 import saien.magrathea.core.ToolExecutionRequest
 import saien.magrathea.core.ToolExecutionResult
 import saien.magrathea.core.ToolExecutor
+import saien.magrathea.core.ToolOrigin
 import saien.magrathea.core.ToolPermissionGateway
 import saien.magrathea.core.ToolRegistry
+import saien.magrathea.core.ToolResultAudience
+import saien.magrathea.core.ToolResultContent
+import saien.magrathea.core.ToolResultImageContent
+import saien.magrathea.core.ToolResultTextContent
 import saien.magrathea.provider.api.InMemoryProviderRegistry
 import saien.magrathea.provider.api.ProviderAdapter
 import saien.magrathea.provider.api.ProviderChunk
+import saien.magrathea.provider.api.ProviderRequest
 
 class ToolSafetyContractTest {
     @Test
@@ -203,6 +211,128 @@ class ToolSafetyContractTest {
         assertFalse(result.toString().contains(oversized))
     }
 
+    @Test
+    fun toolOriginParticipatesInTheToolResultCharacterBudget() = runTest {
+        val result = runToolCall(
+            tool = CountingTool(
+                origin = ToolOrigin(
+                    sourceId = "s".repeat(32),
+                    sourceLabel = "s".repeat(32),
+                    toolId = "t".repeat(32),
+                    toolLabel = "t".repeat(32),
+                ),
+            ),
+            advertised = listOf(CountingTool().definition),
+            runtimeConfig = RuntimeConfig(maxToolResultChars = 128),
+        )
+
+        assertTrue(result.isError)
+        assertEquals("Tool result exceeded runtime limit", result.displayText)
+    }
+
+    @Test
+    fun typedToolContentCountAndInlineByteBudgetsFailClosed() = runTest {
+        val tooMany = runToolCall(
+            tool = CountingTool(
+                resultContent = listOf(
+                    ToolResultTextContent("one", setOf(ToolResultAudience.MODEL)),
+                    ToolResultTextContent("two", setOf(ToolResultAudience.USER)),
+                ),
+            ),
+            advertised = listOf(CountingTool().definition),
+            runtimeConfig = RuntimeConfig(maxToolResultContentItems = 1),
+        )
+        assertTrue(tooMany.isError)
+        assertEquals("Tool result exceeded runtime limit", tooMany.displayText)
+
+        val tooLarge = runToolCall(
+            tool = CountingTool(
+                resultContent = listOf(
+                    ToolResultImageContent(
+                        source = InlineToolImageSource("QUFBQUFB"),
+                        mimeType = "image/png",
+                        audiences = setOf(ToolResultAudience.MODEL),
+                    ),
+                ),
+            ),
+            advertised = listOf(CountingTool().definition),
+            runtimeConfig = RuntimeConfig(maxInlineToolResultBytes = 4),
+        )
+        assertTrue(tooLarge.isError)
+        assertEquals("Tool result exceeded runtime limit", tooLarge.displayText)
+        assertFalse(tooLarge.toString().contains("QUFBQUFB"))
+
+        val previewWithoutMime = runToolCall(
+            tool = CountingTool(
+                resultContent = listOf(
+                    ToolResultImageContent(
+                        source = RemoteToolImageSource("https://example.com/image.png"),
+                        previewSource = InlineToolImageSource("QUFB"),
+                        audiences = setOf(ToolResultAudience.USER),
+                    ),
+                ),
+            ),
+            advertised = listOf(CountingTool().definition),
+        )
+        assertTrue(previewWithoutMime.isError)
+        assertEquals("Tool result exceeded runtime limit", previewWithoutMime.displayText)
+    }
+
+    @Test
+    fun providerBoundaryRemovesUserOnlyToolResultDataFromEveryField() = runTest {
+        val userOnlySecret = "USER_ONLY_RUNTIME_CANARY"
+        val provider = RecordingToolCallProvider(validToolCall)
+        val tool = object : ToolExecutor {
+            override val definition = ToolDefinition(
+                name = validToolCall.toolName,
+                description = "Boundary projection contract",
+                schema = buildJsonObject { },
+            )
+
+            override suspend fun execute(request: ToolExecutionRequest): ToolExecutionResult =
+                ToolExecutionResult(
+                    toolCallId = request.toolCall.toolCallId,
+                    toolName = request.toolCall.toolName,
+                    result = buildJsonObject { put("secret", userOnlySecret) },
+                    displayText = userOnlySecret,
+                    metadata = buildJsonObject { put("private", userOnlySecret) },
+                    content = listOf(
+                        ToolResultTextContent(
+                            "model-visible",
+                            setOf(ToolResultAudience.MODEL),
+                        ),
+                        ToolResultTextContent(
+                            userOnlySecret,
+                            setOf(ToolResultAudience.USER),
+                        ),
+                    ),
+                    modelResultVisible = false,
+                )
+        }
+        val runner = DefaultAgentRunner(
+            providerRegistry = InMemoryProviderRegistry(listOf(provider)),
+            toolRegistry = RecordingToolRegistry(tool),
+            persistence = InMemoryAgentPersistence(),
+        )
+
+        runner.run(
+            AgentRequest(
+                messages = listOf(
+                    AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("use tool"))),
+                ),
+                model = ModelDescriptor(provider = provider.key, model = "contract-model"),
+                tools = listOf(tool.definition),
+            ),
+        ).toList()
+
+        val forwarded = provider.requests.single { request ->
+            request.messages.lastOrNull()?.role == MessageRole.TOOL
+        }.messages.last().parts.single()
+        assertTrue(forwarded is saien.magrathea.core.ToolResultPart)
+        assertFalse(forwarded.toString().contains(userOnlySecret))
+        assertTrue(forwarded.toString().contains("model-visible"))
+    }
+
     private suspend fun runToolCall(
         tool: CountingTool?,
         advertised: List<ToolDefinition>,
@@ -245,10 +375,28 @@ class ToolSafetyContractTest {
         }
     }
 
+    private class RecordingToolCallProvider(
+        private val toolCall: ToolCallPart,
+    ) : ProviderAdapter {
+        override val key: String = "tool-boundary-contract-provider"
+        val requests = mutableListOf<ProviderRequest>()
+
+        override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+            requests += request
+            if (request.messages.lastOrNull()?.role == MessageRole.TOOL) {
+                emit(providerChunk(text = "done", completed = true))
+            } else {
+                emit(providerChunk(toolCalls = listOf(toolCall), completed = true))
+            }
+        }
+    }
+
     private class CountingTool(
         requiresPermission: String? = null,
         requiresApproval: Boolean = false,
         private val resultText: String = "executed",
+        private val resultContent: List<ToolResultContent> = emptyList(),
+        private val origin: ToolOrigin? = null,
     ) : ToolExecutor {
         override val definition = ToolDefinition(
             name = "contract_tool",
@@ -266,6 +414,8 @@ class ToolSafetyContractTest {
                 toolName = request.toolCall.toolName,
                 result = JsonPrimitive(resultText),
                 displayText = resultText,
+                content = resultContent,
+                origin = origin,
             )
         }
     }

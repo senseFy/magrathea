@@ -1,12 +1,15 @@
 package saien.magrathea.mcp
 
 import io.modelcontextprotocol.kotlin.sdk.types.AudioContent
+import io.modelcontextprotocol.kotlin.sdk.types.Annotations
 import io.modelcontextprotocol.kotlin.sdk.types.BlobResourceContents
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.ContentBlock
 import io.modelcontextprotocol.kotlin.sdk.types.EmbeddedResource
 import io.modelcontextprotocol.kotlin.sdk.types.ImageContent
 import io.modelcontextprotocol.kotlin.sdk.types.McpJson
 import io.modelcontextprotocol.kotlin.sdk.types.ResourceLink
+import io.modelcontextprotocol.kotlin.sdk.types.Role
 import io.modelcontextprotocol.kotlin.sdk.types.TaskSupport
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.TextResourceContents
@@ -22,6 +25,11 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import saien.magrathea.core.ToolExecutionResult
+import saien.magrathea.core.InlineToolImageSource
+import saien.magrathea.core.ToolOrigin
+import saien.magrathea.core.ToolResultAudience
+import saien.magrathea.core.ToolResultImageContent
+import saien.magrathea.core.ToolResultTextContent
 
 internal fun Tool.toDescriptor(server: McpServer): McpToolDescriptor {
     val taskSupport = when (execution?.taskSupport ?: TaskSupport.Forbidden) {
@@ -86,19 +94,52 @@ internal fun CallToolResult.toMagratheaResult(
     val result: JsonElement = structuredContent ?: buildJsonObject {
         put("content", encodedContent)
     }
-    val displayText = content.mapNotNull { block ->
+    // The encoded MCP content envelope is the durable canonical representation. Model projection
+    // uses the typed blocks so modality filtering cannot leak inline media as JSON/base64 text.
+    val modelResultVisible = structuredContent != null || content.isEmpty()
+    val userVisibleText = content
+        .filter { block -> ToolResultAudience.USER in block.toMagratheaAudiences() }
+        .mapNotNull { block ->
+            when (block) {
+                is TextContent -> block.text
+                is ResourceLink -> block.title ?: block.name.ifBlank { block.uri }
+                is EmbeddedResource -> when (val resource = block.resource) {
+                    is TextResourceContents -> resource.text
+                    is BlobResourceContents -> "[resource: ${resource.mimeType ?: "application/octet-stream"}]"
+                    is UnknownResourceContents -> "[resource: ${resource.mimeType ?: "application/octet-stream"}]"
+                }
+                is ImageContent -> "[image: ${block.mimeType}]"
+                is AudioContent -> "[audio: ${block.mimeType}]"
+            }
+        }.joinToString("\n").ifBlank { null }
+    val displayText = userVisibleText ?: if (content.isNotEmpty()) {
+        if (isError == true) "Tool failed." else "Tool completed."
+    } else {
+        null
+    }
+    val resultContent = content.mapNotNull { block ->
         when (block) {
             is TextContent -> block.text
-            is ResourceLink -> block.title ?: block.name.ifBlank { block.uri }
-            is EmbeddedResource -> when (val resource = block.resource) {
-                is TextResourceContents -> resource.text
-                is BlobResourceContents -> "[resource: ${resource.mimeType ?: "application/octet-stream"}]"
-                is UnknownResourceContents -> "[resource: ${resource.mimeType ?: "application/octet-stream"}]"
-            }
-            is ImageContent -> "[image: ${block.mimeType}]"
-            is AudioContent -> "[audio: ${block.mimeType}]"
+                .takeIf(String::isNotBlank)
+                ?.let { text ->
+                    ToolResultTextContent(
+                        text = text,
+                        audiences = block.toMagratheaAudiences(),
+                    )
+                }
+            is ImageContent -> ToolResultImageContent(
+                source = InlineToolImageSource(block.data),
+                mimeType = block.mimeType.trim().lowercase(),
+                audiences = block.toMagratheaAudiences(),
+            )
+            is ResourceLink -> block.toModelSafeTextContent()
+            is EmbeddedResource -> block.toModelSafeTextContent()
+            is AudioContent -> ToolResultTextContent(
+                text = "[audio content omitted: ${block.mimeType}]",
+                audiences = block.toMagratheaAudiences(),
+            )
         }
-    }.joinToString("\n").ifBlank { null }
+    }
 
     return ToolExecutionResult(
         toolCallId = toolCallId,
@@ -106,15 +147,81 @@ internal fun CallToolResult.toMagratheaResult(
         result = result,
         isError = isError == true,
         displayText = displayText,
+        content = resultContent,
+        modelResultVisible = modelResultVisible,
         metadata = buildJsonObject {
-            put(MCP_SERVER_ID_KEY, server.id)
-            put(MCP_SERVER_NAME_KEY, server.displayName)
-            put(MCP_TOOL_NAME_KEY, remoteToolName)
-            put(MCP_TOOL_TITLE_KEY, toolTitle)
-            if (structuredContent != null) {
-                put("mcpContent", encodedContent)
-            }
             meta?.let { put("mcpMeta", it) }
         },
+        origin = mcpToolOriginOrNull(server, remoteToolName, toolTitle),
     )
+}
+
+private fun mcpToolOriginOrNull(
+    server: McpServer,
+    remoteToolName: String,
+    toolTitle: String,
+): ToolOrigin? {
+    val label = toolTitle.takeIf(String::isSafeToolOriginValue) ?: remoteToolName
+    return runCatching {
+        ToolOrigin(
+            sourceId = server.id,
+            sourceLabel = server.displayName,
+            toolId = remoteToolName,
+            toolLabel = label,
+        )
+    }.getOrNull()
+}
+
+private fun String.isSafeToolOriginValue(): Boolean =
+    length in 1..MAX_TOOL_ORIGIN_VALUE_CHARS &&
+        this == trim() &&
+        none(Char::isMcpControlCharacter)
+
+private const val MAX_TOOL_ORIGIN_VALUE_CHARS = 256
+
+private fun ResourceLink.toModelSafeTextContent(): ToolResultTextContent = ToolResultTextContent(
+    text = buildString {
+        append(title ?: name.ifBlank { uri })
+        if (uri.isNotBlank()) append("\n").append(uri)
+        description?.takeIf(String::isNotBlank)?.let { append("\n").append(it) }
+    },
+    audiences = toMagratheaAudiences(),
+)
+
+private fun EmbeddedResource.toModelSafeTextContent(): ToolResultTextContent = ToolResultTextContent(
+    text = when (val resource = resource) {
+        is TextResourceContents -> resource.text.takeIf(String::isNotBlank)
+            ?: "[empty text resource: ${resource.mimeType ?: "text/plain"}]"
+        is BlobResourceContents ->
+            "[binary resource content omitted: ${resource.mimeType ?: "application/octet-stream"}]"
+        is UnknownResourceContents ->
+            "[resource content omitted: ${resource.mimeType ?: "application/octet-stream"}]"
+    },
+    audiences = toMagratheaAudiences(),
+)
+
+private val DEFAULT_TOOL_RESULT_AUDIENCES = setOf(
+    ToolResultAudience.MODEL,
+    ToolResultAudience.USER,
+)
+
+private fun ContentBlock.toMagratheaAudiences(): Set<ToolResultAudience> = when (this) {
+    is TextContent -> annotations.toMagratheaAudiences()
+    is ImageContent -> annotations.toMagratheaAudiences()
+    is AudioContent -> annotations.toMagratheaAudiences()
+    is ResourceLink -> annotations.toMagratheaAudiences()
+    is EmbeddedResource -> annotations.toMagratheaAudiences()
+}
+
+private fun Annotations?.toMagratheaAudiences(): Set<ToolResultAudience> {
+    val declared = this?.audience.orEmpty()
+    if (declared.isEmpty()) {
+        return DEFAULT_TOOL_RESULT_AUDIENCES
+    }
+    return declared.mapTo(linkedSetOf()) { role ->
+        when (role) {
+            Role.Assistant -> ToolResultAudience.MODEL
+            Role.User -> ToolResultAudience.USER
+        }
+    }
 }

@@ -8,7 +8,7 @@ is in [Publishing](publishing.md).
 The release version is `magrathea.version` in `gradle.properties`.
 
 ```bash
-scripts/publish-sdk --print --version 0.1.0-alpha.1
+scripts/publish-sdk --print --version 0.1.0-alpha.2
 ```
 
 The release tag is `v<magrathea.version>`. Its matching changelog entry must have a date and
@@ -115,8 +115,8 @@ Release sequence:
 5. Create and push one annotated tag:
 
    ```bash
-   git tag -a v0.1.0-alpha.1 -m "Magrathea 0.1.0-alpha.1"
-   git push origin v0.1.0-alpha.1
+   git tag -a v0.1.0-alpha.2 -m "Magrathea 0.1.0-alpha.2"
+   git push origin v0.1.0-alpha.2
    ```
 
 6. Require `Publish Magrathea Release` to pass. It promotes the oldest successful candidate for the

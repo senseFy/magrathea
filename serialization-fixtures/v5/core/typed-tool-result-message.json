@@ -1,0 +1,80 @@
+{
+  "id": "tool-message-fixture-1",
+  "role": "TOOL",
+  "parts": [
+    {
+      "type": "tool_result",
+      "toolCallId": "image-call-fixture-1",
+      "toolName": "image_search",
+      "result": {
+        "type": "image_search_results",
+        "count": 1
+      },
+      "displayText": "1 image",
+      "metadata": {
+        "query": "kmp architecture"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "One image matched the query.",
+          "audiences": [
+            "MODEL"
+          ]
+        },
+        {
+          "type": "image",
+          "source": {
+            "type": "remote_https",
+            "uri": "https://images.example.com/kmp-architecture.jpg"
+          },
+          "previewSource": {
+            "type": "attachment_reference",
+            "uri": "attachment-preview-fixture-1"
+          },
+          "previewMimeType": "image/jpeg",
+          "mimeType": "image/jpeg",
+          "title": "Kotlin Multiplatform architecture",
+          "altText": "A Kotlin Multiplatform architecture diagram",
+          "width": 1280,
+          "height": 720,
+          "attribution": {
+            "title": "Example source",
+            "url": "https://example.com/kmp-architecture",
+            "license": "CC BY 4.0",
+            "licenseUrl": "https://creativecommons.org/licenses/by/4.0/"
+          },
+          "audiences": [
+            "USER"
+          ],
+          "reference": {
+            "value": "tool-result:execution-fixture-1:1"
+          }
+        }
+      ],
+      "providerMetadata": {
+        "provider": "fixture"
+      },
+      "modelResultVisible": false,
+      "origin": {
+        "sourceId": "image-catalog-fixture",
+        "sourceLabel": "Image catalog",
+        "toolId": "image_search",
+        "toolLabel": "Image search"
+      }
+    },
+    {
+      "type": "tool_result",
+      "toolCallId": "search-call-fixture-1",
+      "toolName": "web_search",
+      "result": {
+        "code": "private-provider-code"
+      },
+      "isError": true,
+      "displayText": "Search failed.",
+      "userErrorCode": "search-unavailable",
+      "modelResultVisible": false
+    }
+  ],
+  "createdAtEpochMs": 1700000000003
+}

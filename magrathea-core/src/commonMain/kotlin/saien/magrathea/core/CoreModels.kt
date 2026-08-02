@@ -12,8 +12,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonPrimitive
 
 @Serializable
 data class AgentSessionId(val value: String) {
@@ -167,6 +165,8 @@ data class RuntimeConfig(
     val contextManagement: ContextManagementConfig = ContextManagementConfig(),
     val maxProviderRetries: Int = 2,
     val maxToolResultChars: Int = 1_048_576,
+    val maxToolResultContentItems: Int = 32,
+    val maxInlineToolResultBytes: Int = 20 * 1_024 * 1_024,
     val maxInlineAttachmentBytes: Int = 20 * 1_024 * 1_024,
     val toolExecutionMode: ToolExecutionMode = ToolExecutionMode.PARALLEL,
     val defaultToolTimeoutMillis: Long = 120_000,
@@ -176,6 +176,12 @@ data class RuntimeConfig(
         require(maxTurns > 0) { "maxTurns must be greater than zero" }
         require(maxProviderRetries >= 0) { "maxProviderRetries must not be negative" }
         require(maxToolResultChars > 0) { "maxToolResultChars must be greater than zero" }
+        require(maxToolResultContentItems > 0) {
+            "maxToolResultContentItems must be greater than zero"
+        }
+        require(maxInlineToolResultBytes > 0) {
+            "maxInlineToolResultBytes must be greater than zero"
+        }
         require(maxInlineAttachmentBytes > 0) { "maxInlineAttachmentBytes must be greater than zero" }
         require(defaultToolTimeoutMillis > 0) { "defaultToolTimeoutMillis must be greater than zero" }
         require(runTimeoutMillis > 0) { "runTimeoutMillis must be greater than zero" }
@@ -236,6 +242,16 @@ data class AgentRequest(
     val engine: AgentEngineConfig = AgentEngineConfig(),
 )
 
+/** Input modalities accepted by a concrete model, independently from its Provider wire protocol. */
+@Serializable
+enum class ModelInputModality {
+    TEXT,
+    IMAGE,
+    AUDIO,
+    VIDEO,
+    DOCUMENT,
+}
+
 /** Provider and model capability identity used for routing and request validation. */
 @Serializable
 data class ModelDescriptor(
@@ -246,7 +262,12 @@ data class ModelDescriptor(
     val supportsReasoning: Boolean = false,
     val supportsStreaming: Boolean = false,
     val contextWindowTokens: Long? = null,
-)
+    val inputModalities: Set<ModelInputModality> = setOf(ModelInputModality.TEXT),
+) {
+    init {
+        require(inputModalities.isNotEmpty()) { "Model input modalities must not be empty" }
+    }
+}
 
 @Serializable
 data class AgentCheckpoint(
@@ -282,11 +303,41 @@ data class AgentCheckpoint(
 data class AgentResumeCursor(
     val turn: Int,
     val phase: AgentResumePhase,
-    val providerAttempt: Int = 0,
+    val provider: AgentProviderInvocationCursor = AgentProviderInvocationCursor(),
 ) {
     init {
         require(turn >= 0) { "Resume cursor turn must not be negative" }
-        require(providerAttempt >= 0) { "Provider attempt must not be negative" }
+        require(provider.pending == null || phase == AgentResumePhase.MODEL_PENDING) {
+            "A pending Provider invocation requires the MODEL_PENDING phase"
+        }
+    }
+}
+
+/** Durable allocation state for physical Provider invocations in one logical Agent run. */
+@Serializable
+data class AgentProviderInvocationCursor(
+    /** The next physical-attempt ordinal that has not yet been allocated. */
+    val nextPhysicalAttempt: Int = 0,
+    val pending: AgentPendingProviderInvocation? = null,
+) {
+    init {
+        require(nextPhysicalAttempt >= 0) { "Next physical Provider attempt must not be negative" }
+        require(pending == null || nextPhysicalAttempt > 0) {
+            "A pending Provider invocation requires an allocated physical attempt"
+        }
+    }
+}
+
+/** Durable identity for one claimed Provider invocation. */
+@Serializable
+data class AgentPendingProviderInvocation(
+    val requestId: String,
+    val purpose: ProviderRequestPurpose,
+    val inputIdentity: String,
+) {
+    init {
+        require(requestId.isNotBlank()) { "Pending Provider request ID must not be blank" }
+        require(inputIdentity.isNotBlank()) { "Pending Provider input identity must not be blank" }
     }
 }
 
@@ -345,12 +396,17 @@ data class AgentStateSnapshot(
     val metadata: JsonObject = buildJsonObject { },
     val turn: Int = 0,
     val status: AgentStatus = AgentStatus.IDLE,
+    /** Transient pre-output retries actually started by RetryPolicy in this logical Agent run. */
     val retryCount: Int = 0,
     val stopReason: StopReason? = null,
     val usage: TokenUsage = TokenUsage(),
     val latestRequestUsage: TokenUsage = TokenUsage(),
     val contextManagement: ContextManagementState = ContextManagementState(),
-)
+) {
+    init {
+        require(retryCount >= 0) { "Retry count must not be negative" }
+    }
+}
 
 /** Persistent Provider-context projection state; authoritative conversation messages remain intact. */
 @Serializable
@@ -536,6 +592,223 @@ data class ToolCallPart(
     override val providerMetadata: JsonObject? = null,
 ) : MessagePart
 
+/**
+ * Stable identity for media owned by a canonical Tool result.
+ *
+ * The value is opaque to products. [toUri] is the text-safe representation a model may echo;
+ * [parseUri] accepts only Magrathea's canonical encoding.
+ */
+@Serializable
+data class MediaReference(val value: String) {
+    init {
+        require(value.isNotBlank()) { "Media reference must not be blank" }
+    }
+
+    fun toUri(): String = MEDIA_REFERENCE_URI_PREFIX + value.encodeMediaReferenceComponent()
+
+    companion object {
+        fun forToolResult(executionId: String, contentIndex: Int): MediaReference {
+            require(executionId.isNotBlank()) { "Tool execution ID must not be blank" }
+            require(contentIndex >= 0) { "Tool result content index must not be negative" }
+            return MediaReference("tool-result:$executionId:$contentIndex")
+        }
+
+        fun parseUri(uri: String): MediaReference? {
+            if (!uri.startsWith(MEDIA_REFERENCE_URI_PREFIX)) return null
+            val encoded = uri.removePrefix(MEDIA_REFERENCE_URI_PREFIX)
+            val value = encoded.decodeMediaReferenceComponent() ?: return null
+            val reference = runCatching { MediaReference(value) }.getOrNull() ?: return null
+            return reference.takeIf { it.toUri() == uri }
+        }
+    }
+}
+
+/** Intended consumer of one unstructured Tool result content block. */
+@Serializable
+enum class ToolResultAudience {
+    MODEL,
+    USER,
+}
+
+/**
+ * Bounded presentation identity of the external source that produced a Tool result.
+ *
+ * This is presentation metadata, not a routing or authorization contract. IDs let products match
+ * the result to host-owned configuration; labels are bounded, untrusted display text. Protocol
+ * adapters may populate this without exposing transport configuration or arbitrary remote
+ * metadata.
+ */
+@Serializable
+data class ToolOrigin(
+    val sourceId: String,
+    val sourceLabel: String,
+    val toolId: String,
+    val toolLabel: String,
+) {
+    init {
+        requireValidToolOriginValue(sourceId, "sourceId")
+        requireValidToolOriginValue(sourceLabel, "sourceLabel")
+        requireValidToolOriginValue(toolId, "toolId")
+        requireValidToolOriginValue(toolLabel, "toolLabel")
+    }
+}
+
+/** One typed, unstructured content block returned by a Tool. */
+@Serializable
+sealed interface ToolResultContent {
+    val audiences: Set<ToolResultAudience>
+}
+
+@Serializable
+@SerialName("text")
+data class ToolResultTextContent(
+    val text: String,
+    override val audiences: Set<ToolResultAudience>,
+) : ToolResultContent {
+    init {
+        require(text.isNotBlank()) { "Tool result text must not be blank" }
+        require(audiences.isNotEmpty()) { "Tool result audiences must not be empty" }
+    }
+}
+
+@Serializable
+sealed interface ToolImageSource
+
+@Serializable
+@SerialName("remote_https")
+data class RemoteToolImageSource(
+    val uri: String,
+) : ToolImageSource {
+    init {
+        require(uri.isHttpsToolMediaUrl()) {
+            "Remote Tool image URI must use valid HTTPS syntax"
+        }
+    }
+}
+
+@Serializable
+@SerialName("inline_base64")
+data class InlineToolImageSource(
+    val data: String,
+) : ToolImageSource {
+    init {
+        require(data.isNotBlank()) { "Inline Tool image data must not be blank" }
+    }
+}
+
+@Serializable
+@SerialName("attachment_reference")
+data class ToolImageAttachmentReference(
+    val uri: String,
+) : ToolImageSource {
+    init {
+        require(uri.isNotBlank()) { "Tool image attachment reference must not be blank" }
+    }
+}
+
+@Serializable
+data class ToolMediaAttribution(
+    val title: String? = null,
+    val url: String,
+    val license: String? = null,
+    val licenseUrl: String? = null,
+) {
+    init {
+        require(url.isHttpsToolMediaUrl()) {
+            "Tool media attribution URL must use valid HTTPS syntax"
+        }
+        require(licenseUrl == null || licenseUrl.isHttpsToolMediaUrl()) {
+            "Tool media license URL must use valid HTTPS syntax"
+        }
+    }
+}
+
+@Serializable
+@SerialName("image")
+data class ToolResultImageContent(
+    val source: ToolImageSource,
+    val previewSource: ToolImageSource? = null,
+    val previewMimeType: String? = null,
+    val mimeType: String? = null,
+    val title: String? = null,
+    val altText: String? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+    val attribution: ToolMediaAttribution? = null,
+    override val audiences: Set<ToolResultAudience>,
+    /** Runtime-owned identity used by products to resolve model-authored media references. */
+    val reference: MediaReference? = null,
+) : ToolResultContent {
+    init {
+        require(audiences.isNotEmpty()) { "Tool result audiences must not be empty" }
+        require(mimeType == null || mimeType.isCanonicalImageMimeType()) {
+            "Tool result image MIME type must be canonical"
+        }
+        require(previewSource != null || previewMimeType == null) {
+            "Tool result preview MIME type requires a preview source"
+        }
+        require(previewMimeType == null || previewMimeType.isCanonicalImageMimeType()) {
+            "Tool result preview image MIME type must be canonical"
+        }
+        require(width == null || width > 0) { "Tool result image width must be positive" }
+        require(height == null || height > 0) { "Tool result image height must be positive" }
+    }
+}
+
+private const val MEDIA_REFERENCE_URI_PREFIX = "magrathea://media/"
+private const val MEDIA_REFERENCE_HEX = "0123456789ABCDEF"
+
+private fun String.encodeMediaReferenceComponent(): String = buildString {
+    encodeToByteArray().forEach { byte ->
+        val value = byte.toInt() and 0xff
+        val character = value.toChar()
+        if (character.isMediaReferenceUnreserved()) {
+            append(character)
+        } else {
+            append('%')
+            append(MEDIA_REFERENCE_HEX[value ushr 4])
+            append(MEDIA_REFERENCE_HEX[value and 0x0f])
+        }
+    }
+}
+
+private fun String.decodeMediaReferenceComponent(): String? {
+    if (isEmpty()) return null
+    val bytes = ByteArray(length)
+    var byteCount = 0
+    var index = 0
+    while (index < length) {
+        val character = this[index]
+        when {
+            character == '%' -> {
+                if (index + 2 >= length) return null
+                val high = this[index + 1].mediaReferenceHexValue() ?: return null
+                val low = this[index + 2].mediaReferenceHexValue() ?: return null
+                bytes[byteCount++] = ((high shl 4) or low).toByte()
+                index += 3
+            }
+            character.isMediaReferenceUnreserved() -> {
+                bytes[byteCount++] = character.code.toByte()
+                index += 1
+            }
+            else -> return null
+        }
+    }
+    return runCatching {
+        bytes.copyOf(byteCount).decodeToString(throwOnInvalidSequence = true)
+    }.getOrNull()
+}
+
+private fun Char.isMediaReferenceUnreserved(): Boolean =
+    this in 'a'..'z' || this in 'A'..'Z' || this in '0'..'9' ||
+        this == '-' || this == '.' || this == '_' || this == '~'
+
+private fun Char.mediaReferenceHexValue(): Int? = when (this) {
+    in '0'..'9' -> code - '0'.code
+    in 'A'..'F' -> code - 'A'.code + 10
+    else -> null
+}
+
 @Serializable
 @SerialName("tool_result")
 data class ToolResultPart(
@@ -544,9 +817,20 @@ data class ToolResultPart(
     val result: JsonElement,
     val isError: Boolean = false,
     val displayText: String? = null,
+    /** Optional stable, user-safe failure code for product projections. */
+    val userErrorCode: String? = null,
     val metadata: JsonObject = buildJsonObject { },
+    val content: List<ToolResultContent> = emptyList(),
     override val providerMetadata: JsonObject? = null,
-) : MessagePart
+    /** Whether canonical [result] is model-visible; typed [content] uses its own audiences. */
+    val modelResultVisible: Boolean = true,
+    /** Optional bounded presentation identity of the external Tool source. */
+    val origin: ToolOrigin? = null,
+) : MessagePart {
+    init {
+        requireValidUserErrorCode(userErrorCode, isError)
+    }
+}
 
 @Serializable
 @SerialName("attachment")
@@ -617,6 +901,32 @@ private fun inferImageMimeTypeFromUri(uri: String): String? {
     }
 }
 
+private fun String.isCanonicalImageMimeType(): Boolean =
+    startsWith("image/") &&
+        this == lowercase() &&
+        this == trim() &&
+        count { it == '/' } == 1 &&
+        substringAfter('/').isNotEmpty() &&
+        none(Char::isWhitespace)
+
+private fun String.isHttpsToolMediaUrl(): Boolean {
+    if (
+        length !in 1..MAX_TOOL_MEDIA_URL_CHARS ||
+        any { it.isWhitespace() || it.code < 0x20 || it.code == 0x7f }
+    ) {
+        return false
+    }
+    val separator = indexOf("://")
+    if (separator <= 0 || substring(0, separator).lowercase() != "https") return false
+    val authorityStart = separator + 3
+    val authorityEnd = indexOfAny(charArrayOf('/', '?', '#'), authorityStart)
+        .let { if (it < 0) length else it }
+    val authority = substring(authorityStart, authorityEnd)
+    return authority.isNotBlank() && '@' !in authority
+}
+
+private const val MAX_TOOL_MEDIA_URL_CHARS = 2_048
+
 /**
  * Immutable Tool contract advertised to a model and enforced again at execution time.
  *
@@ -671,8 +981,19 @@ data class ToolExecutionResult(
     val result: JsonElement,
     val isError: Boolean = false,
     val displayText: String? = null,
+    /** Optional stable, user-safe failure code for product projections. */
+    val userErrorCode: String? = null,
     val metadata: JsonObject = buildJsonObject { },
-)
+    val content: List<ToolResultContent> = emptyList(),
+    /** Whether canonical [result] is model-visible; typed [content] uses its own audiences. */
+    val modelResultVisible: Boolean = true,
+    /** Optional bounded presentation identity of the external Tool source. */
+    val origin: ToolOrigin? = null,
+) {
+    init {
+        requireValidUserErrorCode(userErrorCode, isError)
+    }
+}
 
 @Serializable
 data class Citation(
@@ -681,34 +1002,56 @@ data class Citation(
     val snippet: String,
 )
 
-fun ToolExecutionResult.outputText(): String {
-    return displayText ?: when (result) {
-        is JsonPrimitive -> result.contentOrNull ?: result.toString()
-        else -> result.toString()
-    }
-}
-
 fun ToolExecutionResult.toMessagePart(providerMetadata: JsonObject? = null): ToolResultPart {
     return ToolResultPart(
         toolCallId = toolCallId,
         toolName = toolName,
         result = result,
         isError = isError,
-        displayText = outputText(),
+        displayText = displayText,
+        userErrorCode = userErrorCode,
         metadata = metadata,
+        content = content,
         providerMetadata = providerMetadata,
+        modelResultVisible = modelResultVisible,
+        origin = origin,
     )
 }
 
-fun ToolExecutionResult.citations(): List<Citation> {
-    return metadata.citations()
+private fun requireValidToolOriginValue(value: String, field: String) {
+    require(
+        value.length in 1..MAX_TOOL_ORIGIN_VALUE_CHARS &&
+            value == value.trim() &&
+            value.none { it.code in 0..31 || it.code == 127 },
+    ) {
+        "Tool origin $field must be bounded, trimmed, and free of control characters"
+    }
 }
 
-fun ToolResultPart.outputText(): String {
-    return displayText ?: when (result) {
-        is JsonPrimitive -> result.contentOrNull ?: result.toString()
-        else -> result.toString()
+private fun requireValidUserErrorCode(code: String?, isError: Boolean) {
+    if (code == null) return
+    require(isError) { "A user error code requires an error Tool result" }
+    require(
+        code.length in 1..MAX_USER_ERROR_CODE_CHARS &&
+            code.all { character ->
+                character in 'a'..'z' ||
+                    character in 'A'..'Z' ||
+                    character in '0'..'9' ||
+                    character == '-' ||
+                    character == '_' ||
+                    character == '.' ||
+                    character == ':'
+            },
+    ) {
+        "User error code must use 1-$MAX_USER_ERROR_CODE_CHARS ASCII code characters"
     }
+}
+
+private const val MAX_USER_ERROR_CODE_CHARS = 128
+private const val MAX_TOOL_ORIGIN_VALUE_CHARS = 256
+
+fun ToolExecutionResult.citations(): List<Citation> {
+    return metadata.citations()
 }
 
 fun ToolResultPart.citations(): List<Citation> {
@@ -716,12 +1059,12 @@ fun ToolResultPart.citations(): List<Citation> {
 }
 
 private fun JsonObject.citations(): List<Citation> {
-    return this["citations"]?.jsonArray?.mapNotNull { item ->
+    return (this["citations"] as? JsonArray)?.mapNotNull { item ->
         val obj = item as? JsonObject ?: return@mapNotNull null
         Citation(
-            title = obj["title"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-            url = obj["url"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-            snippet = obj["snippet"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            title = (obj["title"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
+            url = (obj["url"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
+            snippet = (obj["snippet"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
         )
     }.orEmpty()
 }

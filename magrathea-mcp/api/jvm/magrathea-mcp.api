@@ -257,23 +257,6 @@ public final class saien/magrathea/mcp/McpToolIcon {
 	public fun toString ()Ljava/lang/String;
 }
 
-public final class saien/magrathea/mcp/McpToolIdentity {
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun component2 ()Ljava/lang/String;
-	public final fun component3 ()Ljava/lang/String;
-	public final fun component4 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/mcp/McpToolIdentity;
-	public static synthetic fun copy$default (Lsaien/magrathea/mcp/McpToolIdentity;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/mcp/McpToolIdentity;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getRemoteToolName ()Ljava/lang/String;
-	public final fun getServerId ()Ljava/lang/String;
-	public final fun getServerName ()Ljava/lang/String;
-	public final fun getToolTitle ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
 public final class saien/magrathea/mcp/McpToolNames {
 	public static final field INSTANCE Lsaien/magrathea/mcp/McpToolNames;
 	public final fun runtimeName (Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
@@ -310,10 +293,6 @@ public final class saien/magrathea/mcp/McpToolRegistry : saien/magrathea/core/To
 	public fun <init> (Lkotlin/jvm/functions/Function0;)V
 	public fun definitions ()Ljava/util/List;
 	public fun find (Ljava/lang/String;)Lsaien/magrathea/core/ToolExecutor;
-}
-
-public final class saien/magrathea/mcp/McpToolResultMetadataKt {
-	public static final fun mcpToolIdentityOrNull (Lkotlinx/serialization/json/JsonObject;)Lsaien/magrathea/mcp/McpToolIdentity;
 }
 
 public abstract interface class saien/magrathea/mcp/McpTransportFactory {

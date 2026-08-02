@@ -32,9 +32,9 @@ one or more Provider adapters:
 
 ```kotlin
 dependencies {
-    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.1")
-    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.1")
-    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.1")
+    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.2")
+    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.2")
+    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.2")
 }
 ```
 
@@ -112,5 +112,6 @@ by providing:
 - [Context management](context-management.md)
 - [MCP](mcp.md)
 - [Web Search](web-search.md)
+- [Image Search](image-search.md)
 - [X Search](x-search.md)
 - [Behavior contracts](behavior-contracts.md)

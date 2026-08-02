@@ -1,9 +1,7 @@
 package saien.magrathea.chatbot
 
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
 import saien.magrathea.core.AgentFailureCode
 import saien.magrathea.core.AgentInterruption
 import saien.magrathea.core.AgentInterruptionReason
@@ -11,9 +9,13 @@ import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AttachmentPart
 import saien.magrathea.core.CredentialRef
 import saien.magrathea.core.ContextManagementState
+import saien.magrathea.core.InlineToolImageSource
 import saien.magrathea.core.MessageBlockPhase
 import saien.magrathea.core.MessageRole
+import saien.magrathea.core.MediaReference
 import saien.magrathea.core.ModelDescriptor
+import saien.magrathea.core.ProviderInterruptionPhase
+import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.core.ReasoningContentKind
 import saien.magrathea.core.ReasoningPart
 import saien.magrathea.core.StopReason
@@ -21,9 +23,14 @@ import saien.magrathea.core.TextPart
 import saien.magrathea.core.TokenUsage
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolExecutionResult
+import saien.magrathea.core.ToolImageAttachmentReference
+import saien.magrathea.core.ToolImageSource
+import saien.magrathea.core.ToolOrigin
+import saien.magrathea.core.ToolResultAudience
+import saien.magrathea.core.ToolResultContent
+import saien.magrathea.core.ToolResultImageContent
 import saien.magrathea.core.ToolResultPart
 import saien.magrathea.core.citations
-import saien.magrathea.core.outputText
 import saien.magrathea.core.text
 
 enum class ChatbotStatus {
@@ -62,15 +69,41 @@ enum class ChatbotStopReason {
 
 enum class ChatbotInterruptionReason {
     HOST_REQUESTED,
-    PROVIDER_NETWORK,
-    PROVIDER_TIMEOUT,
+    PROVIDER_FAILURE,
     ORPHANED,
+}
+
+enum class ChatbotProviderInterruptionPhase {
+    BEFORE_FIRST_EVENT,
+    AFTER_FIRST_EVENT,
+}
+
+data class ChatbotProviderInterruption(
+    val failure: ChatbotFailure,
+    val phase: ChatbotProviderInterruptionPhase,
+    val retryAtEpochMs: Long? = null,
+) {
+    init {
+        require(
+            failure == ChatbotFailure.NETWORK ||
+                failure == ChatbotFailure.TIMEOUT ||
+                failure == ChatbotFailure.RATE_LIMITED ||
+                failure == ChatbotFailure.PROVIDER,
+        ) { "Provider interruption must describe a recoverable Provider failure" }
+        require(retryAtEpochMs == null || retryAtEpochMs >= 0)
+    }
 }
 
 data class ChatbotInterruption(
     val reason: ChatbotInterruptionReason,
+    val provider: ChatbotProviderInterruption? = null,
     val occurredAtEpochMs: Long,
-)
+) {
+    init {
+        require((reason == ChatbotInterruptionReason.PROVIDER_FAILURE) == (provider != null))
+        require(provider?.retryAtEpochMs == null || provider.retryAtEpochMs >= occurredAtEpochMs)
+    }
+}
 
 data class ChatbotTextBlock(
     val text: String,
@@ -127,6 +160,48 @@ data class ChatbotToolCall(
     val partial: Boolean,
 )
 
+sealed interface ChatbotToolImageSource
+
+data class ChatbotRemoteImageSource(
+    val uri: String,
+) : ChatbotToolImageSource
+
+data class ChatbotInlineImageSource(
+    val data: String,
+) : ChatbotToolImageSource
+
+data class ChatbotImageAttachmentReference(
+    val uri: String,
+) : ChatbotToolImageSource
+
+data class ChatbotToolMediaAttribution(
+    val title: String?,
+    val url: String,
+    val license: String?,
+    val licenseUrl: String?,
+)
+
+/** Bounded presentation identity whose labels remain untrusted external text. */
+data class ChatbotToolOrigin(
+    val sourceId: String,
+    val sourceLabel: String,
+    val toolId: String,
+    val toolLabel: String,
+)
+
+data class ChatbotToolImage(
+    val source: ChatbotToolImageSource,
+    val previewSource: ChatbotToolImageSource?,
+    val previewMimeType: String?,
+    val mimeType: String?,
+    val title: String?,
+    val altText: String?,
+    val width: Int?,
+    val height: Int?,
+    val attribution: ChatbotToolMediaAttribution?,
+    val reference: MediaReference? = null,
+)
+
 data class ChatbotToolResult(
     val id: String,
     val name: String,
@@ -134,7 +209,8 @@ data class ChatbotToolResult(
     val isError: Boolean,
     val errorCode: String? = null,
     val citations: List<ChatbotCitation> = emptyList(),
-    val metadata: JsonObject = buildJsonObject { },
+    val images: List<ChatbotToolImage> = emptyList(),
+    val origin: ChatbotToolOrigin? = null,
 )
 
 enum class ChatbotToolActivityStatus {
@@ -274,24 +350,76 @@ internal fun AgentMessage.toChatbotMessageSnapshot(): ChatbotMessageSnapshot = C
 internal fun ToolResultPart.toChatbotToolResult(): ChatbotToolResult = ChatbotToolResult(
     id = toolCallId,
     name = toolName,
-    text = outputText(),
+    text = userVisibleText(),
     isError = isError,
-    errorCode = result.errorCode(),
+    errorCode = userErrorCode,
     citations = citations().toChatbotCitations(),
-    metadata = metadata,
+    images = content.toChatbotToolImages(),
+    origin = origin?.toChatbotToolOrigin(),
 )
 
 internal fun ToolExecutionResult.toChatbotToolResult(): ChatbotToolResult = ChatbotToolResult(
     id = toolCallId,
     name = toolName,
-    text = displayText ?: result.let { value ->
-        (value as? JsonPrimitive)?.contentOrNull ?: value.toString()
-    },
+    text = userVisibleText(),
     isError = isError,
-    errorCode = result.errorCode(),
+    errorCode = userErrorCode,
     citations = citations().toChatbotCitations(),
-    metadata = metadata,
+    images = content.toChatbotToolImages(),
+    origin = origin?.toChatbotToolOrigin(),
 )
+
+private fun ToolResultPart.userVisibleText(): String = displayText
+    ?: content.userVisibleText()
+    ?: if (isError) "Tool failed." else "Tool completed."
+
+private fun ToolExecutionResult.userVisibleText(): String = displayText
+    ?: content.userVisibleText()
+    ?: if (isError) "Tool failed." else "Tool completed."
+
+private fun List<ToolResultContent>.userVisibleText(): String? =
+    filterIsInstance<saien.magrathea.core.ToolResultTextContent>()
+        .filter { ToolResultAudience.USER in it.audiences }
+        .joinToString("\n", transform = saien.magrathea.core.ToolResultTextContent::text)
+        .takeIf(String::isNotBlank)
+
+private fun ToolOrigin.toChatbotToolOrigin(): ChatbotToolOrigin = ChatbotToolOrigin(
+    sourceId = sourceId,
+    sourceLabel = sourceLabel,
+    toolId = toolId,
+    toolLabel = toolLabel,
+)
+
+private fun List<ToolResultContent>.toChatbotToolImages(): List<ChatbotToolImage> =
+    filterIsInstance<ToolResultImageContent>()
+        .filter { ToolResultAudience.USER in it.audiences }
+        .map { image ->
+            ChatbotToolImage(
+                reference = image.reference,
+                source = image.source.toChatbotSource(),
+                previewSource = image.previewSource?.toChatbotSource(),
+                previewMimeType = image.previewMimeType,
+                mimeType = image.mimeType,
+                title = image.title,
+                altText = image.altText,
+                width = image.width,
+                height = image.height,
+                attribution = image.attribution?.let {
+                    ChatbotToolMediaAttribution(
+                        title = it.title,
+                        url = it.url,
+                        license = it.license,
+                        licenseUrl = it.licenseUrl,
+                    )
+                },
+            )
+        }
+
+private fun ToolImageSource.toChatbotSource(): ChatbotToolImageSource = when (this) {
+    is RemoteToolImageSource -> ChatbotRemoteImageSource(uri)
+    is InlineToolImageSource -> ChatbotInlineImageSource(data)
+    is ToolImageAttachmentReference -> ChatbotImageAttachmentReference(uri)
+}
 
 internal fun ToolCallPart.toChatbotToolCall(): ChatbotToolCall = ChatbotToolCall(
     id = toolCallId,
@@ -299,12 +427,6 @@ internal fun ToolCallPart.toChatbotToolCall(): ChatbotToolCall = ChatbotToolCall
     arguments = arguments.toString(),
     partial = partial,
 )
-
-private fun kotlinx.serialization.json.JsonElement.errorCode(): String? =
-    (this as? JsonObject)
-        ?.get("code")
-        ?.let { value -> (value as? JsonPrimitive)?.contentOrNull }
-        ?.takeIf(String::isNotBlank)
 
 private fun List<saien.magrathea.core.Citation>.toChatbotCitations(): List<ChatbotCitation> =
     filter { citation -> citation.title.isNotBlank() && citation.url.isNotBlank() }
@@ -373,15 +495,28 @@ internal fun AgentInterruption.toChatbotInterruption(): ChatbotInterruption =
         reason = when (reason) {
             AgentInterruptionReason.HOST_REQUESTED ->
                 ChatbotInterruptionReason.HOST_REQUESTED
-            AgentInterruptionReason.PROVIDER_NETWORK ->
-                ChatbotInterruptionReason.PROVIDER_NETWORK
-            AgentInterruptionReason.PROVIDER_TIMEOUT ->
-                ChatbotInterruptionReason.PROVIDER_TIMEOUT
+            AgentInterruptionReason.PROVIDER_FAILURE ->
+                ChatbotInterruptionReason.PROVIDER_FAILURE
             AgentInterruptionReason.ORPHANED ->
                 ChatbotInterruptionReason.ORPHANED
         },
+        provider = provider?.let {
+            ChatbotProviderInterruption(
+                failure = it.code.toChatbotFailure(),
+                phase = it.phase.toChatbotProviderInterruptionPhase(),
+                retryAtEpochMs = it.retryAtEpochMs,
+            )
+        },
         occurredAtEpochMs = occurredAtEpochMs,
     )
+
+private fun ProviderInterruptionPhase.toChatbotProviderInterruptionPhase(): ChatbotProviderInterruptionPhase =
+    when (this) {
+        ProviderInterruptionPhase.BEFORE_FIRST_EVENT ->
+            ChatbotProviderInterruptionPhase.BEFORE_FIRST_EVENT
+        ProviderInterruptionPhase.AFTER_FIRST_EVENT ->
+            ChatbotProviderInterruptionPhase.AFTER_FIRST_EVENT
+    }
 
 private fun MessageRole.toChatbotRole(): ChatbotMessageRole = when (this) {
     MessageRole.USER -> ChatbotMessageRole.USER

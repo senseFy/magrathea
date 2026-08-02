@@ -35,6 +35,7 @@ import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolExecutionRequest
+import saien.magrathea.core.ToolOrigin
 
 class McpServerConnectionTest {
     @Test
@@ -172,17 +173,13 @@ class McpServerConnectionTest {
             assertEquals("hello", result.result.jsonObjectValue("echo").jsonPrimitive.content)
             assertEquals("Echo: hello", result.displayText)
             assertEquals(
-                "echo",
-                result.metadata.getValue("mcpToolName").jsonPrimitive.content,
-            )
-            assertEquals(
-                McpToolIdentity(
-                    serverId = "test-server",
-                    serverName = "Test server",
-                    remoteToolName = "echo",
-                    toolTitle = "echo",
+                ToolOrigin(
+                    sourceId = "test-server",
+                    sourceLabel = "Test server",
+                    toolId = "echo",
+                    toolLabel = "echo",
                 ),
-                result.metadata.mcpToolIdentityOrNull(),
+                result.origin,
             )
 
             server.removeTool("echo")

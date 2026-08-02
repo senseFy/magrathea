@@ -75,8 +75,7 @@ fun main() {
         auditSink = GatewayAuditSink { },
         parentScope = scope,
         config = GatewayCoordinatorConfig(
-            reconnectGraceMillis = 5_000,
-            terminalRetentionMillis = 30_000,
+            terminalRetentionMillis = 60_000,
             streamLifetimeMillis = 60_000,
         ),
     )

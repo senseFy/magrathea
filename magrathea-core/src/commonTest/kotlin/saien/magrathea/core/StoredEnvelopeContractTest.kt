@@ -3,6 +3,7 @@ package saien.magrathea.core
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -46,6 +47,30 @@ class StoredEnvelopeContractTest {
     }
 
     @Test
+    fun checkpointCodec_roundTripsPendingProviderInvocation() {
+        val snapshot = snapshot()
+        val expected = AgentCheckpoint(
+            sessionId = snapshot.sessionId,
+            runId = snapshot.runId,
+            cursor = AgentResumeCursor(
+                turn = 1,
+                phase = AgentResumePhase.MODEL_PENDING,
+                provider = AgentProviderInvocationCursor(
+                    nextPhysicalAttempt = 2,
+                    pending = AgentPendingProviderInvocation(
+                        requestId = "run-contract:turn-1:attempt-1",
+                        purpose = ProviderRequestPurpose.CONTEXT_SUMMARY,
+                        inputIdentity = "context-summary-input-1",
+                    ),
+                ),
+            ),
+            state = snapshot.state.copy(turn = 1),
+        )
+
+        assertEquals(expected, checkpointCodec.decode(checkpointCodec.encode(expected)))
+    }
+
+    @Test
     fun codecs_rejectPayloadsMissingAnyCanonicalCurrentSchemaField() {
         val session = sessionCodec.encode(snapshot())
         val missingUsage = session.replace(
@@ -62,8 +87,23 @@ class StoredEnvelopeContractTest {
         val checkpoint = checkpoint(snapshot(), turn = 0)
         val encodedCheckpoint = checkpointCodec.encode(checkpoint)
         val missingRetryCount = encodedCheckpoint.replace(",\"retryCount\":0", "")
+        val missingProviderCursor = encodedCheckpoint.replace(
+            ",\"provider\":{\"nextPhysicalAttempt\":0,\"pending\":null}",
+            "",
+        )
+        val negativeRetryCount = encodedCheckpoint.replace("\"retryCount\":0", "\"retryCount\":-1")
+        val negativeProviderAttempt = encodedCheckpoint.replace(
+            "\"nextPhysicalAttempt\":0",
+            "\"nextPhysicalAttempt\":-1",
+        )
         assertTrue(missingRetryCount != encodedCheckpoint)
+        assertTrue(missingProviderCursor != encodedCheckpoint)
+        assertTrue(negativeRetryCount != encodedCheckpoint)
+        assertTrue(negativeProviderAttempt != encodedCheckpoint)
         assertFailsWith<SerializationException> { checkpointCodec.decode(missingRetryCount) }
+        assertFailsWith<SerializationException> { checkpointCodec.decode(missingProviderCursor) }
+        assertFailsWith<SerializationException> { checkpointCodec.decode(negativeRetryCount) }
+        assertFailsWith<SerializationException> { checkpointCodec.decode(negativeProviderAttempt) }
     }
 
     @Test
@@ -104,10 +144,132 @@ class StoredEnvelopeContractTest {
     @Test
     fun sessionCodec_rejectsUnsupportedSchemaVersion() {
         val unsupported = sessionCodec.encode(snapshot())
-            .replaceFirst("\"schemaVersion\":4", "\"schemaVersion\":5")
+            .replaceFirst("\"schemaVersion\":5", "\"schemaVersion\":6")
 
         assertFailsWith<SerializationException> {
             sessionCodec.decode(unsupported)
+        }
+    }
+
+    @Test
+    fun sessionCodec_roundTripsTypedToolResultContent() {
+        val original = snapshot()
+        val toolMessage = AgentMessage(
+            id = "tool-message",
+            role = MessageRole.TOOL,
+            parts = listOf(
+                ToolResultPart(
+                    toolCallId = "image-call",
+                    toolName = "image_search",
+                    result = JsonPrimitive("result"),
+                    modelResultVisible = false,
+                    content = listOf(
+                        ToolResultImageContent(
+                            source = RemoteToolImageSource("https://cdn.example.com/image.png"),
+                            previewSource = RemoteToolImageSource(
+                                "https://cdn.example.com/preview.png",
+                            ),
+                            mimeType = "image/png",
+                            attribution = ToolMediaAttribution(
+                                "Example",
+                                "https://example.com/article",
+                            ),
+                            audiences = setOf(ToolResultAudience.USER),
+                        ),
+                    ),
+                ),
+            ),
+            createdAtEpochMs = 2L,
+        )
+        val expected = original.copy(
+            request = original.request.copy(messages = original.request.messages + toolMessage),
+            state = original.state.copy(messages = original.state.messages + toolMessage),
+        )
+
+        assertEquals(expected, sessionCodec.decode(sessionCodec.encode(expected)))
+    }
+
+    @Test
+    fun sessionCodec_roundTripsTypedProviderInterruption() {
+        val original = snapshot()
+        val expected = original.copy(
+            state = original.state.copy(
+                status = AgentStatus.INTERRUPTED,
+                stopReason = StopReason.INTERRUPTED,
+            ),
+            interruption = AgentInterruption(
+                reason = AgentInterruptionReason.PROVIDER_FAILURE,
+                provider = ProviderInterruption(
+                    code = AgentFailureCode.PROVIDER_NETWORK,
+                    phase = ProviderInterruptionPhase.AFTER_FIRST_EVENT,
+                    retryAtEpochMs = 5_000L,
+                ),
+                occurredAtEpochMs = 2_500L,
+            ),
+        )
+
+        assertEquals(expected, sessionCodec.decode(sessionCodec.encode(expected)))
+    }
+
+    @Test
+    fun sessionCodec_rejectsInconsistentProviderInterruptionMetadata() {
+        val original = snapshot()
+        val providerInterruption = original.copy(
+            state = original.state.copy(
+                status = AgentStatus.INTERRUPTED,
+                stopReason = StopReason.INTERRUPTED,
+            ),
+            interruption = AgentInterruption(
+                reason = AgentInterruptionReason.PROVIDER_FAILURE,
+                provider = ProviderInterruption(
+                    code = AgentFailureCode.PROVIDER_NETWORK,
+                    phase = ProviderInterruptionPhase.BEFORE_FIRST_EVENT,
+                    retryAtEpochMs = 5_000L,
+                ),
+                occurredAtEpochMs = 2_500L,
+            ),
+        )
+        val encodedProvider = sessionCodec.encode(providerInterruption)
+
+        assertFailsWith<SerializationException> {
+            sessionCodec.decode(
+                encodedProvider.replaceFirst(
+                    "\"reason\":\"PROVIDER_FAILURE\"",
+                    "\"reason\":\"HOST_REQUESTED\"",
+                ),
+            )
+        }
+        assertFailsWith<SerializationException> {
+            sessionCodec.decode(
+                encodedProvider.replaceFirst(
+                    "\"code\":\"PROVIDER_NETWORK\"",
+                    "\"code\":\"PROVIDER_PROTOCOL\"",
+                ),
+            )
+        }
+        assertFailsWith<SerializationException> {
+            sessionCodec.decode(encodedProvider.replaceFirst("\"retryAtEpochMs\":5000", "\"retryAtEpochMs\":-1"))
+        }
+
+        val encodedHost = sessionCodec.encode(
+            original.copy(
+                state = original.state.copy(
+                    status = AgentStatus.INTERRUPTED,
+                    stopReason = StopReason.INTERRUPTED,
+                ),
+                interruption = AgentInterruption(
+                    reason = AgentInterruptionReason.HOST_REQUESTED,
+                    occurredAtEpochMs = 2_500L,
+                ),
+            ),
+        )
+        assertFailsWith<SerializationException> {
+            sessionCodec.decode(
+                encodedHost.replaceFirst(
+                    "\"reason\":\"HOST_REQUESTED\"",
+                    "\"reason\":\"PROVIDER_FAILURE\"",
+                ),
+            )
         }
     }
 

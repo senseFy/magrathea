@@ -1,0 +1,144 @@
+{
+  "schemaVersion": 5,
+  "sdkVersion": "0.1.0-alpha.2",
+  "payload": {
+    "sessionId": {
+      "value": "session-fixture-1"
+    },
+    "runId": {
+      "value": "run-fixture-1"
+    },
+    "request": {
+      "sessionId": {
+        "value": "session-fixture-1"
+      },
+      "systemPrompt": "You are concise.",
+      "messages": [
+        {
+          "id": "user-fixture-1",
+          "role": "USER",
+          "parts": [
+            {
+              "type": "text",
+              "text": "hello",
+              "signature": null,
+              "phase": null,
+              "providerMetadata": null
+            }
+          ],
+          "createdAtEpochMs": 1700000000001,
+          "metadata": {},
+          "stopReason": null
+        }
+      ],
+      "model": {
+        "provider": "gemini",
+        "model": "gemini-contract",
+        "displayName": "gemini-contract",
+        "supportsToolCalls": true,
+        "supportsReasoning": true,
+        "supportsStreaming": true,
+        "contextWindowTokens": 128000,
+        "inputModalities": [
+          "TEXT"
+        ]
+      },
+      "tools": [],
+      "metadata": {},
+      "engine": {
+        "provider": {
+          "temperature": 0.2,
+          "maxTokens": null,
+          "options": {
+            "family": "gemini",
+            "values": {
+              "thinkingSummaries": "auto"
+            }
+          },
+          "credentialRef": {
+            "provider": "gemini",
+            "profile": "work"
+          },
+          "timeouts": {
+            "connectTimeoutMillis": 15000,
+            "firstEventTimeoutMillis": 120000,
+            "streamIdleTimeoutMillis": 90000,
+            "callTimeoutMillis": 600000
+          }
+        },
+        "runtime": {
+          "maxTurns": 8,
+          "contextManagement": {
+            "enabled": true,
+            "reserveTokens": 16384,
+            "keepRecentTokens": 20000,
+            "summaryMaxTokens": 4096,
+            "charsPerTokenEstimate": 4,
+            "toolResultSummaryMaxChars": 2000,
+            "contextWindowTokensOverride": null,
+            "overflowRetryLimit": 1
+          },
+          "maxProviderRetries": 2,
+          "maxToolResultChars": 1048576,
+          "maxToolResultContentItems": 32,
+          "maxInlineToolResultBytes": 20971520,
+          "maxInlineAttachmentBytes": 20971520,
+          "toolExecutionMode": "PARALLEL",
+          "defaultToolTimeoutMillis": 120000,
+          "runTimeoutMillis": 1800000
+        }
+      }
+    },
+    "state": {
+      "messages": [
+        {
+          "id": "user-fixture-1",
+          "role": "USER",
+          "parts": [
+            {
+              "type": "text",
+              "text": "hello",
+              "signature": null,
+              "phase": null,
+              "providerMetadata": null
+            }
+          ],
+          "createdAtEpochMs": 1700000000001,
+          "metadata": {},
+          "stopReason": null
+        }
+      ],
+      "pendingToolCalls": [],
+      "toolCallCounts": {},
+      "metadata": {},
+      "turn": 2,
+      "status": "INTERRUPTED",
+      "retryCount": 0,
+      "stopReason": "INTERRUPTED",
+      "usage": {
+        "inputTokens": 12,
+        "outputTokens": 4,
+        "reasoningTokens": 2
+      },
+      "latestRequestUsage": {
+        "inputTokens": 9,
+        "outputTokens": 4,
+        "reasoningTokens": 2
+      },
+      "contextManagement": {
+        "compaction": null,
+        "usageObservation": null
+      }
+    },
+    "interruption": {
+      "reason": "PROVIDER_FAILURE",
+      "provider": {
+        "code": "PROVIDER_NETWORK",
+        "phase": "AFTER_FIRST_EVENT",
+        "retryAtEpochMs": 1700000005002
+      },
+      "occurredAtEpochMs": 1700000000002
+    },
+    "updatedAtEpochMs": 1700000000002
+  }
+}

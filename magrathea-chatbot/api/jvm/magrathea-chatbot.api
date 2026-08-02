@@ -103,14 +103,39 @@ public final class saien/magrathea/chatbot/ChatbotHistoryItem {
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class saien/magrathea/chatbot/ChatbotImageAttachmentReference : saien/magrathea/chatbot/ChatbotToolImageSource {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lsaien/magrathea/chatbot/ChatbotImageAttachmentReference;
+	public static synthetic fun copy$default (Lsaien/magrathea/chatbot/ChatbotImageAttachmentReference;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/chatbot/ChatbotImageAttachmentReference;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getUri ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/chatbot/ChatbotInlineImageSource : saien/magrathea/chatbot/ChatbotToolImageSource {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lsaien/magrathea/chatbot/ChatbotInlineImageSource;
+	public static synthetic fun copy$default (Lsaien/magrathea/chatbot/ChatbotInlineImageSource;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/chatbot/ChatbotInlineImageSource;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getData ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class saien/magrathea/chatbot/ChatbotInterruption {
-	public fun <init> (Lsaien/magrathea/chatbot/ChatbotInterruptionReason;J)V
+	public fun <init> (Lsaien/magrathea/chatbot/ChatbotInterruptionReason;Lsaien/magrathea/chatbot/ChatbotProviderInterruption;J)V
+	public synthetic fun <init> (Lsaien/magrathea/chatbot/ChatbotInterruptionReason;Lsaien/magrathea/chatbot/ChatbotProviderInterruption;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Lsaien/magrathea/chatbot/ChatbotInterruptionReason;
-	public final fun component2 ()J
-	public final fun copy (Lsaien/magrathea/chatbot/ChatbotInterruptionReason;J)Lsaien/magrathea/chatbot/ChatbotInterruption;
-	public static synthetic fun copy$default (Lsaien/magrathea/chatbot/ChatbotInterruption;Lsaien/magrathea/chatbot/ChatbotInterruptionReason;JILjava/lang/Object;)Lsaien/magrathea/chatbot/ChatbotInterruption;
+	public final fun component2 ()Lsaien/magrathea/chatbot/ChatbotProviderInterruption;
+	public final fun component3 ()J
+	public final fun copy (Lsaien/magrathea/chatbot/ChatbotInterruptionReason;Lsaien/magrathea/chatbot/ChatbotProviderInterruption;J)Lsaien/magrathea/chatbot/ChatbotInterruption;
+	public static synthetic fun copy$default (Lsaien/magrathea/chatbot/ChatbotInterruption;Lsaien/magrathea/chatbot/ChatbotInterruptionReason;Lsaien/magrathea/chatbot/ChatbotProviderInterruption;JILjava/lang/Object;)Lsaien/magrathea/chatbot/ChatbotInterruption;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getOccurredAtEpochMs ()J
+	public final fun getProvider ()Lsaien/magrathea/chatbot/ChatbotProviderInterruption;
 	public final fun getReason ()Lsaien/magrathea/chatbot/ChatbotInterruptionReason;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
@@ -119,8 +144,7 @@ public final class saien/magrathea/chatbot/ChatbotInterruption {
 public final class saien/magrathea/chatbot/ChatbotInterruptionReason : java/lang/Enum {
 	public static final field HOST_REQUESTED Lsaien/magrathea/chatbot/ChatbotInterruptionReason;
 	public static final field ORPHANED Lsaien/magrathea/chatbot/ChatbotInterruptionReason;
-	public static final field PROVIDER_NETWORK Lsaien/magrathea/chatbot/ChatbotInterruptionReason;
-	public static final field PROVIDER_TIMEOUT Lsaien/magrathea/chatbot/ChatbotInterruptionReason;
+	public static final field PROVIDER_FAILURE Lsaien/magrathea/chatbot/ChatbotInterruptionReason;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/chatbot/ChatbotInterruptionReason;
 	public static fun values ()[Lsaien/magrathea/chatbot/ChatbotInterruptionReason;
@@ -178,6 +202,30 @@ public final class saien/magrathea/chatbot/ChatbotObservation {
 	public final fun cancel ()V
 }
 
+public final class saien/magrathea/chatbot/ChatbotProviderInterruption {
+	public fun <init> (Lsaien/magrathea/chatbot/ChatbotFailure;Lsaien/magrathea/chatbot/ChatbotProviderInterruptionPhase;Ljava/lang/Long;)V
+	public synthetic fun <init> (Lsaien/magrathea/chatbot/ChatbotFailure;Lsaien/magrathea/chatbot/ChatbotProviderInterruptionPhase;Ljava/lang/Long;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lsaien/magrathea/chatbot/ChatbotFailure;
+	public final fun component2 ()Lsaien/magrathea/chatbot/ChatbotProviderInterruptionPhase;
+	public final fun component3 ()Ljava/lang/Long;
+	public final fun copy (Lsaien/magrathea/chatbot/ChatbotFailure;Lsaien/magrathea/chatbot/ChatbotProviderInterruptionPhase;Ljava/lang/Long;)Lsaien/magrathea/chatbot/ChatbotProviderInterruption;
+	public static synthetic fun copy$default (Lsaien/magrathea/chatbot/ChatbotProviderInterruption;Lsaien/magrathea/chatbot/ChatbotFailure;Lsaien/magrathea/chatbot/ChatbotProviderInterruptionPhase;Ljava/lang/Long;ILjava/lang/Object;)Lsaien/magrathea/chatbot/ChatbotProviderInterruption;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFailure ()Lsaien/magrathea/chatbot/ChatbotFailure;
+	public final fun getPhase ()Lsaien/magrathea/chatbot/ChatbotProviderInterruptionPhase;
+	public final fun getRetryAtEpochMs ()Ljava/lang/Long;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/chatbot/ChatbotProviderInterruptionPhase : java/lang/Enum {
+	public static final field AFTER_FIRST_EVENT Lsaien/magrathea/chatbot/ChatbotProviderInterruptionPhase;
+	public static final field BEFORE_FIRST_EVENT Lsaien/magrathea/chatbot/ChatbotProviderInterruptionPhase;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/chatbot/ChatbotProviderInterruptionPhase;
+	public static fun values ()[Lsaien/magrathea/chatbot/ChatbotProviderInterruptionPhase;
+}
+
 public final class saien/magrathea/chatbot/ChatbotReasoningBlock {
 	public fun <init> (Ljava/lang/String;ZLsaien/magrathea/chatbot/ChatbotReasoningKind;Lsaien/magrathea/chatbot/ChatbotMessagePhase;)V
 	public synthetic fun <init> (Ljava/lang/String;ZLsaien/magrathea/chatbot/ChatbotReasoningKind;Lsaien/magrathea/chatbot/ChatbotMessagePhase;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
@@ -203,6 +251,17 @@ public final class saien/magrathea/chatbot/ChatbotReasoningKind : java/lang/Enum
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/chatbot/ChatbotReasoningKind;
 	public static fun values ()[Lsaien/magrathea/chatbot/ChatbotReasoningKind;
+}
+
+public final class saien/magrathea/chatbot/ChatbotRemoteImageSource : saien/magrathea/chatbot/ChatbotToolImageSource {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lsaien/magrathea/chatbot/ChatbotRemoteImageSource;
+	public static synthetic fun copy$default (Lsaien/magrathea/chatbot/ChatbotRemoteImageSource;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/chatbot/ChatbotRemoteImageSource;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getUri ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class saien/magrathea/chatbot/ChatbotRequestContext {
@@ -404,24 +463,93 @@ public final class saien/magrathea/chatbot/ChatbotToolCall {
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class saien/magrathea/chatbot/ChatbotToolImage {
+	public fun <init> (Lsaien/magrathea/chatbot/ChatbotToolImageSource;Lsaien/magrathea/chatbot/ChatbotToolImageSource;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Integer;Lsaien/magrathea/chatbot/ChatbotToolMediaAttribution;Lsaien/magrathea/core/MediaReference;)V
+	public synthetic fun <init> (Lsaien/magrathea/chatbot/ChatbotToolImageSource;Lsaien/magrathea/chatbot/ChatbotToolImageSource;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Integer;Lsaien/magrathea/chatbot/ChatbotToolMediaAttribution;Lsaien/magrathea/core/MediaReference;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lsaien/magrathea/chatbot/ChatbotToolImageSource;
+	public final fun component10 ()Lsaien/magrathea/core/MediaReference;
+	public final fun component2 ()Lsaien/magrathea/chatbot/ChatbotToolImageSource;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/lang/String;
+	public final fun component7 ()Ljava/lang/Integer;
+	public final fun component8 ()Ljava/lang/Integer;
+	public final fun component9 ()Lsaien/magrathea/chatbot/ChatbotToolMediaAttribution;
+	public final fun copy (Lsaien/magrathea/chatbot/ChatbotToolImageSource;Lsaien/magrathea/chatbot/ChatbotToolImageSource;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Integer;Lsaien/magrathea/chatbot/ChatbotToolMediaAttribution;Lsaien/magrathea/core/MediaReference;)Lsaien/magrathea/chatbot/ChatbotToolImage;
+	public static synthetic fun copy$default (Lsaien/magrathea/chatbot/ChatbotToolImage;Lsaien/magrathea/chatbot/ChatbotToolImageSource;Lsaien/magrathea/chatbot/ChatbotToolImageSource;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Integer;Lsaien/magrathea/chatbot/ChatbotToolMediaAttribution;Lsaien/magrathea/core/MediaReference;ILjava/lang/Object;)Lsaien/magrathea/chatbot/ChatbotToolImage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAltText ()Ljava/lang/String;
+	public final fun getAttribution ()Lsaien/magrathea/chatbot/ChatbotToolMediaAttribution;
+	public final fun getHeight ()Ljava/lang/Integer;
+	public final fun getMimeType ()Ljava/lang/String;
+	public final fun getPreviewMimeType ()Ljava/lang/String;
+	public final fun getPreviewSource ()Lsaien/magrathea/chatbot/ChatbotToolImageSource;
+	public final fun getReference ()Lsaien/magrathea/core/MediaReference;
+	public final fun getSource ()Lsaien/magrathea/chatbot/ChatbotToolImageSource;
+	public final fun getTitle ()Ljava/lang/String;
+	public final fun getWidth ()Ljava/lang/Integer;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class saien/magrathea/chatbot/ChatbotToolImageSource {
+}
+
+public final class saien/magrathea/chatbot/ChatbotToolMediaAttribution {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/chatbot/ChatbotToolMediaAttribution;
+	public static synthetic fun copy$default (Lsaien/magrathea/chatbot/ChatbotToolMediaAttribution;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/chatbot/ChatbotToolMediaAttribution;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getLicense ()Ljava/lang/String;
+	public final fun getLicenseUrl ()Ljava/lang/String;
+	public final fun getTitle ()Ljava/lang/String;
+	public final fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/chatbot/ChatbotToolOrigin {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/chatbot/ChatbotToolOrigin;
+	public static synthetic fun copy$default (Lsaien/magrathea/chatbot/ChatbotToolOrigin;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/chatbot/ChatbotToolOrigin;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSourceId ()Ljava/lang/String;
+	public final fun getSourceLabel ()Ljava/lang/String;
+	public final fun getToolId ()Ljava/lang/String;
+	public final fun getToolLabel ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class saien/magrathea/chatbot/ChatbotToolResult {
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/util/List;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotToolOrigin;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/util/List;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotToolOrigin;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/lang/String;
 	public final fun component4 ()Z
 	public final fun component5 ()Ljava/lang/String;
 	public final fun component6 ()Ljava/util/List;
-	public final fun component7 ()Lkotlinx/serialization/json/JsonObject;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;)Lsaien/magrathea/chatbot/ChatbotToolResult;
-	public static synthetic fun copy$default (Lsaien/magrathea/chatbot/ChatbotToolResult;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lsaien/magrathea/chatbot/ChatbotToolResult;
+	public final fun component7 ()Ljava/util/List;
+	public final fun component8 ()Lsaien/magrathea/chatbot/ChatbotToolOrigin;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/util/List;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotToolOrigin;)Lsaien/magrathea/chatbot/ChatbotToolResult;
+	public static synthetic fun copy$default (Lsaien/magrathea/chatbot/ChatbotToolResult;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/util/List;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotToolOrigin;ILjava/lang/Object;)Lsaien/magrathea/chatbot/ChatbotToolResult;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getCitations ()Ljava/util/List;
 	public final fun getErrorCode ()Ljava/lang/String;
 	public final fun getId ()Ljava/lang/String;
-	public final fun getMetadata ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getImages ()Ljava/util/List;
 	public final fun getName ()Ljava/lang/String;
+	public final fun getOrigin ()Lsaien/magrathea/chatbot/ChatbotToolOrigin;
 	public final fun getText ()Ljava/lang/String;
 	public fun hashCode ()I
 	public final fun isError ()Z

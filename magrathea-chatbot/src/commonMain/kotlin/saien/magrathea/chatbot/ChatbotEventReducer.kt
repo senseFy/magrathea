@@ -14,10 +14,17 @@ internal class ChatbotEventReducer {
         is AgentEvent.ContextTransformed,
         is AgentEvent.Debug,
         is AgentEvent.RetryScheduled -> state
-        is AgentEvent.CheckpointSaved -> state.copy(
-            contextManagement = event.checkpoint.state.contextManagement
-                .toChatbotContextManagementSnapshot(),
-        )
+        is AgentEvent.CheckpointSaved -> {
+            val messages = event.checkpoint.state.messages.map { it.toChatbotMessageSnapshot() }
+            state.copy(
+                messages = messages,
+                usage = event.checkpoint.state.usage.toChatbotUsage(),
+                latestRequestUsage = event.checkpoint.state.latestRequestUsage.toChatbotUsage(),
+                contextManagement = event.checkpoint.state.contextManagement
+                    .toChatbotContextManagementSnapshot(),
+                toolActivities = reconcileToolActivities(messages, state.toolActivities),
+            )
+        }
         is AgentEvent.MessageEmitted -> {
             val messages = state.messages.replaceOrAppend(event.message.toChatbotMessageSnapshot())
             state.copy(

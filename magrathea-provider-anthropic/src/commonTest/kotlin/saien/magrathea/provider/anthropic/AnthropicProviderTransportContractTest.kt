@@ -21,6 +21,7 @@ import saien.magrathea.provider.api.ProviderAuthException
 import saien.magrathea.provider.api.ProviderEvent
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRequest
+import saien.magrathea.provider.api.ProviderStreamInterruptedException
 
 class AnthropicProviderTransportContractTest {
     @Test
@@ -43,14 +44,28 @@ class AnthropicProviderTransportContractTest {
     }
 
     @Test
-    fun missingCredentialAndMissingProtocolTerminalFailClosed() = runTest {
+    fun missingCredentialFailsClosed() = runTest {
         assertFailsWith<ProviderAuthException> {
             AnthropicProviderAdapter(transport = ScriptedAnthropicTransport())
                 .generate(request(false, null)).toList()
         }
+    }
 
+    @Test
+    fun cleanEofBeforeProtocolTerminalIsRecoverable() = runTest {
         val incomplete = ScriptedAnthropicTransport(
             streamResponses = listOf(anthropicSseFrames(ANTHROPIC_TOOL_STREAM.dropLast(1))),
+        )
+        assertFailsWith<ProviderStreamInterruptedException> {
+            AnthropicProviderAdapter(transport = incomplete)
+                .generate(request(true, "secret")).toList()
+        }
+    }
+
+    @Test
+    fun transportFlowWithoutCompletionFrameRemainsProtocolFailure() = runTest {
+        val incomplete = ScriptedAnthropicTransport(
+            streamResponses = listOf(anthropicSseFrames(ANTHROPIC_TOOL_STREAM).dropLast(1)),
         )
         assertFailsWith<ProviderProtocolException> {
             AnthropicProviderAdapter(transport = incomplete)

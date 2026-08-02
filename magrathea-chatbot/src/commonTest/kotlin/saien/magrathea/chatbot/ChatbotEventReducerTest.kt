@@ -1,9 +1,12 @@
 package saien.magrathea.chatbot
 
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -19,13 +22,21 @@ import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.ContextCompaction
 import saien.magrathea.core.ContextManagementState
 import saien.magrathea.core.MessageRole
+import saien.magrathea.core.MediaReference
 import saien.magrathea.core.ModelDescriptor
+import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.TokenUsage
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolExecutionResult
+import saien.magrathea.core.ToolMediaAttribution
+import saien.magrathea.core.ToolOrigin
+import saien.magrathea.core.ToolResultAudience
+import saien.magrathea.core.ToolResultImageContent
 import saien.magrathea.core.ToolResultPart
+import saien.magrathea.core.ToolResultTextContent
+import saien.magrathea.core.toMessagePart
 
 class ChatbotEventReducerTest {
     private val reducer = ChatbotEventReducer()
@@ -120,6 +131,40 @@ class ChatbotEventReducerTest {
     }
 
     @Test
+    fun checkpointShouldReplaceProvisionalMessagesWithTheReplaySafeState() {
+        val sessionId = AgentSessionId("session-recovery")
+        val user = AgentMessage(
+            id = "user-1",
+            role = MessageRole.USER,
+            parts = listOf(TextPart("hello")),
+        )
+        val provisional = AgentMessage(
+            id = "assistant-provisional",
+            role = MessageRole.ASSISTANT,
+            parts = listOf(TextPart("partial")),
+        )
+        val state = ChatbotSnapshot(
+            configuration = testChatbotConfiguration(),
+            messages = listOf(user, provisional).map { it.toChatbotMessageSnapshot() },
+            status = ChatbotStatus.INTERRUPTED,
+        )
+
+        val reconciled = reducer.reduce(
+            state,
+            AgentEvent.CheckpointSaved(
+                AgentCheckpoint(
+                    sessionId = sessionId,
+                    runId = TEST_RUN_ID,
+                    cursor = AgentResumeCursor(0, AgentResumePhase.MODEL_PENDING),
+                    state = AgentStateSnapshot(messages = listOf(user)),
+                ),
+            ),
+        )
+
+        assertEquals(listOf("hello"), reconciled.messages.map(ChatbotMessageSnapshot::text))
+    }
+
+    @Test
     fun reducerShouldExposeToolCallsAndToolResults() {
         val sessionId = AgentSessionId("session-1")
         val toolCall = ToolCallPart(
@@ -169,7 +214,115 @@ class ChatbotEventReducerTest {
     }
 
     @Test
-    fun reducerShouldExposeEvidenceBasedToolLifecycleAndResultMetadata() {
+    fun chatbotProjectionExposesOnlyUserAudienceToolImages() {
+        val result = ToolResultPart(
+            toolCallId = "call-1",
+            toolName = "image_search",
+            result = JsonPrimitive("result"),
+            content = listOf(
+                ToolResultImageContent(
+                    source = RemoteToolImageSource("https://cdn.example.com/user.jpg"),
+                    previewSource = RemoteToolImageSource("https://cdn.example.com/preview.jpg"),
+                    previewMimeType = "image/jpeg",
+                    mimeType = "image/jpeg",
+                    title = "Reference",
+                    attribution = ToolMediaAttribution(
+                        title = "Example",
+                        url = "https://example.com/article",
+                        license = "CC BY 4.0",
+                        licenseUrl = "https://creativecommons.org/licenses/by/4.0/",
+                    ),
+                    audiences = setOf(ToolResultAudience.USER),
+                    reference = MediaReference("tool-result:run:1:0"),
+                ),
+                ToolResultImageContent(
+                    source = RemoteToolImageSource("https://cdn.example.com/model.jpg"),
+                    mimeType = "image/jpeg",
+                    audiences = setOf(ToolResultAudience.MODEL),
+                ),
+            ),
+        ).toChatbotToolResult()
+
+        assertEquals(1, result.images.size)
+        val image = result.images.single()
+        assertEquals("https://cdn.example.com/user.jpg", assertIs<ChatbotRemoteImageSource>(image.source).uri)
+        assertEquals(
+            "https://cdn.example.com/preview.jpg",
+            assertIs<ChatbotRemoteImageSource>(image.previewSource).uri,
+        )
+        assertEquals("image/jpeg", image.previewMimeType)
+        assertEquals("magrathea://media/tool-result%3Arun%3A1%3A0", image.reference?.toUri())
+        assertEquals("https://example.com/article", image.attribution?.url)
+        assertEquals("CC BY 4.0", image.attribution?.license)
+    }
+
+    @Test
+    fun chatbotProjectionUsesTypedOriginWithoutExposingPrivateToolMetadata() {
+        val modelOnlySecret = "MODEL_ONLY_CHATBOT_CANARY"
+        val metadata = buildJsonObject {
+            put("private", modelOnlySecret)
+            put("citations", buildJsonArray {
+                add(buildJsonObject {
+                    put("title", "Reference")
+                    put("url", "https://example.test/reference")
+                    put("snippet", "Public excerpt")
+                    put("private", modelOnlySecret)
+                })
+            })
+        }
+        val result = ToolResultPart(
+            toolCallId = "call-private",
+            toolName = "read_file",
+            result = JsonPrimitive(modelOnlySecret),
+            metadata = metadata,
+            origin = ToolOrigin(
+                sourceId = "filesystem",
+                sourceLabel = "Files",
+                toolId = "read_file",
+                toolLabel = "Read file",
+            ),
+            content = listOf(
+                ToolResultTextContent(
+                    modelOnlySecret,
+                    setOf(ToolResultAudience.MODEL),
+                ),
+            ),
+        ).toChatbotToolResult()
+
+        assertEquals("Tool completed.", result.text)
+        assertEquals(
+            ChatbotToolOrigin("filesystem", "Files", "read_file", "Read file"),
+            result.origin,
+        )
+        assertEquals("Reference", result.citations.single().title)
+        assertFalse(result.toString().contains(modelOnlySecret))
+    }
+
+    @Test
+    fun chatbotErrorCodeUsesOnlyTheExplicitUserSafeChannel() {
+        val canonicalSecret = "CANONICAL_ERROR_CODE_SECRET"
+        val publicCode = "lookup-unavailable"
+        val executionResult = ToolExecutionResult(
+            toolCallId = "call-error",
+            toolName = "lookup",
+            result = buildJsonObject { put("code", canonicalSecret) },
+            isError = true,
+            displayText = "Lookup failed.",
+            userErrorCode = publicCode,
+            modelResultVisible = false,
+        )
+
+        val liveProjection = executionResult.toChatbotToolResult()
+        val persistedProjection = executionResult.toMessagePart().toChatbotToolResult()
+
+        assertEquals(publicCode, liveProjection.errorCode)
+        assertEquals(publicCode, persistedProjection.errorCode)
+        assertFalse(liveProjection.toString().contains(canonicalSecret))
+        assertFalse(persistedProjection.toString().contains(canonicalSecret))
+    }
+
+    @Test
+    fun reducerShouldExposeEvidenceBasedToolLifecycleAndTypedOrigin() {
         val sessionId = AgentSessionId("session-1")
         val partialCall = ToolCallPart(
             toolCallId = "call-1",
@@ -198,7 +351,12 @@ class ChatbotEventReducerTest {
         state = reducer.reduce(state, AgentEvent.ToolRequested(sessionId, finalizedCall))
         assertEquals(ChatbotToolActivityStatus.RUNNING, state.toolActivities.single().status)
 
-        val metadata = buildJsonObject { put("identity", JsonPrimitive("safe")) }
+        val origin = ToolOrigin(
+            sourceId = "catalog",
+            sourceLabel = "Catalog",
+            toolId = "lookup",
+            toolLabel = "Lookup",
+        )
         state = reducer.reduce(
             state,
             AgentEvent.ToolCompleted(
@@ -208,13 +366,16 @@ class ChatbotEventReducerTest {
                     toolName = "lookup",
                     result = JsonPrimitive("result"),
                     displayText = "display result",
-                    metadata = metadata,
+                    origin = origin,
                 ),
             ),
         )
         val completed = state.toolActivities.single()
         assertEquals(ChatbotToolActivityStatus.SUCCEEDED, completed.status)
-        assertEquals(metadata, assertNotNull(completed.result).metadata)
+        assertEquals(
+            ChatbotToolOrigin("catalog", "Catalog", "lookup", "Lookup"),
+            assertNotNull(completed.result).origin,
+        )
         assertNull(completed.resultMessageId)
 
         val toolMessage = AgentMessage(
@@ -226,14 +387,17 @@ class ChatbotEventReducerTest {
                     toolName = "lookup",
                     result = JsonPrimitive("result"),
                     displayText = "display result",
-                    metadata = metadata,
+                    origin = origin,
                 ),
             ),
         )
         state = reducer.reduce(state, AgentEvent.MessageEmitted(sessionId, toolMessage))
 
         assertEquals("tool-1", state.toolActivities.single().resultMessageId)
-        assertEquals(metadata, state.messages.last().toolResults.single().metadata)
+        assertEquals(
+            ChatbotToolOrigin("catalog", "Catalog", "lookup", "Lookup"),
+            state.messages.last().toolResults.single().origin,
+        )
     }
 
     @Test

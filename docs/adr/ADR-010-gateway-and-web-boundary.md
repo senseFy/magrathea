@@ -12,9 +12,17 @@ servers.
 ## Decision
 
 - Browsers access Providers only through a Magrathea Gateway.
-- Gateway `exact-v1` is a dedicated, strict wire protocol with its own DTOs and codec.
+- Gateway `exact-v2` is a dedicated, strict wire protocol with its own DTOs and codec. Typed
+  model-audience Tool images cross this boundary only as uploaded attachment references.
 - Stream creation and cancellation use an authenticated HTTP control plane. Events use sequenced
   Server-Sent Events with bounded replay, reconnect, idempotency, and terminal-state validation.
+- A canonical `Completed` event is authoritative and ends Provider collection immediately. Replay
+  remains available for at least the advertised stream lease.
+- After replay eviction, a bounded tombstone retains only the request fingerprint and terminal
+  category. Completed and permanent failures fail closed; cancelled and retryable failures permit
+  a new physical invocation. Reusing an idempotency key with a different request remains a conflict.
+- Persisted cancellation may abandon work by authenticated request ID without requiring a retained
+  stream descriptor.
 - Runtime resume reuses the Gateway invocation identity to reattach to the existing durable stream.
 - The server resolves a browser-supplied model reference to server-owned Provider configuration,
   endpoint, and credential. Browser requests cannot set an upstream endpoint, credential, or
@@ -32,6 +40,10 @@ servers.
   Gateway or vendor credentials.
 - Browser JS is the primary Web artifact. Wasm is experimental and follows the same Gateway and
   storage contracts.
+
+The reference coordinator stores streams and idempotency state in memory, so its guarantees are
+limited to one process lifetime. Multi-replica or restart-safe deployments require a shared durable
+coordinator implementation.
 
 ## Consequences
 

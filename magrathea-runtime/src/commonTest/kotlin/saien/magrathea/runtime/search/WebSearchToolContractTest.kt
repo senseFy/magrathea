@@ -34,21 +34,27 @@ class WebSearchToolContractTest {
             WebSearchPolicy(allowedDomains = listOf("example.com"), blockedDomains = listOf("other.example"))
         }
         assertFailsWith<IllegalArgumentException> { WebSearchPolicy(allowedDomains = listOf("https://example.com")) }
-        assertFailsWith<IllegalArgumentException> { WebSearchLocale(languageTag = "en_us") }
-        assertFailsWith<IllegalArgumentException> { WebSearchLocation(city = " ") }
+        assertFailsWith<IllegalArgumentException> { SearchLocale(languageTag = "en_us") }
+        assertFailsWith<IllegalArgumentException> { SearchLocation(city = " ") }
     }
 
     @Test
     fun definitionContainsStableSchemaAndHardRuntimeLimits() {
+        val backend = WebSearchBackend { WebSearchBackendResponse(emptyList()) }
         val tool = WebSearchTool(
-            backend = WebSearchBackend { WebSearchBackendResponse(emptyList()) },
+            backend = backend,
             policy = WebSearchPolicy(maxSearchCallsPerRun = 2, maxQueryChars = 240, timeoutMs = 4_000),
             requiresPermission = "network",
             requiresApproval = true,
         )
+        val failClosed = WebSearchTool(
+            backend = backend,
+            recoveryPolicy = ToolRecoveryPolicy.FAIL_CLOSED,
+        )
 
         assertEquals(WebSearchTool.NAME, tool.definition.name)
         assertEquals(ToolRecoveryPolicy.REPLAY_SAFE, tool.recoveryPolicy)
+        assertEquals(ToolRecoveryPolicy.FAIL_CLOSED, failClosed.recoveryPolicy)
         assertEquals(2, tool.definition.maxCallsPerTurn)
         assertEquals(2, tool.definition.maxCallsPerRun)
         assertEquals(4_000, tool.definition.timeoutMs)
@@ -80,11 +86,11 @@ class WebSearchToolContractTest {
             maxSourcesInContext = 2,
             maxSnippetChars = 64,
             depth = WebSearchDepth.DEEP,
-            freshness = WebSearchFreshness.PAST_WEEK,
+            freshness = SearchFreshness.PAST_WEEK,
             allowedDomains = listOf("example.com"),
-            locale = WebSearchLocale(languageTag = "en-US", countryCode = "US"),
-            location = WebSearchLocation(city = "San Francisco", countryCode = "US"),
-            safeSearch = WebSearchSafeSearch.STRICT,
+            locale = SearchLocale(languageTag = "en-US", countryCode = "US"),
+            location = SearchLocation(city = "San Francisco", countryCode = "US"),
+            safeSearch = SearchSafeSearch.STRICT,
             timeoutMs = 9_000,
         )
         val result = WebSearchTool(backend, policy).execute(executionRequest("  current release  "))
@@ -93,9 +99,9 @@ class WebSearchToolContractTest {
         assertEquals("current release", observed?.query)
         assertEquals(5, observed?.maxResults)
         assertEquals(WebSearchDepth.DEEP, observed?.depth)
-        assertEquals(WebSearchFreshness.PAST_WEEK, observed?.freshness)
+        assertEquals(SearchFreshness.PAST_WEEK, observed?.freshness)
         assertEquals(listOf("example.com"), observed?.allowedDomains)
-        assertEquals(WebSearchSafeSearch.STRICT, observed?.safeSearch)
+        assertEquals(SearchSafeSearch.STRICT, observed?.safeSearch)
         assertEquals(9_000, observed?.timeoutMs)
         assertFalse(observed.toString().contains("current release"))
         assertFalse(observed.toString().contains("San Francisco"))

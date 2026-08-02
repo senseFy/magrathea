@@ -1,23 +1,33 @@
 # Verification Status
 
-This document records the evidence used to qualify `0.1.0-alpha.1`. It separates reproduced SDK
+This document records the evidence used to qualify `0.1.0-alpha.2`. It separates reproduced SDK
 evidence from platform assumptions and external validation.
 
 ## Current local evidence
 
 | Area | Evidence |
 |---|---|
-| Core and Runtime | JVM, Android host, iOS Simulator, JS, and Wasm contract suites for models, strict serialization, Provider events, tools, portable Web Search, cancellation, resume, limits, telemetry, and persistence |
-| MCP | Official Kotlin SDK linked-transport contracts for initialization, bounded discovery, fail-closed dynamic list changes, stale-executor rejection, policy, Tasks compatibility, bounded Tool calls, result mapping, names, and transport security; a real child-process stdio initialize/discovery/call test with an isolated environment; official conformance `initialize` and `tools_call` scenarios passed over real loopback Streamable HTTP |
-| Provider adapters | Contract, request/codec, transport, and JVM controlled-live mock-server coverage for Gemini, OpenAI Responses, OpenAI Chat Completions, and Anthropic; controlled remote Gemini plus OpenRouter Responses-compatible and Messages-compatible non-streaming, SSE, tool-loop, and PDF attachment evidence, including a Grok 4.5 compacted-reasoning two-turn three-tool loop on 2026-07-17 |
+| Core and Runtime | JVM, Android host, iOS Simulator, JS, and Wasm contracts for schema-v5 persistence, typed Tool content/audiences/origin, media references, Provider interruptions, retry, reattachment, terminal cleanup, portable Web/Image/X Search, cancellation, resume, limits, telemetry, and context management |
+| MCP | Official Kotlin SDK linked-transport contracts for initialization, bounded discovery, fail-closed dynamic list changes, stale-executor rejection, policy, Tasks compatibility, typed text/image/audience projection, bounded Tool calls, origin mapping, names, and transport security; a real child-process stdio initialize/discovery/call test with an isolated environment; official conformance `initialize` and `tools_call` scenarios passed over real loopback Streamable HTTP |
+| Provider adapters | Contract, request/codec, transport, semantic-completion, typed Tool image mapping, failure classification, and JVM controlled-live mock-server coverage for Gemini, OpenAI Responses, OpenAI Chat Completions, and Anthropic; controlled remote Gemini plus OpenRouter Responses-compatible and Messages-compatible non-streaming, SSE, tool-loop, and PDF attachment evidence, including a Grok 4.5 compacted-reasoning two-turn three-tool loop on 2026-07-17 |
 | Android | Current published-consumer/instrumentation compilation plus a recorded 2026-07-12 SM-S9180/API 36 fixture run covering Keystore, process restart, Room corruption/deletion, Android HTTP/Gemini parsing, socket cancellation, and a 1,000-message baseline |
 | JVM/Desktop | Runtime, chatbot facade, real Room database, published-artifact consumer, controlled Gemini and OpenRouter-compatible Provider live validation, and deterministic Provider-neutral sample executed locally on macOS JVM |
 | iOS | Build-local Maven resolution followed by aggregate device/Simulator consumer-framework linkage, plus Simulator tests that directly compose the public chatbot facade, Keychain, Room, Runtime, and Gemini adapter |
-| Browser | Authenticated real-HTTP/SSE JS/Wasm sample, IndexedDB contracts, TypeScript consumer, production bundles, and Playwright Chromium/Firefox/WebKit-engine execution |
+| Browser | Gateway exact-v2 protocol, authenticated real-HTTP/SSE JS/Wasm sample, durable replay/abandonment contracts, IndexedDB contracts, TypeScript consumer, production bundles, and Playwright Chromium/Firefox/WebKit-engine execution |
 | Distribution | 16 published logical modules, 88 build-local Maven coordinates, aggregate device/Simulator Apple consumer frameworks, source/javadoc/POM/metadata checks, and release-bundle checksum validation |
-| API/schema and supply chain | 14 JVM ABI baselines, serialization fixtures, fixed dependency versions, CycloneDX SBOM/license validation, mutation tests, remote-signing guards, and an immutable-coordinate rollback rehearsal |
+| API/schema and supply chain | 14 JVM ABI baselines, strict schema-v5 serialization fixtures, Gateway exact-v2 contracts, fixed dependency versions, CycloneDX SBOM/license validation, mutation tests, remote-signing guards, and an immutable-coordinate rollback rehearsal |
 
-The most recent recorded clean release gate passed on 2026-07-26:
+The `0.1.0-alpha.2` release-preparation quick gate passed on 2026-08-02:
+
+```text
+BUILD SUCCESSFUL in 56s
+317 actionable tasks: 44 executed, 273 up-to-date
+```
+
+The separate Web package gate produced a 1,394,588-byte minified entry point within its explicit
+1,420,000-byte ceiling. JS and Wasm browser contracts passed.
+
+The most recent complete clean release gate passed on 2026-07-26 for `0.1.0-alpha.1`:
 
 ```text
 BUILD SUCCESSFUL in 18m 39s
@@ -58,9 +68,9 @@ aggregate static consumer frameworks.
   quota behavior, or long-running traffic.
 - OpenAI Chat Completions is covered by deterministic contracts and has not yet been exercised by a
   controlled remote smoke test.
-- MCP conformance currently covers client initialization and synchronous Tool calls. Resources,
+- MCP conformance covers client initialization and synchronous Tool calls. Resources,
   Prompts, Sampling, Roots, Elicitation, experimental Tasks, HTTP OAuth discovery/flows, and a broad
-  third-party server matrix remain outside the Alpha adapter boundary.
+  third-party server matrix remain outside the MCP Tool adapter boundary.
 - SBOM, credential-isolation, and negative-contract gates are not a penetration test or
   production security certification.
 - The rollback check is a build-local loopback rehearsal, not recovery from a real published

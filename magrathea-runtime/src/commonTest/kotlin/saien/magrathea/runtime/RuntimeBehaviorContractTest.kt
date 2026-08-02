@@ -16,6 +16,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.test.Test
 import saien.magrathea.core.AgentCheckpoint
@@ -32,9 +34,12 @@ import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.FollowUpMessageProvider
+import saien.magrathea.core.MediaReference
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
+import saien.magrathea.core.ModelInputModality
 import saien.magrathea.core.ProviderConfig
+import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.core.RuntimeConfig
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
@@ -48,6 +53,10 @@ import saien.magrathea.core.ToolExecutionRequest
 import saien.magrathea.core.ToolExecutionResult
 import saien.magrathea.core.ToolExecutor
 import saien.magrathea.core.ToolRuntimeContext
+import saien.magrathea.core.ToolResultAudience
+import saien.magrathea.core.ToolResultImageContent
+import saien.magrathea.core.ToolResultPart
+import saien.magrathea.core.ToolResultTextContent
 import saien.magrathea.provider.api.InMemoryProviderRegistry
 import saien.magrathea.provider.api.ProviderAdapter
 import saien.magrathea.provider.api.ProviderChunk
@@ -299,6 +308,68 @@ class RuntimeBehaviorContractTest {
     }
 
     @Test
+    fun runtimeAssignsMediaReferencesBeforeToolInterceptorsAndPreservesThem() = runTest {
+        val tool = object : ToolExecutor {
+            override val definition = toolDefinition("image")
+            override suspend fun execute(request: ToolExecutionRequest) = ToolExecutionResult(
+                toolCallId = request.toolCall.toolCallId,
+                toolName = request.toolCall.toolName,
+                result = JsonPrimitive("image"),
+                content = listOf(
+                    ToolResultImageContent(
+                        source = RemoteToolImageSource("https://cdn.example.com/image.jpg"),
+                        audiences = setOf(ToolResultAudience.MODEL, ToolResultAudience.USER),
+                    ),
+                ),
+            )
+        }
+        var observedReference: MediaReference? = null
+        val interceptor = object : AgentInterceptor {
+            override suspend fun afterToolCall(
+                context: ToolRuntimeContext,
+                result: ToolExecutionResult,
+            ): ToolExecutionResult {
+                observedReference = assertIs<ToolResultImageContent>(result.content.single()).reference
+                return result.copy(
+                    content = listOf(
+                        ToolResultTextContent(
+                            text = "interceptor metadata",
+                            audiences = setOf(ToolResultAudience.USER),
+                        ),
+                    ) + result.content,
+                )
+            }
+        }
+        val provider = ToolThenCompleteProvider(listOf(tool.definition.name))
+
+        val events = runner(
+            providers = listOf(provider),
+            tools = listOf(tool),
+            interceptors = listOf(interceptor),
+        ).run(
+            request(provider = provider.key, tools = listOf(tool.definition), maxTurns = 2).copy(
+                model = ModelDescriptor(
+                    provider = provider.key,
+                    model = "model",
+                    inputModalities = setOf(ModelInputModality.TEXT, ModelInputModality.IMAGE),
+                ),
+            ),
+        ).toList()
+
+        val completed = events.filterIsInstance<AgentEvent.ToolCompleted>().single().result
+        val image = assertIs<ToolResultImageContent>(completed.content.last())
+        assertEquals(assertNotNull(observedReference), image.reference)
+        val providerImage = provider.requests.last().messages
+            .flatMap(AgentMessage::parts)
+            .filterIsInstance<ToolResultPart>()
+            .single()
+            .content
+            .filterIsInstance<ToolResultImageContent>()
+            .single()
+        assertEquals(null, providerImage.reference)
+    }
+
+    @Test
     fun installedApprovalGatewayIsConsultedForEveryTool() = runTest {
         val tool = CountingTool("policy-controlled")
         val provider = ToolThenCompleteProvider(listOf(tool.definition.name))
@@ -500,8 +571,10 @@ class RuntimeBehaviorContractTest {
     ) : ProviderAdapter {
         override val key = "tool-then-complete-${toolNames.joinToString("-")}"
         private var calls = 0
+        val requests = mutableListOf<ProviderRequest>()
 
         override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+            requests += request
             calls += 1
             if (calls == 1) {
                 emit(

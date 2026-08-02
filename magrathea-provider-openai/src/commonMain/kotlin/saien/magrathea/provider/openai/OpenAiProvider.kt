@@ -23,6 +23,7 @@ import saien.magrathea.provider.api.ProviderChunk
 import saien.magrathea.provider.api.ProviderInputCapabilities
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRequest
+import saien.magrathea.provider.api.ProviderStreamInterruptedException
 import saien.magrathea.provider.api.ProviderTransportConfig
 import saien.magrathea.provider.api.ReferenceProviderInputCapabilities
 import saien.magrathea.provider.api.createDefaultHttpTransport
@@ -163,8 +164,12 @@ class OpenAiProviderAdapter(
                 is HttpStreamFrame.RetryHint -> Unit
                 is HttpStreamFrame.JsonLine -> throw ProviderProtocolException("OpenAI stream must use SSE framing")
                 HttpStreamFrame.Completed -> {
-                    responsesCodec?.finish()
-                    chatCodec?.finish()
+                    try {
+                        responsesCodec?.finish()
+                        chatCodec?.finish()
+                    } catch (failure: ProviderProtocolException) {
+                        throw ProviderStreamInterruptedException(failure)
+                    }
                     transportCompleted = true
                 }
             }

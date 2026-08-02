@@ -119,9 +119,8 @@ class XSearchTool(
     policy: XSearchPolicy = XSearchPolicy(),
     requiresPermission: String? = null,
     requiresApproval: Boolean = false,
+    override val recoveryPolicy: ToolRecoveryPolicy = ToolRecoveryPolicy.REPLAY_SAFE,
 ) : ToolExecutor {
-    override val recoveryPolicy: ToolRecoveryPolicy = ToolRecoveryPolicy.REPLAY_SAFE
-
     val policy: XSearchPolicy = policy.copy(
         allowedHandles = policy.allowedHandles.toList(),
         excludedHandles = policy.excludedHandles.toList(),
@@ -264,6 +263,7 @@ class XSearchTool(
         },
         isError = true,
         displayText = "X Search failed.",
+        userErrorCode = code.serialName,
     )
 
     companion object {

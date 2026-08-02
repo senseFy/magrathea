@@ -5,6 +5,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
@@ -24,11 +25,13 @@ import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.MonotonicClock
+import saien.magrathea.core.ProviderRequestPurpose
 import saien.magrathea.core.RetryPolicy
 import saien.magrathea.core.TelemetryEvent
 import saien.magrathea.core.TelemetryOutcome
 import saien.magrathea.core.TelemetryStoreOperation
 import saien.magrathea.core.TextPart
+import saien.magrathea.core.TokenUsage
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolDefinition
 import saien.magrathea.core.ToolExecutionRequest
@@ -42,6 +45,36 @@ import saien.magrathea.provider.api.ProviderRequest
 import saien.magrathea.provider.api.ProviderUsage
 
 class RuntimeTelemetryContractTest {
+    @Test
+    fun providerRequestTelemetryDefaultsToModelPurpose() {
+        assertEquals(
+            ProviderRequestPurpose.MODEL,
+            TelemetryEvent.ProviderRequestStarted(REQUEST_SESSION_ID, turn = 1, attempt = 0).purpose,
+        )
+        assertEquals(
+            ProviderRequestPurpose.MODEL,
+            TelemetryEvent.ProviderFirstChunk(
+                REQUEST_SESSION_ID,
+                turn = 1,
+                attempt = 0,
+                latencyMillis = 1,
+            ).purpose,
+        )
+        assertEquals(
+            ProviderRequestPurpose.MODEL,
+            TelemetryEvent.ProviderRequestFinished(
+                REQUEST_SESSION_ID,
+                turn = 1,
+                attempt = 0,
+                durationMillis = 1,
+                outcome = TelemetryOutcome.SUCCESS,
+                failureCode = null,
+                providerEventObserved = true,
+                usage = TokenUsage(),
+            ).purpose,
+        )
+    }
+
     @Test
     fun telemetryCoversLifecycleRetryLatencyUsageAndStoreWithoutContent() = runTest {
         val canary = "telemetry-content-canary"
@@ -61,9 +94,26 @@ class RuntimeTelemetryContractTest {
         assertEquals(1, telemetry.events.filterIsInstance<TelemetryEvent.TurnStarted>().size)
         assertEquals(2, telemetry.events.filterIsInstance<TelemetryEvent.ProviderRequestStarted>().size)
         assertEquals(1, telemetry.events.filterIsInstance<TelemetryEvent.ProviderFirstChunk>().size)
+        assertTrue(
+            telemetry.events.filterIsInstance<TelemetryEvent.ProviderRequestStarted>()
+                .all { it.purpose == ProviderRequestPurpose.MODEL },
+        )
+        assertTrue(
+            telemetry.events.filterIsInstance<TelemetryEvent.ProviderFirstChunk>()
+                .all { it.purpose == ProviderRequestPurpose.MODEL },
+        )
         assertEquals(
             listOf(TelemetryOutcome.FAILURE, TelemetryOutcome.SUCCESS),
             telemetry.events.filterIsInstance<TelemetryEvent.ProviderRequestFinished>().map { it.outcome },
+        )
+        assertEquals(
+            listOf(false, true),
+            telemetry.events.filterIsInstance<TelemetryEvent.ProviderRequestFinished>()
+                .map { it.providerEventObserved },
+        )
+        assertTrue(
+            telemetry.events.filterIsInstance<TelemetryEvent.ProviderRequestFinished>()
+                .all { it.purpose == ProviderRequestPurpose.MODEL },
         )
         assertEquals(1, telemetry.events.filterIsInstance<TelemetryEvent.RetryScheduled>().size)
         assertTrue(
@@ -143,6 +193,83 @@ class RuntimeTelemetryContractTest {
     }
 
     @Test
+    fun recoverableProviderFailureClosesTheExecutionAsInterrupted() = runTest {
+        val telemetry = RecordingTelemetry()
+        val provider = AlwaysFailingNetworkProvider()
+
+        val events = runner(provider, telemetry)
+            .run(request(provider.key, "interruption-content-canary"))
+            .toList()
+
+        assertTrue(events.last() is AgentEvent.Interrupted)
+        val requestFinished = telemetry.events
+            .filterIsInstance<TelemetryEvent.ProviderRequestFinished>()
+            .single()
+        assertEquals(TelemetryOutcome.FAILURE, requestFinished.outcome)
+        assertEquals(AgentFailureCode.PROVIDER_NETWORK, requestFinished.failureCode)
+        assertFalse(requestFinished.providerEventObserved)
+        val sessionFinished = telemetry.events
+            .filterIsInstance<TelemetryEvent.SessionFinished>()
+            .single()
+        assertEquals(TelemetryOutcome.INTERRUPTED, sessionFinished.outcome)
+        assertEquals(AgentFailureCode.PROVIDER_NETWORK, sessionFinished.failureCode)
+        assertFalse(telemetry.events.toString().contains("interruption-content-canary"))
+    }
+
+    @Test
+    fun interruptedTelemetryClosesBeforeATerminalCollectorStops() = runTest {
+        val telemetry = RecordingTelemetry()
+        val provider = AlwaysFailingNetworkProvider()
+
+        runner(provider, telemetry)
+            .run(request(provider.key, "terminal-collector-canary"))
+            .first { event -> event is AgentEvent.Interrupted }
+
+        val finished = telemetry.events.filterIsInstance<TelemetryEvent.SessionFinished>().single()
+        assertEquals(TelemetryOutcome.INTERRUPTED, finished.outcome)
+        assertEquals(AgentFailureCode.PROVIDER_NETWORK, finished.failureCode)
+    }
+
+    @Test
+    fun interruptionAndResumeTelemetrySeparateAttemptUsageFromCumulativeUsage() = runTest {
+        val telemetry = RecordingTelemetry()
+        val persistence = InMemoryAgentPersistence()
+        val provider = MeteredInterruptionThenCompleteProvider()
+        val runner = DefaultAgentRunner(
+            providerRegistry = InMemoryProviderRegistry(listOf(provider)),
+            toolRegistry = InMemoryToolRegistry(),
+            persistence = persistence,
+            telemetry = telemetry,
+            monotonicClock = IncrementingClock(),
+        )
+
+        runner.run(request(provider.key, "metered-recovery")).toList()
+        runner.resume(REQUEST_SESSION_ID).toList()
+
+        val requestFinished = telemetry.events
+            .filterIsInstance<TelemetryEvent.ProviderRequestFinished>()
+        assertEquals(
+            listOf(
+                TokenUsage(inputTokens = 7, outputTokens = 2),
+                TokenUsage(inputTokens = 7, outputTokens = 3),
+            ),
+            requestFinished.map(TelemetryEvent.ProviderRequestFinished::usage),
+        )
+        val sessionFinished = telemetry.events.filterIsInstance<TelemetryEvent.SessionFinished>()
+        assertEquals(
+            listOf(TelemetryOutcome.INTERRUPTED, TelemetryOutcome.SUCCESS),
+            sessionFinished.map(TelemetryEvent.SessionFinished::outcome),
+        )
+        assertEquals(
+            listOf(
+                TokenUsage(inputTokens = 7, outputTokens = 2),
+                TokenUsage(inputTokens = 14, outputTokens = 5),
+            ),
+            sessionFinished.map(TelemetryEvent.SessionFinished::usage),
+        )
+    }
+
+    @Test
     fun missingResumeRecordsLoadDurationAndTypedTerminalFailure() = runTest {
         val telemetry = RecordingTelemetry()
         val runner = DefaultAgentRunner(
@@ -200,7 +327,7 @@ class RuntimeTelemetryContractTest {
     private class RetryOncePolicy : RetryPolicy {
         private var decisions = 0
         override suspend fun shouldRetry(attempt: Int, error: Throwable): Boolean = decisions++ == 0
-        override suspend fun backoffDelayMs(attempt: Int): Long = 0L
+        override suspend fun backoffDelayMs(attempt: Int, error: Throwable): Long = 0L
     }
 
     private class FailThenCompleteProvider(
@@ -226,6 +353,38 @@ class RuntimeTelemetryContractTest {
     ) : ProviderAdapter {
         override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
             emit(providerChunk(text = "done", completed = true))
+        }
+    }
+
+    private class AlwaysFailingNetworkProvider : ProviderAdapter {
+        override val key: String = "telemetry-network-interruption-provider"
+
+        override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+            throw ProviderNetworkException("network-diagnostic-canary")
+        }
+    }
+
+    private class MeteredInterruptionThenCompleteProvider : ProviderAdapter {
+        override val key: String = "telemetry-metered-recovery-provider"
+        private var calls = 0
+
+        override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+            if (calls++ == 0) {
+                emit(
+                    providerChunk(
+                        text = "partial",
+                        usage = ProviderUsage(inputTokens = 7, outputTokens = 2),
+                    ),
+                )
+                throw ProviderNetworkException("connection lost after metered output")
+            }
+            emit(
+                providerChunk(
+                    text = "done",
+                    completed = true,
+                    usage = ProviderUsage(inputTokens = 7, outputTokens = 3),
+                ),
+            )
         }
     }
 

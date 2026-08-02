@@ -1,6 +1,5 @@
 # Provider Capability Matrix
 
-> Version: `0.1.0-alpha.1`
 > Scope: Android/JVM/iOS reference Providers and the Gateway-backed browser path
 
 ## Reference Providers
@@ -20,10 +19,13 @@ All three adapter modules and all four selected wire contracts support streaming
 server, network, and protocol failures to stable types. Credentials are excluded from errors,
 diagnostics, request `toString()`, and metadata.
 
-All four contracts can advertise the portable `web_search` function Tool from `magrathea-runtime`.
-The Tool is executed by the client Runtime through an injected `WebSearchBackend`; it is not the
-Provider's hosted web-search/grounding feature. The xAI profile additionally supports its hosted X
-Search wire lifecycle; it remains distinct from the Provider-neutral client-executed Tools.
+All four contracts can advertise portable Web Search and Image Search function Tools from
+`magrathea-runtime`. They execute through injected host backends rather than Provider-hosted search
+features. Image Search projects normalized URL metadata and stable media references to the model,
+while its `USER`-audience image content remains product-only. A Tool may deliberately return a
+`MODEL`-audience image; adapters encode it as native multimodal input only when the selected model
+and wire contract accept that image type. The xAI profile additionally supports its hosted X
+Search wire lifecycle.
 
 `ProviderAdapter.inputCapabilities(config)` publishes the attachment MIME types understood by the
 effective protocol encoder. Hosts combine these values with product policy and model metadata.
@@ -36,8 +38,9 @@ typed failures, and Runtime contracts.
 
 Browser clients send validated model references, messages, tools, generation options, and
 pre-uploaded attachment references through `magrathea-provider-gateway`. Server-side resolvers own
-the actual Provider, model, endpoint, and credential. Gateway `exact-v1` covers identity,
-idempotency, SSE sequence/replay, cancellation, and stable failure mapping.
+the actual Provider, model, endpoint, and credential. Gateway `exact-v2` covers identity,
+idempotency, SSE sequence/replay, cancellation, typed Tool attachment references, and stable failure
+mapping.
 
 ## Verification status
 

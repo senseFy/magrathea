@@ -7,23 +7,31 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AttachmentPart
+import saien.magrathea.core.InlineToolImageSource
 import saien.magrathea.core.JsonPart
 import saien.magrathea.core.MessageRole
+import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.core.TextPart
+import saien.magrathea.core.ToolImageAttachmentReference
+import saien.magrathea.core.ToolResultImageContent
 import saien.magrathea.core.ToolResultPart
+import saien.magrathea.core.ToolResultTextContent
 import saien.magrathea.provider.api.GeminiTransportConfig
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRequest
+import saien.magrathea.provider.api.modelProjection
+import saien.magrathea.provider.api.ReferenceProviderInputCapabilities
 
 internal class GeminiInteractionsRequestBuilder(
     private val json: Json = Json,
 ) {
     fun build(request: ProviderRequest): JsonObject = buildJsonObject {
         put("model", request.model.model.removePrefix("models/"))
-        put("input", buildInput(request.messages))
+        put("input", buildInput(request))
         put("stream", request.model.supportsStreaming)
         put("store", false)
         systemInstruction(request.messages)?.let { put("system_instruction", it) }
@@ -42,8 +50,8 @@ internal class GeminiInteractionsRequestBuilder(
         generationConfig(request)?.let { put("generation_config", it) }
     }
 
-    private fun buildInput(messages: List<AgentMessage>): JsonArray = buildJsonArray {
-        messages.forEach { message ->
+    private fun buildInput(request: ProviderRequest): JsonArray = buildJsonArray {
+        request.messages.forEach { message ->
             when (message.role) {
                 MessageRole.SYSTEM -> Unit
                 MessageRole.USER -> add(userInputStep(message))
@@ -59,7 +67,7 @@ internal class GeminiInteractionsRequestBuilder(
                 }
                 MessageRole.TOOL -> message.parts.filterIsInstance<ToolResultPart>().also { results ->
                     if (results.isEmpty()) throw ProviderProtocolException("Gemini tool message must contain a tool result")
-                }.forEach { result -> add(functionResultStep(result)) }
+                }.forEach { result -> add(functionResultStep(result, request)) }
             }
         }
     }
@@ -80,21 +88,52 @@ internal class GeminiInteractionsRequestBuilder(
         put("content", content)
     }
 
-    private fun functionResultStep(result: ToolResultPart): JsonObject = buildJsonObject {
+    private fun functionResultStep(
+        result: ToolResultPart,
+        request: ProviderRequest,
+    ): JsonObject = buildJsonObject {
         put("type", "function_result")
         put("call_id", result.toolCallId)
         put("name", result.toolName)
-        put("result", buildJsonArray {
-            add(textContent(json.encodeToString(JsonElement.serializer(), result.resultPayload())))
-        })
+        put("is_error", result.isError)
+        put("result", result.toFunctionResultContent(request))
     }
 
-    private fun ToolResultPart.resultPayload(): JsonElement {
-        if (!isError) return result
-        return buildJsonObject {
-            put("is_error", true)
-            put("result", result)
+    private fun ToolResultPart.toFunctionResultContent(request: ProviderRequest): JsonArray {
+        val projection = modelProjection(
+            request.model.inputModalities,
+            ReferenceProviderInputCapabilities.geminiInteractions,
+        )
+        return buildJsonArray {
+            projection.canonicalResult?.let { add(textContent(renderToolResult(it))) }
+            projection.content.forEach { block ->
+                when (block) {
+                    is ToolResultTextContent -> add(textContent(block.text))
+                    is ToolResultImageContent -> add(block.toGeminiContent())
+                }
+            }
         }
+    }
+
+    private fun ToolResultImageContent.toGeminiContent(): JsonObject {
+        val mediaType = mimeType
+            ?: throw ProviderProtocolException("Gemini Tool image result requires a MIME type")
+        return buildJsonObject {
+            put("type", "image")
+            put("mime_type", mediaType)
+            when (val imageSource = source) {
+                is InlineToolImageSource -> put("data", imageSource.data)
+                is RemoteToolImageSource -> put("uri", imageSource.uri)
+                is ToolImageAttachmentReference -> throw ProviderProtocolException(
+                    "Gemini Tool image attachment reference must be resolved before request encoding",
+                )
+            }
+        }
+    }
+
+    private fun renderToolResult(value: JsonElement): String = when (value) {
+        is JsonPrimitive -> value.contentOrNull ?: value.toString()
+        else -> json.encodeToString(JsonElement.serializer(), value)
     }
 
     private fun systemInstruction(messages: List<AgentMessage>): String? {

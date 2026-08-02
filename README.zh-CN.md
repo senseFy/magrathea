@@ -9,7 +9,7 @@ Magrathea 是一个 Kotlin Multiplatform Agent Runtime，用于在 Android、JVM
 集成能力。
 
 > [!NOTE]
-> `0.1.0-alpha.1` 是首个公开 Alpha；在进入稳定版本前，API 与持久化格式仍可能演进。
+> `0.1.0-alpha.2` 是当前 Alpha 源码版本；在进入稳定版本前，API 与持久化格式仍可能演进。
 
 ## 模块
 
@@ -33,7 +33,7 @@ Magrathea 是一个 Kotlin Multiplatform Agent Runtime，用于在 Android、JVM
 - Gemini Interactions、OpenAI Responses/Chat Completions、Anthropic Messages 参考适配器，以及
   公开的自定义 Provider SPI。
 - 支持会话级 Provider/model 选择与附件的 Provider-neutral chatbot session。
-- 可选的 MCP、通用 Web Search 与跨模型 X Search Tool。
+- 可选的 MCP、通用 Web/Image Search 与跨模型 X Search Tool。
 - Room 与 IndexedDB 持久化、移动端安全凭证，以及面向浏览器的 Backend Gateway。
 
 公共协议与持久化格式是严格的版本化契约；不受支持的数据形态会直接失败。
@@ -52,15 +52,15 @@ cd magrathea
 
 ```kotlin
 dependencies {
-    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.1")
-    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.1")
-    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.1")
+    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.2")
+    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.2")
+    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.2")
 }
 ```
 
 完整组合方式参见 [Provider-neutral 构建指南](docs/architecture.md#provider-neutral-runtime-and-chatbot-facade)
-与 [samples](samples)。完整签名 bundle 与供应链材料附在
-[`v0.1.0-alpha.1` Release](https://github.com/senseFy/magrathea/releases/tag/v0.1.0-alpha.1) 中。
+与 [samples](samples)。Release 产物与供应链材料：
+[`v0.1.0-alpha.2`](https://github.com/senseFy/magrathea/releases/tag/v0.1.0-alpha.2)。
 
 ## 平台
 

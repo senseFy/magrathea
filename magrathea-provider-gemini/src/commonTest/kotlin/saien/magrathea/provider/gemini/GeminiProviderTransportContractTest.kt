@@ -30,7 +30,9 @@ import saien.magrathea.provider.api.HttpTransport
 import saien.magrathea.provider.api.ProviderAuthException
 import saien.magrathea.provider.api.ProviderEvent
 import saien.magrathea.provider.api.ProviderProtocolException
+import saien.magrathea.provider.api.ProviderRateLimitException
 import saien.magrathea.provider.api.ProviderRequest
+import saien.magrathea.provider.api.ProviderStreamInterruptedException
 
 class GeminiProviderTransportContractTest {
     @Test
@@ -87,6 +89,44 @@ class GeminiProviderTransportContractTest {
         assertFailsWith<ProviderProtocolException> {
             adapter.generate(request(streaming = true)).toList()
         }
+    }
+
+    @Test
+    fun cleanEofBeforeProtocolTerminalIsRecoverable() = runTest {
+        val transport = ScriptedHttpTransport(
+            streamScripts = listOf(
+                sseFrames(FINAL_INTERACTION_SSE.substringBefore("event: interaction.completed")),
+            ),
+        )
+        val adapter = GeminiProviderAdapter(transport = transport)
+
+        assertFailsWith<ProviderStreamInterruptedException> {
+            adapter.generate(request(streaming = true)).toList()
+        }
+    }
+
+    @Test
+    fun streamingCanonicalErrorRemainsTypedAndDoesNotExposeProviderMessage() = runTest {
+        val canary = "private-gemini-error-canary"
+        val transport = ScriptedHttpTransport(
+            streamScripts = listOf(
+                sseFrames(
+                    """event: error
+data: {"event_type":"error","error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"$canary"}}
+
+""",
+                ),
+            ),
+        )
+        val adapter = GeminiProviderAdapter(transport = transport)
+
+        val failure = assertFailsWith<ProviderRateLimitException> {
+            adapter.generate(request(streaming = true)).toList()
+        }
+
+        assertEquals(429, failure.statusCode)
+        assertFalse(failure.toString().contains(canary))
+        assertEquals(1, transport.requests.size)
     }
 
     @Test

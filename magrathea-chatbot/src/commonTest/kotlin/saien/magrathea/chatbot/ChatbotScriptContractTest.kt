@@ -11,6 +11,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import saien.magrathea.core.AgentEngineConfig
 import saien.magrathea.core.AgentMessage
@@ -25,6 +26,8 @@ import saien.magrathea.core.ToolDefinition
 import saien.magrathea.core.ToolExecutionRequest
 import saien.magrathea.core.ToolExecutionResult
 import saien.magrathea.core.ToolExecutor
+import saien.magrathea.core.ToolResultAudience
+import saien.magrathea.core.ToolResultTextContent
 import saien.magrathea.policy.InMemoryToolAuditLog
 import saien.magrathea.policy.PermissionPolicy
 import saien.magrathea.policy.PolicyBackedApprovalGateway
@@ -45,6 +48,39 @@ import saien.magrathea.runtime.InMemoryToolRegistry
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatbotScriptContractTest {
+    @Test
+    fun canonicalToolResultIsNotImplicitlyPromotedToChatbotDisplayText() = runTest {
+        val secret = "PRIVATE_CANONICAL_TOOL_RESULT"
+        val tool = PrivateResultTool(secret)
+        val provider = ScriptedProvider(tool.definition.name)
+        val controller = ChatbotController(
+            runner = DefaultAgentRunner(
+                providerRegistry = InMemoryProviderRegistry(listOf(provider)),
+                toolRegistry = InMemoryToolRegistry(listOf(tool)),
+                persistence = InMemoryAgentPersistence(),
+                dispatcher = StandardTestDispatcher(testScheduler),
+            ),
+            requestFactory = DefaultChatbotRequestFactory(
+                tools = listOf(tool.definition),
+                configure = {
+                    copy(engine = AgentEngineConfig(runtime = RuntimeConfig(maxTurns = 3)))
+                },
+            ),
+            initialConfiguration = ChatbotSessionConfiguration(
+                ModelDescriptor(provider = provider.key, model = "scripted-model"),
+            ),
+            scope = this,
+        )
+
+        controller.sendMessage("Use the private Tool")
+        advanceUntilIdle()
+
+        val toolResult = controller.state.value.messages.flatMap { it.toolResults }.single()
+        assertEquals("Tool completed.", toolResult.text)
+        assertFalse(controller.state.value.toString().contains(secret))
+        assertFalse(provider.requests.last().toString().contains(secret))
+    }
+
     @Test
     fun commonScriptReachesEquivalentFinalStateAndResumeDoesNotRepeatSideEffects() = runTest {
         val tool = WeatherTool()
@@ -220,6 +256,30 @@ class ChatbotScriptContractTest {
                 displayText = "sunny",
             )
         }
+    }
+
+    private class PrivateResultTool(
+        private val secret: String,
+    ) : ToolExecutor {
+        override val definition = ToolDefinition(
+            name = "private_result",
+            description = "Returns a private canonical value",
+            schema = buildJsonObject { },
+        )
+
+        override suspend fun execute(request: ToolExecutionRequest): ToolExecutionResult =
+            ToolExecutionResult(
+                toolCallId = request.toolCall.toolCallId,
+                toolName = request.toolCall.toolName,
+                result = JsonPrimitive(secret),
+                content = listOf(
+                    ToolResultTextContent(
+                        text = "model-safe-result",
+                        audiences = setOf(ToolResultAudience.MODEL),
+                    ),
+                ),
+                modelResultVisible = false,
+            )
     }
 
     private data class ScriptFingerprint(

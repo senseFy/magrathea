@@ -9,7 +9,7 @@ Chatbot, Provider, Tool, persistence, and browser layers they need.
 
 | Area | Primary APIs |
 |---|---|
-| Requests and events | `AgentRequest`, `AgentMessage`, `MessagePart`, `ModelDescriptor`, `AgentEvent` |
+| Requests and events | `AgentRequest`, `AgentMessage`, `MessagePart`, typed Tool result content and origin, `ModelDescriptor`, `AgentEvent` |
 | Execution | `AgentRunner`, `ToolRegistry`, approval and permission gateways |
 | State | `AgentPersistence`, strict snapshot and checkpoint codecs |
 | Credentials | `CredentialRef`, `CredentialProvider`, transient `ProviderCredential` |
@@ -56,6 +56,7 @@ Capability contracts:
 - [Context Management](context-management.md)
 - [Timeouts](timeouts.md)
 - [Web Search](web-search.md)
+- [Image Search](image-search.md)
 - [X Search](x-search.md)
 
 ## MCP
@@ -76,14 +77,15 @@ local stdio processes. See [MCP](mcp.md).
 | `ChatbotClient` | Create, resume, list, delete, and close sessions |
 | `ChatbotSession` | Observe, send, regenerate, cancel, interrupt, resume, and update configuration |
 | `ChatbotSessionConfiguration` | Conversation-owned Provider, model, and non-secret credential profile |
-| `ChatbotSnapshot` | Immutable product-facing messages, status, usage, context, failures, and Tool activity |
+| `ChatbotSnapshot` | Immutable product-facing messages, status, usage, context, failures, and Tool activity with typed origin |
 | `ChatbotRequestFactory` | Map session state to an `AgentRequest` and apply host defaults |
 
 Create it with `createChatbotClient`, using the same `AgentPersistence` as the Runner. Pass
 `closeResources` when the composition owns Provider transports or platform stores.
 
 `ChatbotSnapshot.toolActivities` derives Tool lifecycle from canonical messages and live events
-while using the canonical persisted state.
+while using the canonical persisted state. Typed user-audience image results and their stable
+`MediaReference` values are available through `ChatbotToolResult.images`.
 
 ## Persistence and credentials
 
