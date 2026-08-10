@@ -14,6 +14,11 @@ Optional authorization/CSRF callbacks are evaluated per request and remain in me
 Each session is created with an explicit `MagratheaWebChatModel`; snapshots and history retain that
 selection, including its optional context-window size, and an idle session may switch Provider/model
 without rebuilding the browser client.
+Models declare configurable reasoning with `reasoningEfforts` (`minimal`, `low`, `medium`, `high`,
+`xhigh`, or `max`) and `supportsDisabledReasoning`. Pass `auto`, `disabled`, or one declared effort
+to `createSession(...)` or `updateReasoningPreference(...)`; unsupported preferences fail before a
+Gateway request is sent. Switching to a model that cannot honor the current explicit preference
+resets that preference to `auto`.
 Snapshots preserve text phases, redacted reasoning markers, attachment references, tool calls,
 tool results, citations, stop reasons, and token usage; hosts remain responsible for safely rendering
 URLs and model-provided content.

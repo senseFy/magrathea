@@ -10,7 +10,7 @@ HOST_OS := $(shell uname -s)
 .PHONY: \
 	help tasks build test verify verify-linux verify-apple verify-web \
 	verify-release verify-android-device api-check api-dump \
-	verify-mcp-conformance publish-coordinates publish-local clean require-macos
+	verify-persistence-schemas verify-mcp-conformance publish-coordinates publish-local clean require-macos
 
 help: ## Show the available commands.
 	@printf 'Magrathea development commands:\n\n'
@@ -54,6 +54,9 @@ api-check: ## Check committed JVM ABI baselines and serialization compatibility.
 
 api-dump: ## Update JVM ABI baselines after an intentional public API change.
 	$(GRADLE) $(GRADLE_ARGS) apiDump
+
+verify-persistence-schemas: ## Check the SDK-owned append-only persistence schema ledger.
+	$(GRADLE) $(GRADLE_ARGS) verifyPersistenceSchemaContract
 
 publish-coordinates: ## Print the SDK coordinates without publishing artifacts.
 	./scripts/publish-sdk --print $(PUBLISH_ARGS)

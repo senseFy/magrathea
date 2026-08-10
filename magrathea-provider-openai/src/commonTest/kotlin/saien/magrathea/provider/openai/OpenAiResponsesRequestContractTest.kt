@@ -19,6 +19,7 @@ import saien.magrathea.core.InlineToolImageSource
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ModelInputModality
+import saien.magrathea.core.ReasoningCapabilities
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolResultAudience
@@ -478,7 +479,7 @@ class OpenAiResponsesRequestContractTest {
         model = ModelDescriptor(
             "openai",
             "gpt-contract",
-            supportsReasoning = reasoning,
+            reasoningCapabilities = ReasoningCapabilities().takeIf { reasoning },
             inputModalities = inputModalities,
         ),
         messages = messages,

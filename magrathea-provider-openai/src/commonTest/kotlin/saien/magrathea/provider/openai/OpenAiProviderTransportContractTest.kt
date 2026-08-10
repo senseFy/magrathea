@@ -7,11 +7,17 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.CredentialRef
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ProviderCredential
+import saien.magrathea.core.ReasoningCapabilities
+import saien.magrathea.core.ReasoningEffort
+import saien.magrathea.core.ReasoningPreference
 import saien.magrathea.core.TextPart
 import saien.magrathea.provider.api.HttpStreamFormat
 import saien.magrathea.provider.api.HttpResponseSpec
@@ -28,6 +34,150 @@ import saien.magrathea.provider.api.ProviderStreamInterruptedException
 import saien.magrathea.provider.api.ReferenceProviderInputCapabilities
 
 class OpenAiProviderTransportContractTest {
+    @Test
+    fun modelReasoningCapabilityResolvesWithoutOverridingNativeConfiguration() = runTest {
+        val transport = ScriptedOpenAiTransport(
+            executeResponses = listOf(HttpResponseSpec(200, body = OPENAI_TEXT_RESPONSE)),
+        )
+        val model = ModelDescriptor(
+            provider = "openai",
+            model = "gpt-reasoning-contract",
+            reasoningCapabilities = ReasoningCapabilities(
+                supportedEfforts = setOf(ReasoningEffort.HIGH),
+                supportsDisabled = true,
+            ),
+        )
+        val base = request(streaming = false, secret = "secret").copy(model = model)
+
+        OpenAiProviderAdapter(transport = transport).generate(
+            base.copy(reasoningPreference = ReasoningPreference.Effort(ReasoningEffort.HIGH)),
+        ).toList()
+
+        val reasoning = Json.parseToJsonElement(
+            transport.requests.single().first.body.orEmpty(),
+        ).jsonObject.getValue("reasoning").jsonObject
+        assertEquals("high", reasoning.getValue("effort").jsonPrimitive.content)
+
+        val conflictTransport = ScriptedOpenAiTransport()
+        assertFailsWith<IllegalArgumentException> {
+            OpenAiProviderAdapter(transport = conflictTransport).generate(
+                base.copy(
+                    reasoningPreference = ReasoningPreference.Effort(ReasoningEffort.HIGH),
+                    typedConfig = OpenAiTransportConfig(reasoningEffort = "high"),
+                ),
+            ).toList()
+        }
+        assertTrue(conflictTransport.requests.isEmpty())
+    }
+
+    @Test
+    fun explicitDisabledReasoningIsDistinctFromMinimal() = runTest {
+        val transport = ScriptedOpenAiTransport(
+            executeResponses = listOf(HttpResponseSpec(200, body = OPENAI_TEXT_RESPONSE)),
+        )
+        val model = ModelDescriptor(
+            provider = "openai",
+            model = "gpt-reasoning-contract",
+            reasoningCapabilities = ReasoningCapabilities(supportsDisabled = true),
+        )
+
+        OpenAiProviderAdapter(transport = transport).generate(
+            request(streaming = false, secret = "secret").copy(
+                model = model,
+                reasoningPreference = ReasoningPreference.Disabled,
+            ),
+        ).toList()
+
+        val reasoning = Json.parseToJsonElement(
+            transport.requests.single().first.body.orEmpty(),
+        ).jsonObject.getValue("reasoning").jsonObject
+        assertEquals("none", reasoning.getValue("effort").jsonPrimitive.content)
+    }
+
+    @Test
+    fun referenceProfileRejectsCompatibleReasoningEffortMappings() {
+        assertFailsWith<IllegalArgumentException> {
+            OpenAiProviderProfile.openAi().copy(
+                reasoningEffortMapping = mapOf(ReasoningEffort.HIGH to "none"),
+            )
+        }
+    }
+
+    @Test
+    fun referenceProfilesRejectSwappedChatCompletionsReasoningShapes() {
+        assertFailsWith<IllegalArgumentException> {
+            OpenAiProviderProfile.openAi().copy(chatCompletionsReasoningFormat = null)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OpenAiProviderProfile.openAi().copy(
+                chatCompletionsReasoningFormat =
+                    OpenAiChatCompletionsReasoningFormat.REASONING_OBJECT,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OpenAiProviderProfile.openRouter().copy(
+                chatCompletionsReasoningFormat =
+                    OpenAiChatCompletionsReasoningFormat.REASONING_EFFORT,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OpenAiProviderProfile.xAi().copy(
+                chatCompletionsReasoningFormat =
+                    OpenAiChatCompletionsReasoningFormat.REASONING_OBJECT,
+            )
+        }
+    }
+
+    @Test
+    fun referenceDialectRejectsDisabledMappedToEffortValue() = runTest {
+        val model = ModelDescriptor(
+            provider = "openai",
+            model = "gpt-reasoning-contract",
+            reasoningCapabilities = ReasoningCapabilities(supportsDisabled = true),
+        )
+        val transport = ScriptedOpenAiTransport()
+
+        assertFailsWith<IllegalArgumentException> {
+            OpenAiProviderAdapter(
+                profile = OpenAiProviderProfile.openAi().copy(disabledReasoningValue = "high"),
+                transport = transport,
+            ).generate(
+                request(streaming = false, secret = "secret").copy(
+                    model = model,
+                    reasoningPreference = ReasoningPreference.Disabled,
+                ),
+            ).toList()
+        }
+        assertTrue(transport.requests.isEmpty())
+    }
+
+    @Test
+    fun xaiProfileRejectsDisabledReasoningBeforeTransport() = runTest {
+        assertFailsWith<IllegalArgumentException> {
+            OpenAiProviderProfile.xAi().copy(disabledReasoningValue = "none")
+        }
+        val model = ModelDescriptor(
+            provider = "xai",
+            model = "grok-reasoning-contract",
+            reasoningCapabilities = ReasoningCapabilities(supportsDisabled = true),
+        )
+        val transport = ScriptedOpenAiTransport()
+
+        assertFailsWith<IllegalArgumentException> {
+            OpenAiProviderAdapter(
+                profile = OpenAiProviderProfile.xAi(),
+                transport = transport,
+            ).generate(
+                request(streaming = false, secret = "secret").copy(
+                    model = model,
+                    credentialRef = CredentialRef("xai"),
+                    reasoningPreference = ReasoningPreference.Disabled,
+                ),
+            ).toList()
+        }
+        assertTrue(transport.requests.isEmpty())
+    }
+
     @Test
     fun adapterUsesResponsesSseAndKeepsCredentialOutOfBodyAndDiagnostics() = runTest {
         val secret = "openai-secret-canary"
@@ -150,7 +300,15 @@ class OpenAiProviderTransportContractTest {
 
         val chunks = adapter.generate(
             request(streaming = true, secret = "secret").copy(
-                model = ModelDescriptor("openrouter", "openai/gpt-contract", supportsStreaming = true),
+                model = ModelDescriptor(
+                    provider = "openrouter",
+                    model = "openai/gpt-contract",
+                    reasoningCapabilities = ReasoningCapabilities(
+                        supportedEfforts = setOf(ReasoningEffort.HIGH),
+                    ),
+                    supportsStreaming = true,
+                ),
+                reasoningPreference = ReasoningPreference.Effort(ReasoningEffort.HIGH),
                 credentialRef = CredentialRef("openrouter"),
             ),
         ).toList()
@@ -165,6 +323,14 @@ class OpenAiProviderTransportContractTest {
             "https://openrouter.ai/api/v1/chat/completions",
             transport.requests.single().first.url,
         )
+        val payload = Json.parseToJsonElement(
+            transport.requests.single().first.body.orEmpty(),
+        ).jsonObject
+        assertEquals(
+            "high",
+            payload.getValue("reasoning").jsonObject.getValue("effort").jsonPrimitive.content,
+        )
+        assertFalse("reasoning_effort" in payload)
         assertEquals(1, chunks.flatMap { it.events }.filterIsInstance<ProviderEvent.Completed>().size)
     }
 
@@ -214,6 +380,177 @@ class OpenAiProviderTransportContractTest {
                 .generate(request)
                 .toList()
         }
+    }
+
+    @Test
+    fun compatibleChatCompletionsDoesNotGuessNeutralReasoningShape() = runTest {
+        val model = ModelDescriptor(
+            provider = "compatible",
+            model = "reasoning-model",
+            reasoningCapabilities = ReasoningCapabilities(
+                supportedEfforts = setOf(ReasoningEffort.HIGH),
+            ),
+        )
+        val request = request(streaming = false, secret = "secret").copy(
+            model = model,
+            credentialRef = CredentialRef("compatible"),
+            reasoningPreference = ReasoningPreference.Effort(ReasoningEffort.HIGH),
+        )
+        val transport = ScriptedOpenAiTransport()
+
+        assertFailsWith<IllegalArgumentException> {
+            OpenAiProviderAdapter(
+                profile = OpenAiProviderProfile.compatible(providerId = "compatible"),
+                transport = transport,
+            ).generate(request).toList()
+        }
+        assertTrue(transport.requests.isEmpty())
+    }
+
+    @Test
+    fun compatibleChatCompletionsUsesExplicitReasoningShapeAndExactModelMapping() = runTest {
+        val transport = ScriptedOpenAiTransport(
+            executeResponses = listOf(HttpResponseSpec(200, body = OPENAI_CHAT_TEXT_RESPONSE)),
+        )
+        val model = ModelDescriptor(
+            provider = "compatible",
+            model = "reasoning-model",
+            reasoningCapabilities = ReasoningCapabilities(
+                supportedEfforts = setOf(ReasoningEffort.HIGH),
+            ),
+        )
+
+        OpenAiProviderAdapter(
+            profile = OpenAiProviderProfile.compatible(
+                providerId = "compatible",
+                chatCompletionsEndpoint = "https://compatible.example.test/v1/chat/completions",
+                chatCompletionsReasoningFormat =
+                    OpenAiChatCompletionsReasoningFormat.REASONING_OBJECT,
+                reasoningEffortMapping = mapOf(ReasoningEffort.HIGH to "provider-high"),
+            ),
+            transport = transport,
+        ).generate(
+            request(streaming = false, secret = "secret").copy(
+                model = model,
+                credentialRef = CredentialRef("compatible"),
+                reasoningPreference = ReasoningPreference.Effort(ReasoningEffort.HIGH),
+            ),
+        ).toList()
+
+        val payload = Json.parseToJsonElement(
+            transport.requests.single().first.body.orEmpty(),
+        ).jsonObject
+        assertEquals(
+            "provider-high",
+            payload.getValue("reasoning").jsonObject.getValue("effort").jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun compatibleEndpointRequiresAnExplicitEffortMapping() = runTest {
+        val transport = ScriptedOpenAiTransport()
+        val model = ModelDescriptor(
+            provider = "compatible",
+            model = "reasoning-model",
+            reasoningCapabilities = ReasoningCapabilities(
+                supportedEfforts = setOf(ReasoningEffort.HIGH),
+            ),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            OpenAiProviderAdapter(
+                profile = OpenAiProviderProfile.compatible(
+                    providerId = "compatible",
+                    chatCompletionsReasoningFormat =
+                        OpenAiChatCompletionsReasoningFormat.REASONING_OBJECT,
+                ),
+                transport = transport,
+            ).generate(
+                request(streaming = false, secret = "secret").copy(
+                    model = model,
+                    credentialRef = CredentialRef("compatible"),
+                    reasoningPreference = ReasoningPreference.Effort(ReasoningEffort.HIGH),
+                ),
+            ).toList()
+        }
+        assertTrue(transport.requests.isEmpty())
+    }
+
+    @Test
+    fun compatibleProfileRejectsInvalidEffortValues() {
+        listOf("", " provider-high", "provider-high ").forEach { invalid ->
+            assertFailsWith<IllegalArgumentException> {
+                OpenAiProviderProfile.compatible(
+                    providerId = "compatible",
+                    reasoningEffortMapping = mapOf(ReasoningEffort.HIGH to invalid),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun compatibleEndpointDoesNotGuessHowToDisableReasoning() = runTest {
+        val model = ModelDescriptor(
+            provider = "compatible",
+            model = "reasoning-model",
+            reasoningCapabilities = ReasoningCapabilities(supportsDisabled = true),
+        )
+        val transport = ScriptedOpenAiTransport()
+
+        assertFailsWith<IllegalArgumentException> {
+            OpenAiProviderAdapter(
+                profile = OpenAiProviderProfile.compatible(
+                    providerId = "compatible",
+                    chatCompletionsReasoningFormat =
+                        OpenAiChatCompletionsReasoningFormat.REASONING_OBJECT,
+                ),
+                transport = transport,
+            ).generate(
+                request(streaming = false, secret = "secret").copy(
+                    model = model,
+                    credentialRef = CredentialRef("compatible"),
+                    reasoningPreference = ReasoningPreference.Disabled,
+                ),
+            ).toList()
+        }
+        assertTrue(transport.requests.isEmpty())
+    }
+
+    @Test
+    fun compatibleEndpointUsesExplicitDisabledReasoningValue() = runTest {
+        val model = ModelDescriptor(
+            provider = "compatible",
+            model = "reasoning-model",
+            reasoningCapabilities = ReasoningCapabilities(supportsDisabled = true),
+        )
+        val transport = ScriptedOpenAiTransport(
+            executeResponses = listOf(HttpResponseSpec(200, body = OPENAI_CHAT_TEXT_RESPONSE)),
+        )
+
+        OpenAiProviderAdapter(
+            profile = OpenAiProviderProfile.compatible(
+                providerId = "compatible",
+                chatCompletionsEndpoint = "https://compatible.example.test/v1/chat/completions",
+                chatCompletionsReasoningFormat =
+                    OpenAiChatCompletionsReasoningFormat.REASONING_OBJECT,
+                disabledReasoningValue = "off",
+            ),
+            transport = transport,
+        ).generate(
+            request(streaming = false, secret = "secret").copy(
+                model = model,
+                credentialRef = CredentialRef("compatible"),
+                reasoningPreference = ReasoningPreference.Disabled,
+            ),
+        ).toList()
+
+        val payload = Json.parseToJsonElement(
+            transport.requests.single().first.body.orEmpty(),
+        ).jsonObject
+        assertEquals(
+            "off",
+            payload.getValue("reasoning").jsonObject.getValue("effort").jsonPrimitive.content,
+        )
     }
 
     @Test

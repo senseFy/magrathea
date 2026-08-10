@@ -32,9 +32,9 @@ one or more Provider adapters:
 
 ```kotlin
 dependencies {
-    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.2")
-    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.2")
-    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.2")
+    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.3")
+    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.3")
+    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.3")
 }
 ```
 

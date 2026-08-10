@@ -5,8 +5,24 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## 0.1.0-alpha.3 — 2026-08-09
+
+### Added
+
+- Provider-neutral reasoning preferences and model-declared reasoning capabilities across Core,
+  Chatbot, Gateway, the reference Provider adapters, and the JavaScript/TypeScript facade.
+- SDK-owned logical storage schema evolution with payload-free failure classification, an
+  append-only schema ledger, frozen schema-v6 adapters and fixtures, and atomic Room/IndexedDB
+  rewrite boundaries for validated migrations.
+
 ### Changed
 
+- Gateway protocol and HTTP paths advance to exact-v3 so browsers send only neutral reasoning
+  intent and servers resolve trusted model capabilities and Provider wire values.
+- Session and checkpoint envelopes advance to schema v6. Shipped schema-v5 data remains an
+  intentional Alpha clean break; future readable revisions require contiguous adjacent migrations.
+- The browser facade exposes reasoning capabilities and per-session preferences; its model
+  constructor and generated TypeScript surface change accordingly.
 - Published archives now carry the canonical project license, while the aggregate SBOM and license
   report include npm and generated runtime code bundled into the standalone Web SDK.
 

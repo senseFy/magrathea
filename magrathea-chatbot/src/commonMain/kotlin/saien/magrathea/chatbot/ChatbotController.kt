@@ -270,6 +270,7 @@ internal class ChatbotController(
             sessionId = sessionId,
             messages = messages,
             model = configuration.model,
+            reasoningPreference = configuration.reasoningPreference,
             engine = request.engine.copy(
                 provider = request.engine.provider.copy(
                     credentialRef = configuration.credentialRef,

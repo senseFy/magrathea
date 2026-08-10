@@ -1,0 +1,130 @@
+{
+  "ledgerFormatVersion": 1,
+  "policyDocument": "docs/adr/ADR-005-persistence-contracts.md#schema-evolution",
+  "migrationIds": [],
+  "domains": [
+    {
+      "id": "agent-storage-envelopes",
+      "owner": "magrathea-core",
+      "versionField": "schemaVersion",
+      "currentVersion": 6,
+      "migrationBaselineVersion": 6,
+      "minimumReadableVersion": 6,
+      "versionProbe": {
+        "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/CoreContracts.kt",
+        "pattern": "const\\s+val\\s+CURRENT_STORAGE_SCHEMA_VERSION\\s*:\\s*Int\\s*=\\s*([0-9]+)"
+      },
+      "currentCodecProbe": {
+        "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/CoreContracts.kt",
+        "requiredPatterns": [
+          "StorageSchemaV6Adapter.encodeSession",
+          "StorageSchemaV6Adapter.decodeSession",
+          "StorageSchemaV6Adapter.encodeCheckpoint",
+          "StorageSchemaV6Adapter.decodeCheckpoint"
+        ]
+      },
+      "migrationProbe": {
+        "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/CoreContracts.kt",
+        "pattern": "RegisteredStorageSchemaMigration\\(\\s*id\\s*=\\s*\"([a-z0-9][a-z0-9.-]+)\""
+      },
+      "versions": [
+        {
+          "version": 3,
+          "adapter": null,
+          "fixtures": [
+            {
+              "kind": "session",
+              "path": "serialization-fixtures/v3/core/stored-session-envelope.json",
+              "sha256": "cfc13fb4344d9b5ecd809df8facb54dcae301a30ff4976bee790dd5a29de47b1"
+            },
+            {
+              "kind": "checkpoint",
+              "path": "serialization-fixtures/v3/core/stored-checkpoint-envelope.json",
+              "sha256": "964a46b0dfbb123025832059d198241278d0a5e2b445fb3219a6a36c31818819"
+            }
+          ]
+        },
+        {
+          "version": 4,
+          "adapter": null,
+          "fixtures": [
+            {
+              "kind": "session",
+              "path": "serialization-fixtures/v4/core/stored-session-envelope.json",
+              "sha256": "20a82c31e5876eee1c8f04a280d05adfc86f4358cfdb7da3afa75dcf19e8c481"
+            },
+            {
+              "kind": "checkpoint",
+              "path": "serialization-fixtures/v4/core/stored-checkpoint-envelope.json",
+              "sha256": "e621c746b8e1169763e365fe6a52cfec9015e612b5ac25ae4ebfefecdfb5d456"
+            }
+          ]
+        },
+        {
+          "version": 5,
+          "adapter": null,
+          "fixtures": [
+            {
+              "kind": "session",
+              "path": "serialization-fixtures/v5/core/stored-session-envelope.json",
+              "sha256": "c38965a7de35aaaf168df7cdfdae6b17f8525f694232539f4d35d64a6aeb6904"
+            },
+            {
+              "kind": "checkpoint",
+              "path": "serialization-fixtures/v5/core/stored-checkpoint-envelope.json",
+              "sha256": "b672daf7be5743566b8b21399c5c4001f45c71ef0051ff142f37058d418d1997"
+            }
+          ]
+        },
+        {
+          "version": 6,
+          "adapter": {
+            "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/StorageSchemaV6.kt",
+            "sha256": "448a6c69514aa3180a5c5254a1c21e08d9586b22e63779c64394743d370ace5c",
+            "symbol": "StorageSchemaV6Adapter",
+            "versionPattern": "internal\\s+const\\s+val\\s+STORAGE_SCHEMA_V6_VERSION\\s*:\\s*Int\\s*=\\s*([0-9]+)",
+            "descriptorFixture": {
+              "path": "serialization-fixtures/v6/core/storage-schema-descriptor.sha256",
+              "sha256": "eeaa79450d6dbea8733fc15c33ce9986e9cb72a14c76d3ace75d9154287054f8"
+            }
+          },
+          "fixtures": [
+            {
+              "kind": "session",
+              "path": "serialization-fixtures/v6/core/stored-session-envelope.json",
+              "sha256": "8e8d3f2c00383aea09fa078b19086b3afc2c070152a9c2c76ccfd5bb9a91bf60"
+            },
+            {
+              "kind": "checkpoint",
+              "path": "serialization-fixtures/v6/core/stored-checkpoint-envelope.json",
+              "sha256": "74aa70a793d5ad27df0e3a8a7a067af77f9664dab0f7b45a4560f5cdae31f175"
+            }
+          ]
+        }
+      ],
+      "transitions": [
+        {
+          "from": 3,
+          "to": 4,
+          "kind": "clean-break",
+          "decision": "docs/adr/ADR-005-persistence-contracts.md#historical-clean-breaks",
+          "reason": "Alpha schema 4 changed recovery state without a trustworthy schema-3 reconstruction."
+        },
+        {
+          "from": 4,
+          "to": 5,
+          "kind": "clean-break",
+          "decision": "docs/adr/ADR-005-persistence-contracts.md#historical-clean-breaks",
+          "reason": "Alpha schema 5 introduced typed tool content that schema 4 cannot reconstruct safely."
+        },
+        {
+          "from": 5,
+          "to": 6,
+          "kind": "clean-break",
+          "decision": "docs/adr/ADR-005-persistence-contracts.md#historical-clean-breaks",
+          "reason": "Alpha schema 6 added structured reasoning intent that schema 5 cannot infer safely."
+        }
+      ]
+    }
+  ]
+}

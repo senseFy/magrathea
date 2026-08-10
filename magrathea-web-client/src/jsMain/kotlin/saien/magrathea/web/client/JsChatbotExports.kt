@@ -16,6 +16,9 @@ import saien.magrathea.chatbot.ChatbotSession
 import saien.magrathea.chatbot.ChatbotSessionConfiguration
 import saien.magrathea.chatbot.ChatbotSnapshot
 import saien.magrathea.core.ModelDescriptor
+import saien.magrathea.core.ReasoningCapabilities
+import saien.magrathea.core.ReasoningEffort
+import saien.magrathea.core.ReasoningPreference
 import saien.magrathea.provider.gateway.GatewaySessionHeaders
 import saien.magrathea.provider.gateway.GatewaySessionHeadersProvider
 
@@ -48,8 +51,14 @@ class MagratheaWebChatbot @JsExport.Ignore internal constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var closePromise: Promise<Unit>? = null
 
-    fun createSession(model: MagratheaWebChatModel): Promise<MagratheaWebChatSession> = scope.promise {
-        MagratheaWebChatSession(client.createSession(model.toConfiguration()), scope)
+    fun createSession(
+        model: MagratheaWebChatModel,
+        reasoningPreference: String = "auto",
+    ): Promise<MagratheaWebChatSession> = scope.promise {
+        MagratheaWebChatSession(
+            client.createSession(model.toConfiguration(reasoningPreference)),
+            scope,
+        )
     }
 
     fun resumeSession(sessionId: String): Promise<MagratheaWebChatSession> = scope.promise {
@@ -87,7 +96,26 @@ class MagratheaWebChatSession @JsExport.Ignore internal constructor(
     fun send(text: String): Promise<Unit> = scope.promise { session.send(text) }
 
     fun updateModel(model: MagratheaWebChatModel): Promise<Unit> = scope.promise {
-        session.updateConfiguration(model.toConfiguration())
+        val currentPreference = session.snapshot().configuration.reasoningPreference
+        val descriptor = model.toDescriptor()
+        session.updateConfiguration(
+            ChatbotSessionConfiguration(
+                model = descriptor,
+                reasoningPreference = normalizeReasoningPreferenceForModel(
+                    currentPreference,
+                    descriptor,
+                ),
+            ),
+        )
+    }
+
+    fun updateReasoningPreference(reasoningPreference: String): Promise<Unit> = scope.promise {
+        val configuration = session.snapshot().configuration
+        session.updateConfiguration(
+            configuration.copy(
+                reasoningPreference = reasoningPreference.toReasoningPreference(),
+            ),
+        )
     }
 
     fun cancel(): Promise<Unit> = scope.promise { session.cancel() }
@@ -105,6 +133,7 @@ class MagratheaWebChatObservation @JsExport.Ignore internal constructor(
 @JsExport
 class MagratheaWebChatSnapshot(
     val model: MagratheaWebChatModel,
+    val reasoningPreference: String,
     val sessionId: String?,
     val status: String,
     val failure: String?,
@@ -177,6 +206,7 @@ class MagratheaWebChatCitation(
 class MagratheaWebChatHistoryItem(
     val sessionId: String,
     val model: MagratheaWebChatModel,
+    val reasoningPreference: String,
     val updatedAtEpochMs: Double,
     val status: String,
     val lastMessageText: String,
@@ -184,6 +214,7 @@ class MagratheaWebChatHistoryItem(
 
 private fun ChatbotSnapshot.toJsSnapshot(): MagratheaWebChatSnapshot = MagratheaWebChatSnapshot(
     model = configuration.model.toJsModel(),
+    reasoningPreference = configuration.reasoningPreference.toJsValue(),
     sessionId = sessionId,
     status = status.name.lowercase(),
     failure = failure?.name?.lowercase(),
@@ -233,6 +264,7 @@ private fun ChatbotSnapshot.toJsSnapshot(): MagratheaWebChatSnapshot = Magrathea
 private fun ChatbotHistoryItem.toJsHistoryItem(): MagratheaWebChatHistoryItem = MagratheaWebChatHistoryItem(
     sessionId = sessionId,
     model = configuration.model.toJsModel(),
+    reasoningPreference = configuration.reasoningPreference.toJsValue(),
     updatedAtEpochMs = updatedAtEpochMs.toDouble(),
     status = status.name.lowercase(),
     lastMessageText = lastMessageText,
@@ -244,33 +276,83 @@ class MagratheaWebChatModel(
     val model: String,
     val displayName: String,
     val supportsToolCalls: Boolean,
-    val supportsReasoning: Boolean,
+    val reasoningEfforts: Array<String>?,
+    val supportsDisabledReasoning: Boolean,
     val supportsStreaming: Boolean,
     val contextWindowTokens: Double?,
-)
+) {
+    init {
+        require(reasoningEfforts != null || !supportsDisabledReasoning) {
+            "Disabled reasoning support requires reasoning capabilities"
+        }
+    }
+}
 
-private fun MagratheaWebChatModel.toConfiguration(): ChatbotSessionConfiguration =
+private fun MagratheaWebChatModel.toConfiguration(
+    reasoningPreference: String,
+): ChatbotSessionConfiguration =
     ChatbotSessionConfiguration(
-        ModelDescriptor(
-            provider = provider,
-            model = model,
-            displayName = displayName,
-            supportsToolCalls = supportsToolCalls,
-            supportsReasoning = supportsReasoning,
-            supportsStreaming = supportsStreaming,
-            contextWindowTokens = contextWindowTokens?.toContextWindowTokens(),
-        ),
+        model = toDescriptor(),
+        reasoningPreference = reasoningPreference.toReasoningPreference(),
     )
+
+private fun MagratheaWebChatModel.toDescriptor(): ModelDescriptor {
+    val efforts = reasoningEfforts?.map(String::toReasoningEffort)
+    require(efforts == null || efforts.distinct().size == efforts.size) {
+        "Reasoning capabilities must use unique effort levels"
+    }
+    return ModelDescriptor(
+        provider = provider,
+        model = model,
+        displayName = displayName,
+        supportsToolCalls = supportsToolCalls,
+        reasoningCapabilities = efforts?.let { levels ->
+            ReasoningCapabilities(
+                supportedEfforts = levels.toSet(),
+                supportsDisabled = supportsDisabledReasoning,
+            )
+        },
+        supportsStreaming = supportsStreaming,
+        contextWindowTokens = contextWindowTokens?.toContextWindowTokens(),
+    )
+}
 
 private fun ModelDescriptor.toJsModel(): MagratheaWebChatModel = MagratheaWebChatModel(
     provider = provider,
     model = model,
     displayName = displayName,
     supportsToolCalls = supportsToolCalls,
-    supportsReasoning = supportsReasoning,
+    reasoningEfforts = reasoningCapabilities?.supportedEfforts
+        ?.map { level -> level.name.lowercase() }
+        ?.toTypedArray(),
+    supportsDisabledReasoning = reasoningCapabilities?.supportsDisabled ?: false,
     supportsStreaming = supportsStreaming,
     contextWindowTokens = contextWindowTokens?.toDouble(),
 )
+
+private fun String.toReasoningPreference(): ReasoningPreference = when (lowercase()) {
+    "auto" -> ReasoningPreference.Auto
+    "disabled" -> ReasoningPreference.Disabled
+    else -> ReasoningPreference.Effort(toReasoningEffort())
+}
+
+private fun String.toReasoningEffort(): ReasoningEffort =
+    ReasoningEffort.entries.firstOrNull { it.name.equals(this, ignoreCase = true) }
+        ?: throw IllegalArgumentException("Unknown reasoning effort $this")
+
+private fun ReasoningPreference.toJsValue(): String = when (this) {
+    ReasoningPreference.Auto -> "auto"
+    ReasoningPreference.Disabled -> "disabled"
+    is ReasoningPreference.Effort -> level.name.lowercase()
+}
+
+internal fun normalizeReasoningPreferenceForModel(
+    preference: ReasoningPreference,
+    model: ModelDescriptor,
+): ReasoningPreference = preference.takeIf { current ->
+    current == ReasoningPreference.Auto ||
+        model.reasoningCapabilities?.supports(current) == true
+} ?: ReasoningPreference.Auto
 
 private fun Double.toContextWindowTokens(): Long {
     require(isFinite() && this > 0.0 && this % 1.0 == 0.0 && this <= MAX_SAFE_INTEGER) {

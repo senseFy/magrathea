@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import saien.magrathea.core.ProviderCredential
+import saien.magrathea.core.ReasoningEffort
+import saien.magrathea.core.ReasoningPreference
 import saien.magrathea.provider.api.AnthropicAuthentication
 import saien.magrathea.provider.api.AnthropicTransportConfig
 import saien.magrathea.provider.api.HttpHeader
@@ -46,19 +48,28 @@ class AnthropicProviderAdapter(
     }
 
     override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> {
-        val credential = requireCredential(request)
-        val config = request.anthropicTransportConfig()
-        val payload = AnthropicRequestBuilder(key, json).build(request)
+        val resolvedRequest = request.withResolvedReasoning()
+        val credential = requireCredential(resolvedRequest)
+        val config = resolvedRequest.anthropicTransportConfig()
+        val payload = AnthropicRequestBuilder(key, json).build(resolvedRequest)
         val body = json.encodeToString(JsonObject.serializer(), payload)
         val httpRequest = HttpRequestSpec(
             method = HttpMethod.POST,
-            url = request.endpoint ?: credential.endpoint ?: DEFAULT_MESSAGES_ENDPOINT,
-            headers = buildHeaders(request, credential, config.authentication, request.model.supportsStreaming),
+            url = resolvedRequest.endpoint ?: credential.endpoint ?: DEFAULT_MESSAGES_ENDPOINT,
+            headers = buildHeaders(
+                resolvedRequest,
+                credential,
+                config.authentication,
+                resolvedRequest.model.supportsStreaming,
+            ),
             body = body,
-            timeouts = request.timeouts.toHttpTimeoutConfig(),
+            timeouts = resolvedRequest.timeouts.toHttpTimeoutConfig(),
         )
-        return if (request.model.supportsStreaming) streamMessage(request, httpRequest)
-        else executeMessage(request, httpRequest)
+        return if (resolvedRequest.model.supportsStreaming) {
+            streamMessage(resolvedRequest, httpRequest)
+        } else {
+            executeMessage(resolvedRequest, httpRequest)
+        }
     }
 
     override fun close() {
@@ -122,6 +133,49 @@ class AnthropicProviderAdapter(
         }
         add(HttpHeader("anthropic-version", "2023-06-01"))
     }
+}
+
+private fun ProviderRequest.withResolvedReasoning(): ProviderRequest {
+    if (reasoningPreference == ReasoningPreference.Auto) return this
+    val config = anthropicTransportConfig()
+    require(config.effort == null) {
+        "Provider-neutral reasoning cannot be combined with Anthropic effort"
+    }
+    return when (val preference = reasoningPreference) {
+        ReasoningPreference.Auto -> error("Auto reasoning is resolved before Provider mapping")
+        ReasoningPreference.Disabled -> {
+            require(
+                config.thinkingMode == null &&
+                    config.thinkingBudgetTokens == null &&
+                    config.thinkingDisplay == null,
+            ) { "Disabled reasoning cannot be combined with Anthropic thinking options" }
+            copy(typedConfig = config.copy(thinkingMode = "disabled"))
+        }
+        is ReasoningPreference.Effort -> {
+            require(config.thinkingMode == null) {
+                "Provider-neutral reasoning cannot be combined with Anthropic thinkingMode"
+            }
+            require(config.thinkingBudgetTokens == null) {
+                "Provider-neutral effort cannot be combined with an Anthropic thinking budget"
+            }
+            val effort = preference.level.anthropicEffort()
+            copy(
+                typedConfig = config.copy(
+                    thinkingMode = "adaptive",
+                    effort = effort,
+                ),
+            )
+        }
+    }
+}
+
+private fun ReasoningEffort.anthropicEffort(): String = when (this) {
+    ReasoningEffort.LOW -> "low"
+    ReasoningEffort.MEDIUM -> "medium"
+    ReasoningEffort.HIGH -> "high"
+    ReasoningEffort.XHIGH -> "xhigh"
+    ReasoningEffort.MAX -> "max"
+    ReasoningEffort.MINIMAL -> throw IllegalArgumentException("Unsupported Anthropic effort: $this")
 }
 
 private const val DEFAULT_MESSAGES_ENDPOINT = "https://api.anthropic.com/v1/messages"

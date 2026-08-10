@@ -237,10 +237,15 @@ data class AgentRequest(
     val systemPrompt: String = "",
     val messages: List<AgentMessage>,
     val model: ModelDescriptor,
+    val reasoningPreference: ReasoningPreference = ReasoningPreference.Auto,
     val tools: List<ToolDefinition> = emptyList(),
     val metadata: JsonObject = buildJsonObject { },
     val engine: AgentEngineConfig = AgentEngineConfig(),
-)
+) {
+    init {
+        model.requireSupports(reasoningPreference)
+    }
+}
 
 /** Input modalities accepted by a concrete model, independently from its Provider wire protocol. */
 @Serializable
@@ -252,6 +257,60 @@ enum class ModelInputModality {
     DOCUMENT,
 }
 
+/** Provider-neutral reasoning effort selected by a host or product. */
+@Serializable
+enum class ReasoningEffort {
+    @SerialName("minimal")
+    MINIMAL,
+
+    @SerialName("low")
+    LOW,
+
+    @SerialName("medium")
+    MEDIUM,
+
+    @SerialName("high")
+    HIGH,
+
+    @SerialName("xhigh")
+    XHIGH,
+
+    @SerialName("max")
+    MAX,
+}
+
+/** Provider-neutral reasoning intent for one Agent request. */
+@Serializable
+sealed interface ReasoningPreference {
+    /** Leave reasoning behavior entirely to the selected model and Provider. */
+    @Serializable
+    @SerialName("auto")
+    data object Auto : ReasoningPreference
+
+    /** Explicitly disable reasoning when the selected model declares that capability. */
+    @Serializable
+    @SerialName("disabled")
+    data object Disabled : ReasoningPreference
+
+    /** Request one supported semantic effort level. */
+    @Serializable
+    @SerialName("effort")
+    data class Effort(val level: ReasoningEffort) : ReasoningPreference
+}
+
+/** Provider-neutral reasoning controls supported by one model. */
+@Serializable
+data class ReasoningCapabilities(
+    val supportedEfforts: Set<ReasoningEffort> = emptySet(),
+    val supportsDisabled: Boolean = false,
+) {
+    fun supports(preference: ReasoningPreference): Boolean = when (preference) {
+        ReasoningPreference.Auto -> true
+        ReasoningPreference.Disabled -> supportsDisabled
+        is ReasoningPreference.Effort -> preference.level in supportedEfforts
+    }
+}
+
 /** Provider and model capability identity used for routing and request validation. */
 @Serializable
 data class ModelDescriptor(
@@ -259,13 +318,31 @@ data class ModelDescriptor(
     val model: String,
     val displayName: String = model,
     val supportsToolCalls: Boolean = true,
-    val supportsReasoning: Boolean = false,
+    val reasoningCapabilities: ReasoningCapabilities? = null,
     val supportsStreaming: Boolean = false,
     val contextWindowTokens: Long? = null,
     val inputModalities: Set<ModelInputModality> = setOf(ModelInputModality.TEXT),
 ) {
+    val supportsReasoning: Boolean
+        get() = reasoningCapabilities != null
+
     init {
         require(inputModalities.isNotEmpty()) { "Model input modalities must not be empty" }
+    }
+}
+
+/** Fails before execution when a request contradicts the selected model capability declaration. */
+fun ModelDescriptor.requireSupports(preference: ReasoningPreference) {
+    if (preference == ReasoningPreference.Auto) return
+    val capabilities = reasoningCapabilities
+        ?: throw IllegalArgumentException("Model $model does not declare configurable reasoning")
+    require(capabilities.supports(preference)) {
+        when (preference) {
+            ReasoningPreference.Auto -> error("Auto reasoning is always supported")
+            ReasoningPreference.Disabled -> "Model $model does not support disabling reasoning"
+            is ReasoningPreference.Effort ->
+                "Model $model does not support reasoning effort ${preference.level}"
+        }
     }
 }
 

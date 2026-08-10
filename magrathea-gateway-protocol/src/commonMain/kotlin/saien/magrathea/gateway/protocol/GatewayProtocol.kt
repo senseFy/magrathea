@@ -15,6 +15,7 @@ import saien.magrathea.core.AttachmentPart
 import saien.magrathea.core.JsonPart
 import saien.magrathea.core.MessagePart
 import saien.magrathea.core.ReasoningPart
+import saien.magrathea.core.ReasoningPreference
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
@@ -26,8 +27,8 @@ import saien.magrathea.core.ToolResultTextContent
 import saien.magrathea.provider.api.ProviderEvent
 import saien.magrathea.provider.api.ProviderUsage
 
-const val GATEWAY_PROTOCOL_VERSION: Int = 2
-const val GATEWAY_SSE_EVENT: String = "magrathea.gateway.v2"
+const val GATEWAY_PROTOCOL_VERSION: Int = 3
+const val GATEWAY_SSE_EVENT: String = "magrathea.gateway.v3"
 const val GATEWAY_ATTACHMENT_URI_PREFIX: String = "magrathea-attachment:"
 const val GATEWAY_VERSION_HEADER: String = "X-Magrathea-Gateway-Version"
 const val GATEWAY_IDEMPOTENCY_HEADER: String = "Idempotency-Key"
@@ -113,6 +114,7 @@ data class GatewayCreateStreamRequest(
     val turn: Int,
     val model: GatewayModelReference,
     val messages: List<AgentMessage>,
+    val reasoningPreference: ReasoningPreference = ReasoningPreference.Auto,
     val tools: List<ToolDefinition> = emptyList(),
     val options: GatewayGenerationOptions = GatewayGenerationOptions(),
     val attachments: List<GatewayAttachmentReference> = emptyList(),
@@ -516,7 +518,7 @@ private fun validateEnvelope(value: GatewayStreamEnvelope, limits: GatewayProtoc
 private fun GatewayEvent.validate(limits: GatewayProtocolLimits) {
     when (this) {
         is GatewayEvent.StreamOpened -> protocolCheck(replayFromSequence == 0L) {
-            "replayFromSequence must be zero in Gateway v2"
+            "replayFromSequence must be zero in Gateway v3"
         }
         is GatewayEvent.TextStart -> validateOptionalOpaque("text signature", signature, limits.maxSignatureChars)
         is GatewayEvent.TextDelta -> {

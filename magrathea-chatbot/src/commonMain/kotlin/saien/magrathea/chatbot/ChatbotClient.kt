@@ -455,6 +455,7 @@ private fun AgentRequest.toChatbotSessionConfiguration(): ChatbotSessionConfigur
     ChatbotSessionConfiguration(
         model = model,
         credentialRef = engine.provider.credentialRef,
+        reasoningPreference = reasoningPreference,
     )
 
 private suspend inline fun <T> facadeOperation(crossinline operation: suspend () -> T): T = try {

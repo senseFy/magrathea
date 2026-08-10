@@ -17,6 +17,7 @@ import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ProviderInterruptionPhase
 import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.core.ReasoningContentKind
+import saien.magrathea.core.ReasoningPreference
 import saien.magrathea.core.ReasoningPart
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
@@ -31,6 +32,7 @@ import saien.magrathea.core.ToolResultContent
 import saien.magrathea.core.ToolResultImageContent
 import saien.magrathea.core.ToolResultPart
 import saien.magrathea.core.citations
+import saien.magrathea.core.requireSupports
 import saien.magrathea.core.text
 
 enum class ChatbotStatus {
@@ -137,6 +139,7 @@ data class ChatbotSendOptions(
 data class ChatbotSessionConfiguration(
     val model: ModelDescriptor,
     val credentialRef: CredentialRef? = null,
+    val reasoningPreference: ReasoningPreference = ReasoningPreference.Auto,
 ) {
     init {
         require(model.provider.isNotBlank()) { "Chatbot provider must not be blank" }
@@ -144,6 +147,7 @@ data class ChatbotSessionConfiguration(
         require(credentialRef == null || credentialRef.provider == model.provider) {
             "Chatbot credential provider must match the model provider"
         }
+        model.requireSupports(reasoningPreference)
     }
 }
 

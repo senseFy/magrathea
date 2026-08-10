@@ -41,6 +41,7 @@ import saien.magrathea.gateway.protocol.GATEWAY_IDEMPOTENCY_HEADER
 import saien.magrathea.gateway.protocol.GATEWAY_INVOCATION_INVALIDATED_PROBLEM_CODE
 import saien.magrathea.gateway.protocol.GATEWAY_INVOCATION_UNKNOWN_PROBLEM_CODE
 import saien.magrathea.gateway.protocol.GATEWAY_REPLAY_WINDOW_EXHAUSTED_PROBLEM_CODE
+import saien.magrathea.gateway.protocol.GATEWAY_PROTOCOL_VERSION
 import saien.magrathea.gateway.protocol.GATEWAY_VERSION_HEADER
 import saien.magrathea.gateway.protocol.GatewayEvent
 import saien.magrathea.gateway.protocol.GatewayProblem
@@ -58,15 +59,15 @@ class GatewayKtorRoutesTest {
 
     @Test
     fun httpConfigurationKeepsTheVersionedPathAndPositiveBounds() {
-        assertEquals("/v2/streams", GatewayHttpConfig().basePath)
-        assertEquals("/api/v2/streams", GatewayHttpConfig(basePath = "/api/v2/streams").basePath)
+        assertEquals("/v3/streams", GatewayHttpConfig().basePath)
+        assertEquals("/api/v3/streams", GatewayHttpConfig(basePath = "/api/v3/streams").basePath)
         listOf(
             "/streams",
-            "/./v2/streams",
-            "/../v2/streams",
-            "/api/../v2/streams",
-            "/api//v2/streams",
-            "/v2/streams/",
+            "/./v3/streams",
+            "/../v3/streams",
+            "/api/../v3/streams",
+            "/api//v3/streams",
+            "/v3/streams/",
         ).forEach {
             kotlin.test.assertFailsWith<IllegalArgumentException> { GatewayHttpConfig(basePath = it) }
         }
@@ -79,19 +80,19 @@ class GatewayKtorRoutesTest {
         val fixture = HttpFixture()
         application { installMagratheaGateway(fixture.dependencies) }
 
-        val missingAuth = client.post("/v2/streams") {
+        val missingAuth = client.post("/v3/streams") {
             validHeaders(includeAuth = false)
             setBody(codec.encodeCreateRequest(GatewayStreamCoordinatorTest.request()))
         }
         assertEquals(HttpStatusCode.Unauthorized, missingAuth.status)
 
-        val badOrigin = client.post("/v2/streams") {
+        val badOrigin = client.post("/v3/streams") {
             validHeaders(origin = "https://evil.example")
             setBody(codec.encodeCreateRequest(GatewayStreamCoordinatorTest.request()))
         }
         assertEquals(HttpStatusCode.Forbidden, badOrigin.status)
 
-        val createdResponse = client.post("/v2/streams") {
+        val createdResponse = client.post("/v3/streams") {
             validHeaders()
             setBody(codec.encodeCreateRequest(GatewayStreamCoordinatorTest.request()))
         }
@@ -101,7 +102,7 @@ class GatewayKtorRoutesTest {
         assertExposesGatewayHeaders(createdResponse.headers[HttpHeaders.AccessControlExposeHeaders])
         val descriptor = codec.decodeDescriptor(createdResponse.bodyAsText())
 
-        val reusedResponse = client.post("/v2/streams") {
+        val reusedResponse = client.post("/v3/streams") {
             validHeaders()
             setBody(codec.encodeCreateRequest(GatewayStreamCoordinatorTest.request()))
         }
@@ -109,7 +110,7 @@ class GatewayKtorRoutesTest {
         assertEquals(descriptor, codec.decodeDescriptor(reusedResponse.bodyAsText()))
         assertEquals(1, fixture.providerCalls)
 
-        val conflict = client.post("/v2/streams") {
+        val conflict = client.post("/v3/streams") {
             validHeaders()
             setBody(
                 codec.encodeCreateRequest(
@@ -122,7 +123,7 @@ class GatewayKtorRoutesTest {
         assertEquals(HttpStatusCode.Conflict, conflict.status)
         assertFalse(conflict.bodyAsText().contains("changed"))
 
-        val stream = client.get("/v2/streams/${descriptor.streamId}/events?afterSequence=-1") {
+        val stream = client.get("/v3/streams/${descriptor.streamId}/events?afterSequence=-1") {
             readHeaders("user-a")
         }
         assertEquals(HttpStatusCode.OK, stream.status)
@@ -132,17 +133,17 @@ class GatewayKtorRoutesTest {
         assertEquals(listOf(0L, 1L, 2L), allEvents.map { it.sequence })
         assertTrue(stream.bodyAsText().contains("event: $GATEWAY_SSE_EVENT"))
 
-        val resumed = client.get("/v2/streams/${descriptor.streamId}/events?afterSequence=1") {
+        val resumed = client.get("/v3/streams/${descriptor.streamId}/events?afterSequence=1") {
             readHeaders("user-a")
         }
         assertEquals(listOf(2L), parseSse(resumed.bodyAsText()).map { it.sequence })
 
-        val otherOwner = client.get("/v2/streams/${descriptor.streamId}/events?afterSequence=-1") {
+        val otherOwner = client.get("/v3/streams/${descriptor.streamId}/events?afterSequence=-1") {
             readHeaders("user-b")
         }
         assertEquals(HttpStatusCode.NotFound, otherOwner.status)
 
-        val invalidCursor = client.get("/v2/streams/${descriptor.streamId}/events?afterSequence=99") {
+        val invalidCursor = client.get("/v3/streams/${descriptor.streamId}/events?afterSequence=99") {
             readHeaders("user-a")
         }
         assertEquals(HttpStatusCode.BadRequest, invalidCursor.status)
@@ -152,20 +153,20 @@ class GatewayKtorRoutesTest {
             "afterSequence=-1&afterSequence=0",
             "afterSequence=-1&unexpected=true",
         ).forEach { query ->
-            val ambiguous = client.get("/v2/streams/${descriptor.streamId}/events?$query") {
+            val ambiguous = client.get("/v3/streams/${descriptor.streamId}/events?$query") {
                 readHeaders("user-a")
             }
             assertEquals(HttpStatusCode.BadRequest, ambiguous.status)
             assertEquals("invalid_cursor", codec.decodeProblem(ambiguous.bodyAsText()).code)
         }
 
-        val queriedCreate = client.post("/v2/streams?unexpected=true") {
+        val queriedCreate = client.post("/v3/streams?unexpected=true") {
             validHeaders()
             setBody(codec.encodeCreateRequest(GatewayStreamCoordinatorTest.request()))
         }
         assertEquals(HttpStatusCode.BadRequest, queriedCreate.status)
 
-        val queriedCancel = client.delete("/v2/streams/${descriptor.streamId}?unexpected=true") {
+        val queriedCancel = client.delete("/v3/streams/${descriptor.streamId}?unexpected=true") {
             readHeaders("user-a")
         }
         assertEquals(HttpStatusCode.BadRequest, queriedCancel.status)
@@ -178,7 +179,7 @@ class GatewayKtorRoutesTest {
         val fixture = HttpFixture(rateAllowed = false)
         application { installMagratheaGateway(fixture.dependencies) }
 
-        val wrongVersion = client.post("/v2/streams") {
+        val wrongVersion = client.post("/v3/streams") {
             header(GATEWAY_VERSION_HEADER, "1")
             header(HttpHeaders.Authorization, "Bearer user-a")
             header(HttpHeaders.Origin, ALLOWED_ORIGIN)
@@ -189,7 +190,7 @@ class GatewayKtorRoutesTest {
         assertEquals(HttpStatusCode.BadRequest, wrongVersion.status)
         assertEquals("invalid_request", codec.decodeProblem(wrongVersion.bodyAsText()).code)
 
-        val rateLimited = client.post("/v2/streams") {
+        val rateLimited = client.post("/v3/streams") {
             validHeaders()
             setBody(codec.encodeCreateRequest(GatewayStreamCoordinatorTest.request()))
         }
@@ -215,7 +216,7 @@ class GatewayKtorRoutesTest {
             )
         }
 
-        val preflight = client.options("/v2/streams") {
+        val preflight = client.options("/v3/streams") {
             header(HttpHeaders.Origin, ALLOWED_ORIGIN)
             header(HttpHeaders.AccessControlRequestMethod, "POST")
             header(HttpHeaders.AccessControlRequestHeaders, GATEWAY_CSRF_HEADER)
@@ -226,20 +227,20 @@ class GatewayKtorRoutesTest {
         assertEquals("true", preflight.headers[HttpHeaders.AccessControlAllowCredentials])
         assertTrue(preflight.headers[HttpHeaders.Vary].orEmpty().contains(HttpHeaders.Origin))
 
-        val missingCsrf = client.post("/v2/streams") {
+        val missingCsrf = client.post("/v3/streams") {
             validHeaders(includeCsrf = false)
             setBody(codec.encodeCreateRequest(GatewayStreamCoordinatorTest.request()))
         }
         assertEquals(HttpStatusCode.Unauthorized, missingCsrf.status)
 
-        val mismatchedIdempotency = client.post("/v2/streams") {
+        val mismatchedIdempotency = client.post("/v3/streams") {
             validHeaders(idempotencyKey = "different-request")
             setBody(codec.encodeCreateRequest(GatewayStreamCoordinatorTest.request()))
         }
         assertEquals(HttpStatusCode.BadRequest, mismatchedIdempotency.status)
         assertEquals("invalid_request", codec.decodeProblem(mismatchedIdempotency.bodyAsText()).code)
 
-        val oversized = client.post("/v2/streams") {
+        val oversized = client.post("/v3/streams") {
             validHeaders()
             setBody("x".repeat(513))
         }
@@ -252,7 +253,7 @@ class GatewayKtorRoutesTest {
     fun authorizationIsAMandatoryServerDecision() = testApplication {
         val unauthorizedFixture = HttpFixture(authorizerAllowed = false)
         application { installMagratheaGateway(unauthorizedFixture.dependencies) }
-        val forbidden = client.post("/v2/streams") {
+        val forbidden = client.post("/v3/streams") {
             validHeaders()
             setBody(codec.encodeCreateRequest(GatewayStreamCoordinatorTest.request()))
         }
@@ -265,7 +266,7 @@ class GatewayKtorRoutesTest {
     fun quotaDenialReturnsStableRateResponseBeforeProviderWork() = testApplication {
         val fixture = HttpFixture(quotaAllowed = false)
         application { installMagratheaGateway(fixture.dependencies) }
-        val denied = client.post("/v2/streams") {
+        val denied = client.post("/v3/streams") {
             validHeaders()
             setBody(codec.encodeCreateRequest(GatewayStreamCoordinatorTest.request()))
         }
@@ -282,18 +283,18 @@ class GatewayKtorRoutesTest {
         val fixture = HttpFixture(hangProvider = true)
         application { installMagratheaGateway(fixture.dependencies) }
         val createRequest = GatewayStreamCoordinatorTest.request()
-        val created = client.post("/v2/streams") {
+        val created = client.post("/v3/streams") {
             validHeaders()
             setBody(codec.encodeCreateRequest(createRequest))
         }
         val descriptor = codec.decodeDescriptor(created.bodyAsText())
 
-        val cancelled = client.delete("/v2/streams/${descriptor.streamId}") {
+        val cancelled = client.delete("/v3/streams/${descriptor.streamId}") {
             readHeaders("user-a")
         }
         assertEquals(HttpStatusCode.NoContent, cancelled.status)
 
-        val invalidated = client.post("/v2/streams") {
+        val invalidated = client.post("/v3/streams") {
             validHeaders()
             setBody(codec.encodeCreateRequest(createRequest))
         }
@@ -312,13 +313,13 @@ class GatewayKtorRoutesTest {
         val fixture = HttpFixture(hangProvider = true)
         application { installMagratheaGateway(fixture.dependencies) }
         val request = GatewayStreamCoordinatorTest.request()
-        val created = client.post("/v2/streams") {
+        val created = client.post("/v3/streams") {
             validHeaders()
             setBody(codec.encodeCreateRequest(request))
         }
         val descriptor = codec.decodeDescriptor(created.bodyAsText())
 
-        val active = client.get("/v2/streams") {
+        val active = client.get("/v3/streams") {
             readHeaders("user-a")
             header(GATEWAY_IDEMPOTENCY_HEADER, request.requestId)
         }
@@ -326,10 +327,10 @@ class GatewayKtorRoutesTest {
         assertEquals(descriptor, codec.decodeDescriptor(active.bodyAsText()))
         assertEquals(1, fixture.providerCalls)
 
-        client.delete("/v2/streams/${descriptor.streamId}") {
+        client.delete("/v3/streams/${descriptor.streamId}") {
             readHeaders("user-a")
         }
-        val invalidated = client.get("/v2/streams") {
+        val invalidated = client.get("/v3/streams") {
             readHeaders("user-a")
             header(GATEWAY_IDEMPOTENCY_HEADER, request.requestId)
         }
@@ -347,17 +348,17 @@ class GatewayKtorRoutesTest {
         val fixture = HttpFixture()
         application { installMagratheaGateway(fixture.dependencies) }
         val request = GatewayStreamCoordinatorTest.request()
-        val created = client.post("/v2/streams") {
+        val created = client.post("/v3/streams") {
             validHeaders()
             setBody(codec.encodeCreateRequest(request))
         }
         val descriptor = codec.decodeDescriptor(created.bodyAsText())
-        val replay = client.get("/v2/streams/${descriptor.streamId}/events?afterSequence=-1") {
+        val replay = client.get("/v3/streams/${descriptor.streamId}/events?afterSequence=-1") {
             readHeaders("user-a")
         }
         assertIs<GatewayEvent.Completed>(parseSse(replay.bodyAsText()).last().event)
 
-        val terminal = client.get("/v2/streams") {
+        val terminal = client.get("/v3/streams") {
             readHeaders("user-a")
             header(GATEWAY_IDEMPOTENCY_HEADER, request.requestId)
         }
@@ -365,7 +366,7 @@ class GatewayKtorRoutesTest {
         assertEquals(descriptor, codec.decodeDescriptor(terminal.bodyAsText()))
         assertEquals(1, fixture.providerCalls)
 
-        val unknown = client.get("/v2/streams") {
+        val unknown = client.get("/v3/streams") {
             readHeaders("user-a")
             header(GATEWAY_IDEMPOTENCY_HEADER, "unknown-session:0")
         }
@@ -389,19 +390,19 @@ class GatewayKtorRoutesTest {
         )
         application { installMagratheaGateway(fixture.dependencies) }
         val request = GatewayStreamCoordinatorTest.request()
-        val created = client.post("/v2/streams") {
+        val created = client.post("/v3/streams") {
             validHeaders()
             setBody(codec.encodeCreateRequest(request))
         }
         assertEquals(HttpStatusCode.Created, created.status)
         val descriptor = codec.decodeDescriptor(created.bodyAsText())
-        val replay = client.get("/v2/streams/${descriptor.streamId}/events?afterSequence=-1") {
+        val replay = client.get("/v3/streams/${descriptor.streamId}/events?afterSequence=-1") {
             readHeaders("user-a")
         }
         assertIs<GatewayEvent.Completed>(parseSse(replay.bodyAsText()).last().event)
         delay(500)
 
-        val expired = client.get("/v2/streams") {
+        val expired = client.get("/v3/streams") {
             readHeaders("user-a")
             header(GATEWAY_IDEMPOTENCY_HEADER, request.requestId)
         }
@@ -427,14 +428,14 @@ class GatewayKtorRoutesTest {
             ),
         )
         application { installMagratheaGateway(fixture.dependencies) }
-        val created = client.post("/v2/streams") {
+        val created = client.post("/v3/streams") {
             validHeaders()
             setBody(codec.encodeCreateRequest(GatewayStreamCoordinatorTest.request()))
         }
         val descriptor = codec.decodeDescriptor(created.bodyAsText())
         clock.nowEpochMs = descriptor.expiresAtEpochMs
 
-        val expired = client.get("/v2/streams/${descriptor.streamId}/events?afterSequence=-1") {
+        val expired = client.get("/v3/streams/${descriptor.streamId}/events?afterSequence=-1") {
             readHeaders("user-a")
         }
 
@@ -449,21 +450,21 @@ class GatewayKtorRoutesTest {
         val fixture = HttpFixture(hangProvider = true)
         application { installMagratheaGateway(fixture.dependencies) }
         val request = GatewayStreamCoordinatorTest.request()
-        val created = client.post("/v2/streams") {
+        val created = client.post("/v3/streams") {
             validHeaders()
             setBody(codec.encodeCreateRequest(request))
         }
         assertEquals(HttpStatusCode.Created, created.status)
 
         repeat(2) {
-            val abandoned = client.delete("/v2/streams") {
+            val abandoned = client.delete("/v3/streams") {
                 readHeaders("user-a")
                 header(GATEWAY_IDEMPOTENCY_HEADER, request.requestId)
             }
             assertEquals(HttpStatusCode.NoContent, abandoned.status)
         }
 
-        val invalidated = client.post("/v2/streams") {
+        val invalidated = client.post("/v3/streams") {
             validHeaders()
             setBody(codec.encodeCreateRequest(request))
         }
@@ -483,14 +484,14 @@ class GatewayKtorRoutesTest {
         val request = GatewayStreamCoordinatorTest.request()
 
         repeat(2) {
-            val abandoned = client.delete("/v2/streams") {
+            val abandoned = client.delete("/v3/streams") {
                 readHeaders("user-a")
                 header(GATEWAY_IDEMPOTENCY_HEADER, request.requestId)
             }
             assertEquals(HttpStatusCode.NoContent, abandoned.status)
         }
 
-        val invalidated = client.post("/v2/streams") {
+        val invalidated = client.post("/v3/streams") {
             validHeaders()
             setBody(codec.encodeCreateRequest(request))
         }
@@ -512,13 +513,13 @@ class GatewayKtorRoutesTest {
                 GatewayHttpConfig(sseHeartbeatMillis = 10),
             )
         }
-        val createdResponse = client.post("/v2/streams") {
+        val createdResponse = client.post("/v3/streams") {
             validHeaders()
             setBody(codec.encodeCreateRequest(GatewayStreamCoordinatorTest.request()))
         }
         val descriptor = codec.decodeDescriptor(createdResponse.bodyAsText())
 
-        client.prepareGet("/v2/streams/${descriptor.streamId}/events?afterSequence=-1") {
+        client.prepareGet("/v3/streams/${descriptor.streamId}/events?afterSequence=-1") {
             readHeaders("user-a")
         }.execute { response ->
             assertEquals(HttpStatusCode.OK, response.status)
@@ -548,7 +549,7 @@ class GatewayKtorRoutesTest {
         origin: String = ALLOWED_ORIGIN,
         idempotencyKey: String = "session-1:0",
     ) {
-        header(GATEWAY_VERSION_HEADER, "2")
+        header(GATEWAY_VERSION_HEADER, GATEWAY_PROTOCOL_VERSION.toString())
         if (includeAuth) header(HttpHeaders.Authorization, "Bearer user-a")
         if (includeCsrf) header(GATEWAY_CSRF_HEADER, "csrf-user-a")
         header(HttpHeaders.Origin, origin)
@@ -557,7 +558,7 @@ class GatewayKtorRoutesTest {
     }
 
     private fun io.ktor.client.request.HttpRequestBuilder.readHeaders(user: String) {
-        header(GATEWAY_VERSION_HEADER, "2")
+        header(GATEWAY_VERSION_HEADER, GATEWAY_PROTOCOL_VERSION.toString())
         header(HttpHeaders.Authorization, "Bearer $user")
         header(GATEWAY_CSRF_HEADER, "csrf-$user")
         header(HttpHeaders.Origin, ALLOWED_ORIGIN)

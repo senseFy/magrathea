@@ -34,25 +34,27 @@ public final class saien/magrathea/gateway/protocol/GatewayAttachmentReference$C
 
 public final class saien/magrathea/gateway/protocol/GatewayCreateStreamRequest {
 	public static final field Companion Lsaien/magrathea/gateway/protocol/GatewayCreateStreamRequest$Companion;
-	public fun <init> (ILjava/lang/String;Ljava/lang/String;ILsaien/magrathea/gateway/protocol/GatewayModelReference;Ljava/util/List;Ljava/util/List;Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;Ljava/util/List;)V
-	public synthetic fun <init> (ILjava/lang/String;Ljava/lang/String;ILsaien/magrathea/gateway/protocol/GatewayModelReference;Ljava/util/List;Ljava/util/List;Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (ILjava/lang/String;Ljava/lang/String;ILsaien/magrathea/gateway/protocol/GatewayModelReference;Ljava/util/List;Lsaien/magrathea/core/ReasoningPreference;Ljava/util/List;Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;Ljava/util/List;)V
+	public synthetic fun <init> (ILjava/lang/String;Ljava/lang/String;ILsaien/magrathea/gateway/protocol/GatewayModelReference;Ljava/util/List;Lsaien/magrathea/core/ReasoningPreference;Ljava/util/List;Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()I
+	public final fun component10 ()Ljava/util/List;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/lang/String;
 	public final fun component4 ()I
 	public final fun component5 ()Lsaien/magrathea/gateway/protocol/GatewayModelReference;
 	public final fun component6 ()Ljava/util/List;
-	public final fun component7 ()Ljava/util/List;
-	public final fun component8 ()Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;
-	public final fun component9 ()Ljava/util/List;
-	public final fun copy (ILjava/lang/String;Ljava/lang/String;ILsaien/magrathea/gateway/protocol/GatewayModelReference;Ljava/util/List;Ljava/util/List;Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;Ljava/util/List;)Lsaien/magrathea/gateway/protocol/GatewayCreateStreamRequest;
-	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayCreateStreamRequest;ILjava/lang/String;Ljava/lang/String;ILsaien/magrathea/gateway/protocol/GatewayModelReference;Ljava/util/List;Ljava/util/List;Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;Ljava/util/List;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayCreateStreamRequest;
+	public final fun component7 ()Lsaien/magrathea/core/ReasoningPreference;
+	public final fun component8 ()Ljava/util/List;
+	public final fun component9 ()Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;
+	public final fun copy (ILjava/lang/String;Ljava/lang/String;ILsaien/magrathea/gateway/protocol/GatewayModelReference;Ljava/util/List;Lsaien/magrathea/core/ReasoningPreference;Ljava/util/List;Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;Ljava/util/List;)Lsaien/magrathea/gateway/protocol/GatewayCreateStreamRequest;
+	public static synthetic fun copy$default (Lsaien/magrathea/gateway/protocol/GatewayCreateStreamRequest;ILjava/lang/String;Ljava/lang/String;ILsaien/magrathea/gateway/protocol/GatewayModelReference;Ljava/util/List;Lsaien/magrathea/core/ReasoningPreference;Ljava/util/List;Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;Ljava/util/List;ILjava/lang/Object;)Lsaien/magrathea/gateway/protocol/GatewayCreateStreamRequest;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAttachments ()Ljava/util/List;
 	public final fun getMessages ()Ljava/util/List;
 	public final fun getModel ()Lsaien/magrathea/gateway/protocol/GatewayModelReference;
 	public final fun getOptions ()Lsaien/magrathea/gateway/protocol/GatewayGenerationOptions;
 	public final fun getProtocolVersion ()I
+	public final fun getReasoningPreference ()Lsaien/magrathea/core/ReasoningPreference;
 	public final fun getRequestId ()Ljava/lang/String;
 	public final fun getSessionId ()Ljava/lang/String;
 	public final fun getTools ()Ljava/util/List;

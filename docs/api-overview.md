@@ -9,7 +9,7 @@ Chatbot, Provider, Tool, persistence, and browser layers they need.
 
 | Area | Primary APIs |
 |---|---|
-| Requests and events | `AgentRequest`, `AgentMessage`, `MessagePart`, typed Tool result content and origin, `ModelDescriptor`, `AgentEvent` |
+| Requests and events | `AgentRequest`, `AgentMessage`, `MessagePart`, typed Tool result content and origin, `ModelDescriptor`, `ReasoningPreference`, `AgentEvent` |
 | Execution | `AgentRunner`, `ToolRegistry`, approval and permission gateways |
 | State | `AgentPersistence`, strict snapshot and checkpoint codecs |
 | Credentials | `CredentialRef`, `CredentialProvider`, transient `ProviderCredential` |
@@ -76,7 +76,7 @@ local stdio processes. See [MCP](mcp.md).
 |---|---|
 | `ChatbotClient` | Create, resume, list, delete, and close sessions |
 | `ChatbotSession` | Observe, send, regenerate, cancel, interrupt, resume, and update configuration |
-| `ChatbotSessionConfiguration` | Conversation-owned Provider, model, and non-secret credential profile |
+| `ChatbotSessionConfiguration` | Conversation-owned Provider, model, reasoning preference, and non-secret credential profile |
 | `ChatbotSnapshot` | Immutable product-facing messages, status, usage, context, failures, and Tool activity with typed origin |
 | `ChatbotRequestFactory` | Map session state to an `AgentRequest` and apply host defaults |
 
@@ -97,6 +97,11 @@ while using the canonical persisted state. Typed user-audience image results and
 
 JVM credentials remain host-owned. Store handles and clients close idempotently and reject
 subsequent operations once closed.
+
+Logical session and checkpoint envelopes use schema 6 as their current migration baseline.
+Malformed payloads, unsupported older schemas, unsupported newer schemas, and migration failures
+are classified separately. Room and IndexedDB adapters surface incompatible schemas rather than
+silently hiding them as corrupt history; hosts may then present an upgrade or explicit reset flow.
 
 ## Browser and Gateway
 

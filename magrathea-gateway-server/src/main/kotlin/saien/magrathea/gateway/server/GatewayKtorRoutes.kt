@@ -41,16 +41,16 @@ import saien.magrathea.gateway.protocol.GatewayProtocolCodec
 import saien.magrathea.gateway.protocol.GatewayProtocolException
 
 data class GatewayHttpConfig(
-    val basePath: String = "/v2/streams",
+    val basePath: String = "/v3/streams",
     val maxRequestBodyBytes: Int = 8 * 1024 * 1024,
     val sseHeartbeatMillis: Long = 15_000,
 ) {
     init {
         require(
-            GATEWAY_V2_BASE_PATH.matches(basePath) &&
+            GATEWAY_V3_BASE_PATH.matches(basePath) &&
                 basePath.split('/').none { segment -> segment == "." || segment == ".." },
         ) {
-            "Gateway basePath must be a safe path ending in /v2/streams"
+            "Gateway basePath must be a safe path ending in /v3/streams"
         }
         require(maxRequestBodyBytes > 0)
         require(sseHeartbeatMillis > 0)
@@ -387,4 +387,4 @@ private data class HttpFailure(
 )
 
 private val EVENT_STREAM_CONTENT_TYPE = ContentType.parse("text/event-stream")
-private val GATEWAY_V2_BASE_PATH = Regex("^(?:/[A-Za-z0-9._~-]+)*/v2/streams$")
+private val GATEWAY_V3_BASE_PATH = Regex("^(?:/[A-Za-z0-9._~-]+)*/v3/streams$")

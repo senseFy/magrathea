@@ -13,6 +13,7 @@ import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ProviderConfig
+import saien.magrathea.core.StoredEnvelopeDecodeFailure
 import saien.magrathea.core.TextPart
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -39,6 +40,68 @@ class RoomStoreContractTest {
         assertEquals(3, checkpoint.cursor.turn)
         assertEquals(AgentResumePhase.MODEL_PENDING, checkpoint.cursor.phase)
         assertEquals(3, checkpoint.state.turn)
+    }
+
+    @Test
+    fun schemaIssueRequiresSanitizedIdentityAndConsistentPositiveVersions() {
+        val valid = StoredRecordSchemaIssue(
+            kind = StoredRecordKind.SESSION,
+            sessionId = "safe-session",
+            failure = StoredEnvelopeDecodeFailure.UNSUPPORTED_OLDER_SCHEMA,
+            storedSchemaVersion = 6,
+            currentSchemaVersion = 7,
+        )
+        assertEquals("safe-session", valid.sessionId)
+
+        listOf<() -> Unit>(
+            {
+                StoredRecordSchemaIssue(
+                    StoredRecordKind.SESSION,
+                    "unsafe/session",
+                    StoredEnvelopeDecodeFailure.UNSUPPORTED_OLDER_SCHEMA,
+                    6,
+                    7,
+                )
+            },
+            {
+                StoredRecordSchemaIssue(
+                    StoredRecordKind.SESSION,
+                    null,
+                    StoredEnvelopeDecodeFailure.CORRUPT,
+                    6,
+                    7,
+                )
+            },
+            {
+                StoredRecordSchemaIssue(
+                    StoredRecordKind.SESSION,
+                    null,
+                    StoredEnvelopeDecodeFailure.UNSUPPORTED_OLDER_SCHEMA,
+                    7,
+                    7,
+                )
+            },
+            {
+                StoredRecordSchemaIssue(
+                    StoredRecordKind.SESSION,
+                    null,
+                    StoredEnvelopeDecodeFailure.UNSUPPORTED_NEWER_SCHEMA,
+                    7,
+                    7,
+                )
+            },
+            {
+                StoredRecordSchemaIssue(
+                    StoredRecordKind.SESSION,
+                    null,
+                    StoredEnvelopeDecodeFailure.MIGRATION_FAILED,
+                    0,
+                    7,
+                )
+            },
+        ).forEach { construct ->
+            assertFailsWith<IllegalArgumentException> { construct() }
+        }
     }
 }
 

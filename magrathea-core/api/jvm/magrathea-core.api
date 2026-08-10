@@ -40,6 +40,7 @@ public final class saien/magrathea/core/AgentCheckpointCodec {
 	public fun <init> (Lkotlinx/serialization/json/Json;Ljava/lang/String;)V
 	public synthetic fun <init> (Lkotlinx/serialization/json/Json;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun decode (Ljava/lang/String;)Lsaien/magrathea/core/AgentCheckpoint;
+	public final fun decodeResult (Ljava/lang/String;)Lsaien/magrathea/core/StoredEnvelopeDecodeResult;
 	public final fun encode (Lsaien/magrathea/core/AgentCheckpoint;)Ljava/lang/String;
 }
 
@@ -763,22 +764,24 @@ public final class saien/magrathea/core/AgentRecoveryInfo {
 
 public final class saien/magrathea/core/AgentRequest {
 	public static final field Companion Lsaien/magrathea/core/AgentRequest$Companion;
-	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/core/ModelDescriptor;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lsaien/magrathea/core/AgentEngineConfig;)V
-	public synthetic fun <init> (Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/core/ModelDescriptor;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lsaien/magrathea/core/AgentEngineConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/core/ModelDescriptor;Lsaien/magrathea/core/ReasoningPreference;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lsaien/magrathea/core/AgentEngineConfig;)V
+	public synthetic fun <init> (Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/core/ModelDescriptor;Lsaien/magrathea/core/ReasoningPreference;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lsaien/magrathea/core/AgentEngineConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/util/List;
 	public final fun component4 ()Lsaien/magrathea/core/ModelDescriptor;
-	public final fun component5 ()Ljava/util/List;
-	public final fun component6 ()Lkotlinx/serialization/json/JsonObject;
-	public final fun component7 ()Lsaien/magrathea/core/AgentEngineConfig;
-	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/core/ModelDescriptor;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lsaien/magrathea/core/AgentEngineConfig;)Lsaien/magrathea/core/AgentRequest;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/core/ModelDescriptor;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lsaien/magrathea/core/AgentEngineConfig;ILjava/lang/Object;)Lsaien/magrathea/core/AgentRequest;
+	public final fun component5 ()Lsaien/magrathea/core/ReasoningPreference;
+	public final fun component6 ()Ljava/util/List;
+	public final fun component7 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun component8 ()Lsaien/magrathea/core/AgentEngineConfig;
+	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/core/ModelDescriptor;Lsaien/magrathea/core/ReasoningPreference;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lsaien/magrathea/core/AgentEngineConfig;)Lsaien/magrathea/core/AgentRequest;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/core/ModelDescriptor;Lsaien/magrathea/core/ReasoningPreference;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lsaien/magrathea/core/AgentEngineConfig;ILjava/lang/Object;)Lsaien/magrathea/core/AgentRequest;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getEngine ()Lsaien/magrathea/core/AgentEngineConfig;
 	public final fun getMessages ()Ljava/util/List;
 	public final fun getMetadata ()Lkotlinx/serialization/json/JsonObject;
 	public final fun getModel ()Lsaien/magrathea/core/ModelDescriptor;
+	public final fun getReasoningPreference ()Lsaien/magrathea/core/ReasoningPreference;
 	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
 	public final fun getSystemPrompt ()Ljava/lang/String;
 	public final fun getTools ()Ljava/util/List;
@@ -988,6 +991,7 @@ public final class saien/magrathea/core/AgentSessionSnapshotCodec {
 	public fun <init> (Lkotlinx/serialization/json/Json;Ljava/lang/String;)V
 	public synthetic fun <init> (Lkotlinx/serialization/json/Json;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun decode (Ljava/lang/String;)Lsaien/magrathea/core/AgentSessionSnapshot;
+	public final fun decodeResult (Ljava/lang/String;)Lsaien/magrathea/core/StoredEnvelopeDecodeResult;
 	public final fun encode (Lsaien/magrathea/core/AgentSessionSnapshot;)Ljava/lang/String;
 }
 
@@ -1411,6 +1415,7 @@ public final class saien/magrathea/core/ContextUsageObservation$Companion {
 
 public final class saien/magrathea/core/CoreContractsKt {
 	public static final field CURRENT_STORAGE_SCHEMA_VERSION I
+	public static final field MINIMUM_READABLE_STORAGE_SCHEMA_VERSION I
 }
 
 public final class saien/magrathea/core/CoreModelsKt {
@@ -1421,6 +1426,7 @@ public final class saien/magrathea/core/CoreModelsKt {
 	public static final fun isHttpsUrl (Lsaien/magrathea/core/AttachmentPart;)Z
 	public static final fun normalizedMimeType (Lsaien/magrathea/core/AttachmentPart;)Ljava/lang/String;
 	public static final fun plus (Lsaien/magrathea/core/TokenUsage;Lsaien/magrathea/core/TokenUsage;)Lsaien/magrathea/core/TokenUsage;
+	public static final fun requireSupports (Lsaien/magrathea/core/ModelDescriptor;Lsaien/magrathea/core/ReasoningPreference;)V
 	public static final fun text (Lsaien/magrathea/core/AgentMessage;)Ljava/lang/String;
 	public static final fun textReference (Lsaien/magrathea/core/AttachmentPart;)Ljava/lang/String;
 	public static final fun toMessagePart (Lsaien/magrathea/core/ToolExecutionResult;Lkotlinx/serialization/json/JsonObject;)Lsaien/magrathea/core/ToolResultPart;
@@ -1603,24 +1609,25 @@ public final class saien/magrathea/core/MessageRole$Companion {
 
 public final class saien/magrathea/core/ModelDescriptor {
 	public static final field Companion Lsaien/magrathea/core/ModelDescriptor$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZZZLjava/lang/Long;Ljava/util/Set;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZZZLjava/lang/Long;Ljava/util/Set;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLsaien/magrathea/core/ReasoningCapabilities;ZLjava/lang/Long;Ljava/util/Set;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLsaien/magrathea/core/ReasoningCapabilities;ZLjava/lang/Long;Ljava/util/Set;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/lang/String;
 	public final fun component4 ()Z
-	public final fun component5 ()Z
+	public final fun component5 ()Lsaien/magrathea/core/ReasoningCapabilities;
 	public final fun component6 ()Z
 	public final fun component7 ()Ljava/lang/Long;
 	public final fun component8 ()Ljava/util/Set;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZZZLjava/lang/Long;Ljava/util/Set;)Lsaien/magrathea/core/ModelDescriptor;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/ModelDescriptor;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZZZLjava/lang/Long;Ljava/util/Set;ILjava/lang/Object;)Lsaien/magrathea/core/ModelDescriptor;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLsaien/magrathea/core/ReasoningCapabilities;ZLjava/lang/Long;Ljava/util/Set;)Lsaien/magrathea/core/ModelDescriptor;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/ModelDescriptor;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLsaien/magrathea/core/ReasoningCapabilities;ZLjava/lang/Long;Ljava/util/Set;ILjava/lang/Object;)Lsaien/magrathea/core/ModelDescriptor;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getContextWindowTokens ()Ljava/lang/Long;
 	public final fun getDisplayName ()Ljava/lang/String;
 	public final fun getInputModalities ()Ljava/util/Set;
 	public final fun getModel ()Ljava/lang/String;
 	public final fun getProvider ()Ljava/lang/String;
+	public final fun getReasoningCapabilities ()Lsaien/magrathea/core/ReasoningCapabilities;
 	public final fun getSupportsReasoning ()Z
 	public final fun getSupportsStreaming ()Z
 	public final fun getSupportsToolCalls ()Z
@@ -1842,6 +1849,38 @@ public final class saien/magrathea/core/ProviderTimeoutConfig$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class saien/magrathea/core/ReasoningCapabilities {
+	public static final field Companion Lsaien/magrathea/core/ReasoningCapabilities$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/util/Set;Z)V
+	public synthetic fun <init> (Ljava/util/Set;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/util/Set;
+	public final fun component2 ()Z
+	public final fun copy (Ljava/util/Set;Z)Lsaien/magrathea/core/ReasoningCapabilities;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/ReasoningCapabilities;Ljava/util/Set;ZILjava/lang/Object;)Lsaien/magrathea/core/ReasoningCapabilities;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSupportedEfforts ()Ljava/util/Set;
+	public final fun getSupportsDisabled ()Z
+	public fun hashCode ()I
+	public final fun supports (Lsaien/magrathea/core/ReasoningPreference;)Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/core/ReasoningCapabilities$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/core/ReasoningCapabilities$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/core/ReasoningCapabilities;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/core/ReasoningCapabilities;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/core/ReasoningCapabilities$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
 public final class saien/magrathea/core/ReasoningContentKind : java/lang/Enum {
 	public static final field Companion Lsaien/magrathea/core/ReasoningContentKind$Companion;
 	public static final field PROVIDER_DEFINED Lsaien/magrathea/core/ReasoningContentKind;
@@ -1853,6 +1892,23 @@ public final class saien/magrathea/core/ReasoningContentKind : java/lang/Enum {
 }
 
 public final class saien/magrathea/core/ReasoningContentKind$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/core/ReasoningEffort : java/lang/Enum {
+	public static final field Companion Lsaien/magrathea/core/ReasoningEffort$Companion;
+	public static final field HIGH Lsaien/magrathea/core/ReasoningEffort;
+	public static final field LOW Lsaien/magrathea/core/ReasoningEffort;
+	public static final field MAX Lsaien/magrathea/core/ReasoningEffort;
+	public static final field MEDIUM Lsaien/magrathea/core/ReasoningEffort;
+	public static final field MINIMAL Lsaien/magrathea/core/ReasoningEffort;
+	public static final field XHIGH Lsaien/magrathea/core/ReasoningEffort;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/core/ReasoningEffort;
+	public static fun values ()[Lsaien/magrathea/core/ReasoningEffort;
+}
+
+public final class saien/magrathea/core/ReasoningEffort$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
@@ -1891,6 +1947,57 @@ public final synthetic class saien/magrathea/core/ReasoningPart$$serializer : ko
 }
 
 public final class saien/magrathea/core/ReasoningPart$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class saien/magrathea/core/ReasoningPreference {
+	public static final field Companion Lsaien/magrathea/core/ReasoningPreference$Companion;
+}
+
+public final class saien/magrathea/core/ReasoningPreference$Auto : saien/magrathea/core/ReasoningPreference {
+	public static final field INSTANCE Lsaien/magrathea/core/ReasoningPreference$Auto;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/core/ReasoningPreference$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/core/ReasoningPreference$Disabled : saien/magrathea/core/ReasoningPreference {
+	public static final field INSTANCE Lsaien/magrathea/core/ReasoningPreference$Disabled;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/core/ReasoningPreference$Effort : saien/magrathea/core/ReasoningPreference {
+	public static final field Companion Lsaien/magrathea/core/ReasoningPreference$Effort$Companion;
+	public fun <init> (Lsaien/magrathea/core/ReasoningEffort;)V
+	public final fun component1 ()Lsaien/magrathea/core/ReasoningEffort;
+	public final fun copy (Lsaien/magrathea/core/ReasoningEffort;)Lsaien/magrathea/core/ReasoningPreference$Effort;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/ReasoningPreference$Effort;Lsaien/magrathea/core/ReasoningEffort;ILjava/lang/Object;)Lsaien/magrathea/core/ReasoningPreference$Effort;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getLevel ()Lsaien/magrathea/core/ReasoningEffort;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class saien/magrathea/core/ReasoningPreference$Effort$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lsaien/magrathea/core/ReasoningPreference$Effort$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/core/ReasoningPreference$Effort;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/core/ReasoningPreference$Effort;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/core/ReasoningPreference$Effort$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
@@ -2033,6 +2140,28 @@ public final synthetic class saien/magrathea/core/StoredCheckpointEnvelope$$seri
 
 public final class saien/magrathea/core/StoredCheckpointEnvelope$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/core/StoredEnvelopeDecodeException : kotlinx/serialization/SerializationException {
+	public final fun getCurrentSchemaVersion ()I
+	public final fun getFailure ()Lsaien/magrathea/core/StoredEnvelopeDecodeFailure;
+	public final fun getStoredSchemaVersion ()Ljava/lang/Integer;
+}
+
+public final class saien/magrathea/core/StoredEnvelopeDecodeFailure : java/lang/Enum {
+	public static final field CORRUPT Lsaien/magrathea/core/StoredEnvelopeDecodeFailure;
+	public static final field MIGRATION_FAILED Lsaien/magrathea/core/StoredEnvelopeDecodeFailure;
+	public static final field UNSUPPORTED_NEWER_SCHEMA Lsaien/magrathea/core/StoredEnvelopeDecodeFailure;
+	public static final field UNSUPPORTED_OLDER_SCHEMA Lsaien/magrathea/core/StoredEnvelopeDecodeFailure;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/core/StoredEnvelopeDecodeFailure;
+	public static fun values ()[Lsaien/magrathea/core/StoredEnvelopeDecodeFailure;
+}
+
+public final class saien/magrathea/core/StoredEnvelopeDecodeResult {
+	public final fun getRewritePayload ()Ljava/lang/String;
+	public final fun getSourceSchemaVersion ()I
+	public final fun getValue ()Ljava/lang/Object;
 }
 
 public final class saien/magrathea/core/StoredSessionEnvelope {

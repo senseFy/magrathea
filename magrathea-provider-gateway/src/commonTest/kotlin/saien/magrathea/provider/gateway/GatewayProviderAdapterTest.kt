@@ -31,6 +31,9 @@ import saien.magrathea.core.MediaReference
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ProviderCredential
+import saien.magrathea.core.ReasoningCapabilities
+import saien.magrathea.core.ReasoningEffort
+import saien.magrathea.core.ReasoningPreference
 import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
@@ -163,7 +166,16 @@ class GatewayProviderAdapterTest {
             reconnectGate = GatewayReconnectGate { reconnectPermissions += 1 },
         )
 
-        val chunks = adapter.generate(providerRequest()).toList()
+        val chunks = adapter.generate(
+            providerRequest().copy(
+                model = providerRequest().model.copy(
+                    reasoningCapabilities = ReasoningCapabilities(
+                        supportedEfforts = setOf(ReasoningEffort.HIGH),
+                    ),
+                ),
+                reasoningPreference = ReasoningPreference.Effort(ReasoningEffort.HIGH),
+            ),
+        ).toList()
 
         assertEquals(3, chunks.size)
         assertEquals(listOf("hel", "lo"), chunks.flatMap { it.events }.filterIsInstance<saien.magrathea.provider.api.ProviderEvent.TextDelta>().map { it.delta })
@@ -174,6 +186,10 @@ class GatewayProviderAdapterTest {
         assertEquals(1, reconnectPermissions)
         val create = codec.decodeCreateRequest(transport.executeRequests.single { it.method == HttpMethod.POST }.body!!)
         assertEquals("session-1:0", create.requestId)
+        assertEquals(
+            ReasoningPreference.Effort(ReasoningEffort.HIGH),
+            create.reasoningPreference,
+        )
         assertFalse(transport.executeRequests.single().body!!.contains("credential", ignoreCase = true))
     }
 
@@ -829,7 +845,7 @@ class GatewayProviderAdapterTest {
         collection.cancelAndJoin()
 
         val delete = transport.executeRequests.single { it.method == HttpMethod.DELETE }
-        assertTrue(delete.url.endsWith("/v2/streams/stream-1"))
+        assertTrue(delete.url.endsWith("/v3/streams/stream-1"))
         assertEquals("Bearer browser-session", delete.headers.first { it.name == "Authorization" }.value)
     }
 
@@ -848,7 +864,7 @@ class GatewayProviderAdapterTest {
             transport.executeRequests.map { it.method },
         )
         val abandon = transport.executeRequests.last()
-        assertTrue(abandon.url.endsWith("/v2/streams"))
+        assertTrue(abandon.url.endsWith("/v3/streams"))
         assertEquals(
             descriptor.requestId,
             abandon.headers.single { it.name == GATEWAY_IDEMPOTENCY_HEADER }.value,
@@ -908,7 +924,7 @@ class GatewayProviderAdapterTest {
 
         val delete = transport.executeRequests.single()
         assertEquals(HttpMethod.DELETE, delete.method)
-        assertTrue(delete.url.endsWith("/v2/streams"))
+        assertTrue(delete.url.endsWith("/v3/streams"))
         assertEquals(
             invocation.requestId,
             delete.headers.single { it.name == GATEWAY_IDEMPOTENCY_HEADER }.value,

@@ -1051,6 +1051,7 @@ class DefaultAgentRunner(
                             val providerRequestBase = ProviderRequest(
                                 invocation = null,
                                 model = activeRequest.model,
+                                reasoningPreference = activeRequest.reasoningPreference,
                                 messages = projectedMessages,
                                 tools = turnTools,
                                 credentialRef = activeRequest.engine.provider.credentialRef,

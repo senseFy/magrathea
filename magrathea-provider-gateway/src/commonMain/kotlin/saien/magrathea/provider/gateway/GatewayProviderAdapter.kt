@@ -184,6 +184,7 @@ class GatewayProviderAdapter(
                         provider = request.model.provider,
                         model = request.model.model,
                     ),
+                    reasoningPreference = request.reasoningPreference,
                     messages = messages,
                     tools = request.tools,
                     options = GatewayGenerationOptions(
@@ -565,7 +566,7 @@ class GatewayProviderAdapter(
         return value
     }
 
-    private fun streamsUrl(): String = "${config.normalizedBaseUrl}/v2/streams"
+    private fun streamsUrl(): String = "${config.normalizedBaseUrl}/v3/streams"
     private fun streamUrl(streamId: String): String = "${streamsUrl()}/$streamId"
     private fun eventsUrl(streamId: String, afterSequence: Long): String =
         "${streamUrl(streamId)}/events?afterSequence=$afterSequence"

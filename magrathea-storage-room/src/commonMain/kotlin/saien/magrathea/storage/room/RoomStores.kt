@@ -17,6 +17,17 @@ import saien.magrathea.core.AgentCheckpointCodec
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentSessionSnapshotCodec
+import saien.magrathea.core.StoredEnvelopeDecodeException
+import saien.magrathea.core.StoredEnvelopeDecodeFailure
+import saien.magrathea.core.StoredEnvelopeDecodeResult
+
+internal data class DecodedStoredRecord<T>(
+    val value: T,
+    val rewritePayload: String?,
+)
+
+internal fun <T> StoredEnvelopeDecodeResult<T>.toStoredRecord(): DecodedStoredRecord<T> =
+    DecodedStoredRecord(value, rewritePayload)
 
 enum class StoredRecordKind {
     SESSION,
@@ -43,6 +54,46 @@ class StoredRecordCorruptionException(
     val corruption: StoredRecordCorruption,
 ) : IllegalStateException(
     "Stored ${corruption.kind.name.lowercase()} record is corrupt (${corruption.reason.name.lowercase()})",
+)
+
+/** Payload-free, sanitized identity and version details for a logical schema failure. */
+data class StoredRecordSchemaIssue(
+    val kind: StoredRecordKind,
+    val sessionId: String?,
+    val failure: StoredEnvelopeDecodeFailure,
+    val storedSchemaVersion: Int,
+    val currentSchemaVersion: Int,
+) {
+    init {
+        require(failure != StoredEnvelopeDecodeFailure.CORRUPT) {
+            "Corrupt records must use StoredRecordCorruption"
+        }
+        require(sessionId == null || sessionId.isSafeRecordIdentifier()) {
+            "Room schema issue session identity must be sanitized"
+        }
+        require(currentSchemaVersion > 0) { "Current schema version must be positive" }
+        require(storedSchemaVersion > 0) { "Stored schema version must be positive" }
+        when (failure) {
+            StoredEnvelopeDecodeFailure.UNSUPPORTED_OLDER_SCHEMA,
+            StoredEnvelopeDecodeFailure.MIGRATION_FAILED ->
+                require(storedSchemaVersion < currentSchemaVersion) {
+                    "Older and migrated source schemas must precede the current schema"
+                }
+            StoredEnvelopeDecodeFailure.UNSUPPORTED_NEWER_SCHEMA ->
+                require(storedSchemaVersion > currentSchemaVersion) {
+                    "A newer source schema must follow the current schema"
+                }
+            StoredEnvelopeDecodeFailure.CORRUPT -> error("Handled above")
+        }
+    }
+}
+
+/** An incompatible logical payload schema that must not be silently treated as row corruption. */
+class StoredRecordSchemaException(
+    val issue: StoredRecordSchemaIssue,
+) : IllegalStateException(
+    "Stored ${issue.kind.name.lowercase()} record uses an incompatible schema " +
+        "(${issue.failure.name.lowercase()})",
 )
 
 /** Owns one Room database and its atomic Agent persistence boundary. */
@@ -87,9 +138,13 @@ internal class RoomAgentPersistence(
     private val database: MagratheaDatabase,
     private val reporter: StoredRecordCorruptionReporter,
     json: Json = Json,
+    private val snapshotCodec: AgentSessionSnapshotCodec = AgentSessionSnapshotCodec(json),
+    private val checkpointCodec: AgentCheckpointCodec = AgentCheckpointCodec(json),
+    private val snapshotDecoder: (String) -> DecodedStoredRecord<AgentSessionSnapshot> =
+        { payload -> snapshotCodec.decodeResult(payload).toStoredRecord() },
+    private val checkpointDecoder: (String) -> DecodedStoredRecord<AgentCheckpoint> =
+        { payload -> checkpointCodec.decodeResult(payload).toStoredRecord() },
 ) : AgentPersistence {
-    private val snapshotCodec = AgentSessionSnapshotCodec(json)
-    private val checkpointCodec = AgentCheckpointCodec(json)
     private val sessionDao = database.sessionDao()
     private val checkpointDao = database.checkpointDao()
 
@@ -123,40 +178,58 @@ internal class RoomAgentPersistence(
     }
 
     override suspend fun load(sessionId: AgentSessionId): AgentPersistenceRecord? {
-        val entities: Pair<AgentSessionEntity, AgentCheckpointEntity?> =
-            database.useReaderConnection { connection ->
-                connection.deferredTransaction<Pair<AgentSessionEntity, AgentCheckpointEntity?>?> {
-                    val session = sessionDao.findById(sessionId.value)
-                    if (session == null) {
-                        null
-                    } else {
-                        session to checkpointDao.findById(sessionId.value)
+        return try {
+            database.useWriterConnection { connection ->
+                connection.immediateTransaction<AgentPersistenceRecord?> {
+                    val sessionEntity = sessionDao.findById(sessionId.value)
+                        ?: return@immediateTransaction null
+                    val checkpointEntity = checkpointDao.findById(sessionId.value)
+                    val snapshot = decodeSession(sessionEntity)
+                    val checkpoint = checkpointEntity?.let(::decodeCheckpoint)
+                    if (
+                        checkpoint != null &&
+                        (
+                            checkpoint.value.sessionId != snapshot.value.sessionId ||
+                                checkpoint.value.runId != snapshot.value.runId
+                        )
+                    ) {
+                        throw corruption(
+                            StoredRecordKind.CHECKPOINT,
+                            sessionId.value,
+                            StoredRecordCorruptionReason.INDEX_MISMATCH,
+                        )
                     }
+                    val record = AgentPersistenceRecord(snapshot.value, checkpoint?.value)
+                    rewriteSessionIfNeeded(sessionEntity, snapshot)
+                    if (checkpointEntity != null && checkpoint != null) {
+                        rewriteCheckpointIfNeeded(checkpointEntity, checkpoint)
+                    }
+                    record
                 }
             }
-                ?: return null
-        val snapshot = decodeSession(entities.first)
-        val checkpoint = entities.second?.let(::decodeCheckpoint)
-        if (
-            checkpoint != null &&
-            (checkpoint.sessionId != snapshot.sessionId || checkpoint.runId != snapshot.runId)
-        ) {
-            throw corruption(
-                StoredRecordKind.CHECKPOINT,
-                sessionId.value,
-                StoredRecordCorruptionReason.INDEX_MISMATCH,
-            )
+        } catch (failure: StoredRecordCorruptionException) {
+            reportCorruption(failure.corruption)
+            throw failure
         }
-        return AgentPersistenceRecord(snapshot, checkpoint)
     }
 
     override suspend fun listSessions(): List<AgentSessionSnapshot> {
-        return sessionDao.listAll().mapNotNull { entity ->
-            try {
-                decodeSession(entity)
-            } catch (_: StoredRecordCorruptionException) {
-                null
+        val corruptions = mutableListOf<StoredRecordCorruption>()
+        return try {
+            database.useReaderConnection { connection ->
+                connection.deferredTransaction<List<AgentSessionSnapshot>> {
+                    sessionDao.listAll().mapNotNull { entity ->
+                        try {
+                            decodeSession(entity).value
+                        } catch (failure: StoredRecordCorruptionException) {
+                            corruptions += failure.corruption
+                            null
+                        }
+                    }
+                }
             }
+        } finally {
+            corruptions.forEach(::reportCorruption)
         }
     }
 
@@ -178,19 +251,17 @@ internal class RoomAgentPersistence(
         }
     }
 
-    private fun decodeSession(entity: AgentSessionEntity): AgentSessionSnapshot {
-        val snapshot = try {
-            snapshotCodec.decode(entity.payload)
-        } catch (_: Throwable) {
-            throw corruption(
-                StoredRecordKind.SESSION,
-                entity.sessionId,
-                StoredRecordCorruptionReason.INVALID_PAYLOAD,
-            )
+    private fun decodeSession(
+        entity: AgentSessionEntity,
+    ): DecodedStoredRecord<AgentSessionSnapshot> {
+        val decoded = try {
+            snapshotDecoder(entity.payload)
+        } catch (failure: StoredEnvelopeDecodeException) {
+            throw decodeFailure(StoredRecordKind.SESSION, entity.sessionId, failure)
         }
         if (
-            snapshot.sessionId.value != entity.sessionId ||
-            snapshot.updatedAtEpochMs != entity.updatedAtEpochMs
+            decoded.value.sessionId.value != entity.sessionId ||
+            decoded.value.updatedAtEpochMs != entity.updatedAtEpochMs
         ) {
             throw corruption(
                 StoredRecordKind.SESSION,
@@ -198,41 +269,81 @@ internal class RoomAgentPersistence(
                 StoredRecordCorruptionReason.INDEX_MISMATCH,
             )
         }
-        return snapshot
+        return decoded
     }
 
-    private fun decodeCheckpoint(entity: AgentCheckpointEntity): AgentCheckpoint {
-        val checkpoint = try {
-            checkpointCodec.decode(entity.payload)
-        } catch (_: Throwable) {
-            throw corruption(
-                StoredRecordKind.CHECKPOINT,
-                entity.sessionId,
-                StoredRecordCorruptionReason.INVALID_PAYLOAD,
-            )
+    private fun decodeCheckpoint(
+        entity: AgentCheckpointEntity,
+    ): DecodedStoredRecord<AgentCheckpoint> {
+        val decoded = try {
+            checkpointDecoder(entity.payload)
+        } catch (failure: StoredEnvelopeDecodeException) {
+            throw decodeFailure(StoredRecordKind.CHECKPOINT, entity.sessionId, failure)
         }
-        if (checkpoint.sessionId.value != entity.sessionId || checkpoint.turn != entity.turn) {
+        if (
+            decoded.value.sessionId.value != entity.sessionId ||
+            decoded.value.turn != entity.turn
+        ) {
             throw corruption(
                 StoredRecordKind.CHECKPOINT,
                 entity.sessionId,
                 StoredRecordCorruptionReason.INDEX_MISMATCH,
             )
         }
-        return checkpoint
+        return decoded
+    }
+
+    private suspend fun rewriteSessionIfNeeded(
+        entity: AgentSessionEntity,
+        decoded: DecodedStoredRecord<AgentSessionSnapshot>,
+    ) {
+        decoded.rewritePayload?.let { payload ->
+            sessionDao.upsert(entity.copy(payload = payload))
+        }
+    }
+
+    private suspend fun rewriteCheckpointIfNeeded(
+        entity: AgentCheckpointEntity,
+        decoded: DecodedStoredRecord<AgentCheckpoint>,
+    ) {
+        decoded.rewritePayload?.let { payload ->
+            checkpointDao.upsert(entity.copy(payload = payload))
+        }
+    }
+
+    private fun decodeFailure(
+        kind: StoredRecordKind,
+        sessionId: String,
+        failure: StoredEnvelopeDecodeException,
+    ): IllegalStateException = if (failure.failure == StoredEnvelopeDecodeFailure.CORRUPT) {
+        corruption(kind, sessionId, StoredRecordCorruptionReason.INVALID_PAYLOAD)
+    } else {
+        StoredRecordSchemaException(
+            StoredRecordSchemaIssue(
+                kind = kind,
+                sessionId = sessionId.takeIf(String::isSafeRecordIdentifier),
+                failure = failure.failure,
+                storedSchemaVersion = requireNotNull(failure.storedSchemaVersion),
+                currentSchemaVersion = failure.currentSchemaVersion,
+            ),
+        )
     }
 
     private fun corruption(
         kind: StoredRecordKind,
         sessionId: String,
         reason: StoredRecordCorruptionReason,
-    ): StoredRecordCorruptionException {
-        val corruption = StoredRecordCorruption(kind, sessionId, reason)
+    ): StoredRecordCorruptionException = StoredRecordCorruptionException(
+        StoredRecordCorruption(kind, sessionId, reason),
+    )
+
+    /** Never invoke a host callback while a Room connection or transaction is held. */
+    private fun reportCorruption(corruption: StoredRecordCorruption) {
         try {
             reporter.report(corruption)
         } catch (_: Throwable) {
             // Diagnostics must not replace the stable storage failure.
         }
-        return StoredRecordCorruptionException(corruption)
     }
 }
 
@@ -247,3 +358,6 @@ private fun Char.isAsciiLetterOrDigit(): Boolean =
 
 private fun Char.isAsciiStorageCharacter(): Boolean =
     isAsciiLetterOrDigit() || this == '.' || this == '_' || this == '-'
+
+private fun String.isSafeRecordIdentifier(): Boolean =
+    length in 1..128 && all(Char::isAsciiStorageCharacter)

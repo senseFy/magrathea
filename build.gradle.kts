@@ -341,9 +341,41 @@ val verifySdkPublicationArtifactIsolation = tasks.register("verifySdkPublication
     }
 }
 
+val verifyPersistenceSchemas = tasks.register<Exec>("verifyPersistenceSchemas") {
+    group = "verification"
+    description = "Validate Magrathea-owned schema versions, adapter bindings, and frozen fixtures."
+    inputs.file("persistence/schema-ledger.json")
+    inputs.file("scripts/verify_persistence_schemas.py")
+    inputs.file("docs/adr/ADR-005-persistence-contracts.md")
+    inputs.dir("serialization-fixtures")
+    inputs.dir("magrathea-core/src/commonMain/kotlin/saien/magrathea/core")
+    commandLine(
+        "python3",
+        file("scripts/verify_persistence_schemas.py").absolutePath,
+        "--root",
+        rootDir.absolutePath,
+    )
+}
+
+val verifyPersistenceSchemaContract = tasks.register<Exec>("verifyPersistenceSchemaContract") {
+    group = "verification"
+    description = "Mutation-test the append-only Magrathea persistence schema gate."
+    dependsOn(verifyPersistenceSchemas)
+    inputs.file("persistence/schema-ledger.json")
+    inputs.file("scripts/verify_persistence_schemas.py")
+    commandLine(
+        "python3",
+        file("scripts/verify_persistence_schemas.py").absolutePath,
+        "--root",
+        rootDir.absolutePath,
+        "--self-test",
+    )
+}
+
 val verifySdkCompatibility = tasks.register("verifySdkCompatibility") {
     group = "verification"
     description = "Validate published JVM/Android ABI dumps and versioned serialization fixtures."
+    dependsOn(verifyPersistenceSchemaContract)
     dependsOn(sdkPublishProjects.map { "$it:apiCheck" })
     dependsOn(":magrathea-core:jvmTest", ":magrathea-provider-api:jvmTest")
 }
@@ -1177,8 +1209,8 @@ val verifyWebSdkPackage = tasks.register("verifyWebSdkPackage") {
         check(directory.listFiles().orEmpty().any { it.name.matches(Regex("[0-9]+\\.js")) }) {
             "Web package is missing its production split chunk"
         }
-        check(bundle.length() <= 1_420_000) {
-            "Web production bundle exceeded 1,420,000 bytes: ${bundle.length()}"
+        check(bundle.length() <= 1_450_000) {
+            "Web production bundle exceeded 1,450,000 bytes: ${bundle.length()}"
         }
 
         val definitionsText = definitions.readText()

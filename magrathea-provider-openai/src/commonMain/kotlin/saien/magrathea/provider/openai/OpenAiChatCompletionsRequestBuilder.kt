@@ -40,6 +40,8 @@ internal const val OPENAI_CHAT_REASONING_DETAILS_METADATA = "openai.chat.reasoni
 /** Builds the portable subset shared by OpenAI-compatible Chat Completions services. */
 internal class OpenAiChatCompletionsRequestBuilder(
     private val json: Json = Json,
+    private val reasoningFormat: OpenAiChatCompletionsReasoningFormat =
+        OpenAiChatCompletionsReasoningFormat.REASONING_EFFORT,
 ) {
     fun build(request: ProviderRequest): JsonObject = buildJsonObject {
         val config = request.openAiTransportConfig()
@@ -53,7 +55,14 @@ internal class OpenAiChatCompletionsRequestBuilder(
         put("stream", request.model.supportsStreaming)
         request.temperature?.let { put("temperature", it) }
         request.maxTokens?.let { put("max_tokens", it) }
-        config.reasoningEffort?.takeIf(String::isNotBlank)?.let { put("reasoning_effort", it) }
+        config.reasoningEffort?.takeIf(String::isNotBlank)?.let { effort ->
+            when (reasoningFormat) {
+                OpenAiChatCompletionsReasoningFormat.REASONING_EFFORT ->
+                    put("reasoning_effort", effort)
+                OpenAiChatCompletionsReasoningFormat.REASONING_OBJECT ->
+                    put("reasoning", buildJsonObject { put("effort", effort) })
+            }
+        }
         config.serviceTier?.takeIf(String::isNotBlank)?.let { put("service_tier", it) }
         if (request.tools.isNotEmpty()) {
             put("tools", buildTools(request))

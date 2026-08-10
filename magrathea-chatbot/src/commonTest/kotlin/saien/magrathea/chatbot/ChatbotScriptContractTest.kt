@@ -17,6 +17,7 @@ import saien.magrathea.core.AgentEngineConfig
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
+import saien.magrathea.core.ReasoningCapabilities
 import saien.magrathea.core.RuntimeConfig
 import saien.magrathea.core.SteeringMessageProvider
 import saien.magrathea.core.StopReason
@@ -131,7 +132,7 @@ class ChatbotScriptContractTest {
                     provider = provider.key,
                     model = "scripted-model",
                     supportsToolCalls = true,
-                    supportsReasoning = true,
+                    reasoningCapabilities = ReasoningCapabilities(),
                     supportsStreaming = true,
                 ),
             ),

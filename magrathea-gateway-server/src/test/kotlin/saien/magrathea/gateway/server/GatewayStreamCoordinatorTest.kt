@@ -29,6 +29,9 @@ import saien.magrathea.core.IdGenerator
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ProviderCredential
+import saien.magrathea.core.ReasoningCapabilities
+import saien.magrathea.core.ReasoningEffort
+import saien.magrathea.core.ReasoningPreference
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolImageAttachmentReference
@@ -428,6 +431,81 @@ class GatewayStreamCoordinatorTest {
         assertEquals(JsonPrimitive("Tool completed without model-visible output."), projected.result)
         assertEquals(1, projected.content.size)
         assertEquals(setOf(ToolResultAudience.MODEL), projected.content.single().audiences)
+        fixture.close()
+    }
+
+    @Test
+    fun trustedModelResolutionCarriesReasoningPreferenceToProvider() = runTest {
+        val fixture = Fixture(
+            scope = this,
+            modelResolver = GatewayModelResolver { _, reference ->
+                ModelDescriptor(
+                    provider = reference.provider,
+                    model = reference.model,
+                    reasoningCapabilities = ReasoningCapabilities(
+                        supportedEfforts = setOf(ReasoningEffort.HIGH),
+                    ),
+                    supportsStreaming = true,
+                )
+            },
+        )
+
+        fixture.coordinator.create(
+            USER_A,
+            request().copy(
+                reasoningPreference = ReasoningPreference.Effort(ReasoningEffort.HIGH),
+            ),
+        )
+        runCurrent()
+
+        assertEquals(
+            ReasoningPreference.Effort(ReasoningEffort.HIGH),
+            fixture.provider.requests.single().reasoningPreference,
+        )
+        fixture.close()
+    }
+
+    @Test
+    fun unsupportedReasoningFailsBeforeCredentialAttachmentQuotaAndProviderWork() = runTest {
+        var credentialResolutions = 0
+        var attachmentResolutions = 0
+        val fixture = Fixture(
+            scope = this,
+            modelResolver = GatewayModelResolver { _, reference ->
+                ModelDescriptor(
+                    provider = reference.provider,
+                    model = reference.model,
+                    reasoningCapabilities = ReasoningCapabilities(
+                        supportedEfforts = setOf(ReasoningEffort.HIGH),
+                    ),
+                    supportsStreaming = true,
+                )
+            },
+            credentialResolver = GatewayProviderCredentialResolver { _, _ ->
+                credentialResolutions += 1
+                ProviderCredential("server-only-secret")
+            },
+            attachmentResolver = GatewayAttachmentResolver { _, _, messages ->
+                attachmentResolutions += 1
+                messages
+            },
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            fixture.coordinator.create(
+                USER_A,
+                request().copy(
+                    reasoningPreference = ReasoningPreference.Effort(ReasoningEffort.MAX),
+                ),
+            )
+        }
+        runCurrent()
+
+        assertEquals(0, credentialResolutions)
+        assertEquals(0, attachmentResolutions)
+        assertEquals(0, fixture.quota.reservations)
+        assertEquals(0, fixture.provider.calls)
+        assertTrue(fixture.audit.isEmpty())
         fixture.close()
     }
 
@@ -894,6 +972,8 @@ class GatewayStreamCoordinatorTest {
                 supportsStreaming = true,
             )
         },
+        credentialResolver: GatewayProviderCredentialResolver =
+            GatewayProviderCredentialResolver { _, _ -> ProviderCredential("server-only-secret") },
         attachmentResolver: GatewayAttachmentResolver = RejectingGatewayAttachmentResolver,
         config: GatewayCoordinatorConfig = GatewayCoordinatorConfig(
             terminalRetentionMillis = 20_000,
@@ -907,7 +987,7 @@ class GatewayStreamCoordinatorTest {
         val coordinator = GatewayStreamCoordinator(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             modelResolver = modelResolver,
-            credentialResolver = GatewayProviderCredentialResolver { _, _ -> ProviderCredential("server-only-secret") },
+            credentialResolver = credentialResolver,
             attachmentResolver = attachmentResolver,
             quotaManager = quota,
             auditSink = GatewayAuditSink(audit::add),

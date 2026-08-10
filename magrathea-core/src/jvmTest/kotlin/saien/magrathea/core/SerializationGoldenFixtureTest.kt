@@ -20,36 +20,36 @@ class SerializationGoldenFixtureTest {
     }
 
     @Test
-    fun agentMessage_matchesV5GoldenFixture() {
+    fun agentMessage_matchesV6GoldenFixture() {
         val expected = agentMessageFixture()
-        val fixture = resource("/v5/core/agent-message.json")
+        val fixture = resource("/v6/core/agent-message.json")
 
         assertGolden(fixture, json.encodeToString(AgentMessage.serializer(), expected))
         assertEquals(expected, json.decodeFromString(AgentMessage.serializer(), fixture))
     }
 
     @Test
-    fun typedToolResultMessage_matchesV5GoldenFixture() {
+    fun typedToolResultMessage_matchesV6GoldenFixture() {
         val expected = typedToolResultMessageFixture()
-        val fixture = resource("/v5/core/typed-tool-result-message.json")
+        val fixture = resource("/v6/core/typed-tool-result-message.json")
 
         assertGolden(fixture, json.encodeToString(AgentMessage.serializer(), expected))
         assertEquals(expected, json.decodeFromString(AgentMessage.serializer(), fixture))
     }
 
     @Test
-    fun agentSessionSnapshot_matchesV5GoldenFixture() {
+    fun agentSessionSnapshot_matchesV6GoldenFixture() {
         val expected = sessionFixture()
-        val fixture = resource("/v5/core/agent-session-snapshot.json")
+        val fixture = resource("/v6/core/agent-session-snapshot.json")
 
         assertGolden(fixture, json.encodeToString(AgentSessionSnapshot.serializer(), expected))
         assertEquals(expected, json.decodeFromString(AgentSessionSnapshot.serializer(), fixture))
     }
 
     @Test
-    fun storedSessionEnvelope_matchesV5GoldenFixture() {
+    fun storedSessionEnvelope_matchesV6GoldenFixture() {
         val expected = interruptedSessionFixture()
-        val fixture = resource("/v5/core/stored-session-envelope.json")
+        val fixture = resource("/v6/core/stored-session-envelope.json")
         val codec = AgentSessionSnapshotCodec(json, sdkVersion = fixtureSdkVersion)
 
         assertGolden(fixture, codec.encode(expected))
@@ -57,7 +57,7 @@ class SerializationGoldenFixtureTest {
     }
 
     @Test
-    fun storedCheckpointEnvelope_matchesV5GoldenFixture() {
+    fun storedCheckpointEnvelope_matchesV6GoldenFixture() {
         val session = sessionFixture()
         val expected = AgentCheckpoint(
             sessionId = session.sessionId,
@@ -89,7 +89,7 @@ class SerializationGoldenFixtureTest {
                 ),
             ),
         )
-        val fixture = resource("/v5/core/stored-checkpoint-envelope.json")
+        val fixture = resource("/v6/core/stored-checkpoint-envelope.json")
         val codec = AgentCheckpointCodec(json, sdkVersion = fixtureSdkVersion)
 
         assertGolden(fixture, codec.encode(expected))
@@ -98,12 +98,36 @@ class SerializationGoldenFixtureTest {
 
     @Test
     fun corruptStoredSessionEnvelope_isRejected() {
-        val corruptFixture = resource("/v5/core/stored-session-envelope-corrupt.json")
+        val corruptFixture = resource("/v6/core/stored-session-envelope-corrupt.json")
         val codec = AgentSessionSnapshotCodec(json, sdkVersion = fixtureSdkVersion)
 
         assertThrows(SerializationException::class.java) {
             codec.decode(corruptFixture)
         }
+    }
+
+    @Test
+    fun shippedV5EnvelopesRemainAnExplicitCleanBreak() {
+        val session = resource("/v5/core/stored-session-envelope.json")
+        val checkpoint = resource("/v5/core/stored-checkpoint-envelope.json")
+
+        val sessionFailure = assertThrows(StoredEnvelopeDecodeException::class.java) {
+            AgentSessionSnapshotCodec(json, sdkVersion = fixtureSdkVersion).decode(session)
+        }
+        assertEquals(
+            StoredEnvelopeDecodeFailure.UNSUPPORTED_OLDER_SCHEMA,
+            sessionFailure.failure,
+        )
+        assertEquals(5, sessionFailure.storedSchemaVersion)
+
+        val checkpointFailure = assertThrows(StoredEnvelopeDecodeException::class.java) {
+            AgentCheckpointCodec(json, sdkVersion = fixtureSdkVersion).decode(checkpoint)
+        }
+        assertEquals(
+            StoredEnvelopeDecodeFailure.UNSUPPORTED_OLDER_SCHEMA,
+            checkpointFailure.failure,
+        )
+        assertEquals(5, checkpointFailure.storedSchemaVersion)
     }
 
     private fun agentMessageFixture() = AgentMessage(
@@ -248,7 +272,7 @@ class SerializationGoldenFixtureTest {
             model = ModelDescriptor(
                 provider = "gemini",
                 model = "gemini-contract",
-                supportsReasoning = true,
+                reasoningCapabilities = ReasoningCapabilities(),
                 supportsStreaming = true,
                 contextWindowTokens = 128_000,
             ),

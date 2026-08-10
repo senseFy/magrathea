@@ -10,6 +10,8 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class StoredEnvelopeContractTest {
@@ -28,9 +30,14 @@ class StoredEnvelopeContractTest {
         val encoded = sessionCodec.encode(expected)
         val envelope = json.parseToJsonElement(encoded).jsonObject
 
+        assertEquals(STORAGE_SCHEMA_V6_VERSION, CURRENT_STORAGE_SCHEMA_VERSION)
         assertEquals(CURRENT_STORAGE_SCHEMA_VERSION, envelope.getValue("schemaVersion").jsonPrimitive.content.toInt())
         assertEquals("test-sdk", envelope.getValue("sdkVersion").jsonPrimitive.content)
         assertEquals(expected, sessionCodec.decode(encoded))
+        val result = sessionCodec.decodeResult(encoded)
+        assertEquals(expected, result.value)
+        assertEquals(CURRENT_STORAGE_SCHEMA_VERSION, result.sourceSchemaVersion)
+        assertNull(result.rewritePayload)
     }
 
     @Test
@@ -44,6 +51,41 @@ class StoredEnvelopeContractTest {
         assertEquals(CURRENT_STORAGE_SCHEMA_VERSION, envelope.getValue("schemaVersion").jsonPrimitive.content.toInt())
         assertEquals("test-sdk", envelope.getValue("sdkVersion").jsonPrimitive.content)
         assertEquals(expected, checkpointCodec.decode(encoded))
+        val result = checkpointCodec.decodeResult(encoded)
+        assertEquals(expected, result.value)
+        assertEquals(CURRENT_STORAGE_SCHEMA_VERSION, result.sourceSchemaVersion)
+        assertNull(result.rewritePayload)
+    }
+
+    @Test
+    fun codecsUseSdkOwnedWireSettingsAcrossCallerJsonConfigurations() {
+        val callerJson = Json {
+            classDiscriminator = "_caller_kind"
+            encodeDefaults = false
+            explicitNulls = false
+            ignoreUnknownKeys = true
+            isLenient = true
+            coerceInputValues = true
+        }
+        val callerSessionCodec = AgentSessionSnapshotCodec(callerJson, sdkVersion = "caller-sdk")
+        val callerCheckpointCodec = AgentCheckpointCodec(callerJson, sdkVersion = "caller-sdk")
+        val fixedSessionCodec = AgentSessionSnapshotCodec(sdkVersion = "fixed-sdk")
+        val fixedCheckpointCodec = AgentCheckpointCodec(sdkVersion = "fixed-sdk")
+        val expectedSession = snapshot()
+        val expectedCheckpoint = checkpoint(expectedSession, turn = 2)
+
+        val callerSessionPayload = callerSessionCodec.encode(expectedSession)
+        val callerCheckpointPayload = callerCheckpointCodec.encode(expectedCheckpoint)
+
+        assertTrue("\"type\":\"text\"" in callerSessionPayload)
+        assertFalse("_caller_kind" in callerSessionPayload)
+        assertEquals(expectedSession, fixedSessionCodec.decode(callerSessionPayload))
+        assertEquals(expectedCheckpoint, fixedCheckpointCodec.decode(callerCheckpointPayload))
+        assertEquals(expectedSession, callerSessionCodec.decode(fixedSessionCodec.encode(expectedSession)))
+        assertEquals(
+            expectedCheckpoint,
+            callerCheckpointCodec.decode(fixedCheckpointCodec.encode(expectedCheckpoint)),
+        )
     }
 
     @Test
@@ -143,12 +185,70 @@ class StoredEnvelopeContractTest {
 
     @Test
     fun sessionCodec_rejectsUnsupportedSchemaVersion() {
-        val unsupported = sessionCodec.encode(snapshot())
-            .replaceFirst("\"schemaVersion\":5", "\"schemaVersion\":6")
+        val encoded = sessionCodec.encode(snapshot())
+        val prior = encoded.replaceFirst(
+            "\"schemaVersion\":$CURRENT_STORAGE_SCHEMA_VERSION",
+            "\"schemaVersion\":${CURRENT_STORAGE_SCHEMA_VERSION - 1}",
+        )
+        val future = encoded
+            .replaceFirst(
+                "\"schemaVersion\":$CURRENT_STORAGE_SCHEMA_VERSION",
+                "\"schemaVersion\":${CURRENT_STORAGE_SCHEMA_VERSION + 1}",
+            )
 
-        assertFailsWith<SerializationException> {
-            sessionCodec.decode(unsupported)
+        val priorFailure = assertFailsWith<StoredEnvelopeDecodeException> {
+            sessionCodec.decode(prior)
         }
+        assertEquals(
+            StoredEnvelopeDecodeFailure.UNSUPPORTED_OLDER_SCHEMA,
+            priorFailure.failure,
+        )
+        assertEquals(CURRENT_STORAGE_SCHEMA_VERSION - 1, priorFailure.storedSchemaVersion)
+
+        val futureFailure = assertFailsWith<StoredEnvelopeDecodeException> {
+            sessionCodec.decode(future)
+        }
+        assertEquals(
+            StoredEnvelopeDecodeFailure.UNSUPPORTED_NEWER_SCHEMA,
+            futureFailure.failure,
+        )
+        assertEquals(CURRENT_STORAGE_SCHEMA_VERSION + 1, futureFailure.storedSchemaVersion)
+    }
+
+    @Test
+    fun sessionCodec_classifiesMissingOrMalformedSchemaAsCorruptBeforeCurrentDecode() {
+        val encoded = sessionCodec.encode(snapshot())
+        listOf(
+            encoded.replaceFirst("\"schemaVersion\":$CURRENT_STORAGE_SCHEMA_VERSION,", ""),
+            encoded.replaceFirst(
+                "\"schemaVersion\":$CURRENT_STORAGE_SCHEMA_VERSION",
+                "\"schemaVersion\":\"$CURRENT_STORAGE_SCHEMA_VERSION\"",
+            ),
+            encoded.replaceFirst(
+                "\"schemaVersion\":$CURRENT_STORAGE_SCHEMA_VERSION",
+                "\"schemaVersion\":0",
+            ),
+        ).forEach { malformed ->
+            val failure = assertFailsWith<StoredEnvelopeDecodeException> {
+                sessionCodec.decode(malformed)
+            }
+            assertEquals(StoredEnvelopeDecodeFailure.CORRUPT, failure.failure)
+            assertEquals(CURRENT_STORAGE_SCHEMA_VERSION, failure.currentSchemaVersion)
+        }
+    }
+
+    @Test
+    fun publicDecodeFailureNeverExposesStoredPayloadOrDecoderCause() {
+        val secret = "session-prompt-canary-never-log"
+        val failure = assertFailsWith<StoredEnvelopeDecodeException> {
+            sessionCodec.decode(
+                """{"schemaVersion":$CURRENT_STORAGE_SCHEMA_VERSION,"secret":"$secret"}""",
+            )
+        }
+
+        assertEquals(StoredEnvelopeDecodeFailure.CORRUPT, failure.failure)
+        assertFalse(failure.toString().contains(secret))
+        assertNull(failure.cause)
     }
 
     @Test

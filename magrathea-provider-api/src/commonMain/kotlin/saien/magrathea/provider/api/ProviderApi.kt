@@ -27,6 +27,7 @@ import saien.magrathea.core.ProviderCredential
 import saien.magrathea.core.ProviderTimeoutConfig
 import saien.magrathea.core.ReplayPolicy
 import saien.magrathea.core.ReasoningContentKind
+import saien.magrathea.core.ReasoningPreference
 import saien.magrathea.core.ReasoningPart
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
@@ -38,6 +39,7 @@ import saien.magrathea.core.ToolResultContent
 import saien.magrathea.core.ToolResultImageContent
 import saien.magrathea.core.ToolResultPart
 import saien.magrathea.core.ToolResultTextContent
+import saien.magrathea.core.requireSupports
 
 /** Model-visible canonical and typed representations of one Tool result. */
 class ToolResultModelProjection internal constructor(
@@ -227,6 +229,7 @@ data class ProviderRequest(
     val invocationIntent: ProviderInvocationIntent = ProviderInvocationIntent.CREATE,
     val model: ModelDescriptor,
     val messages: List<AgentMessage>,
+    val reasoningPreference: ReasoningPreference = ReasoningPreference.Auto,
     val tools: List<ToolDefinition> = emptyList(),
     val credentialRef: CredentialRef? = null,
     @Transient
@@ -242,6 +245,7 @@ data class ProviderRequest(
 ) {
     init {
         endpoint?.let(::requireValidHttpEndpoint)
+        model.requireSupports(reasoningPreference)
         require(invocationIntent != ProviderInvocationIntent.REATTACH || invocation != null) {
             "Provider reattachment requires an invocation identity"
         }
@@ -254,6 +258,7 @@ data class ProviderRequest(
             "invocationIntent=$invocationIntent, " +
             "model=$model, " +
             "messages=${messages.size}, " +
+            "reasoningPreference=$reasoningPreference, " +
             "tools=${tools.size}, " +
             "credentialRef=$credentialRef, " +
             "credential=${if (credential == null) "none" else "<redacted>"}, " +

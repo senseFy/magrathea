@@ -10,18 +10,23 @@ const model = new WebClient.MagratheaWebChatModel(
   "chat-model",
   "Chat model",
   true,
+  ["low", "medium", "high"],
   false,
   true,
   128_000,
 );
 
-const sessionPromise: Promise<WebClient.MagratheaWebChatSession> = client.createSession(model);
+const sessionPromise: Promise<WebClient.MagratheaWebChatSession> = client.createSession(
+  model,
+  "medium",
+);
 const historyPromise: Promise<Array<WebClient.MagratheaWebChatHistoryItem>> = client.history();
 
 void sessionPromise.then((session) => {
   const observation = session.observe((snapshot: WebClient.MagratheaWebChatSnapshot) => {
     const status: string = snapshot.status;
     const provider: string = snapshot.model.provider;
+    const reasoningPreference: string = snapshot.reasoningPreference;
     const text: string = snapshot.messages.map((message) => message.text).join("");
     const toolCalls: Array<WebClient.MagratheaWebChatToolCall> = snapshot.messages.flatMap(
       (message) => message.toolCalls,
@@ -34,14 +39,18 @@ void sessionPromise.then((session) => {
     );
     void status;
     void provider;
+    void reasoningPreference;
     void text;
     void toolCalls;
     void citations;
     void attachments;
   });
   observation.cancel();
-  return session.cancel();
+  return session.updateReasoningPreference("high").then(() => session.cancel());
 });
 
-void historyPromise;
+void historyPromise.then((items) => {
+  const reasoningPreferences: Array<string> = items.map((item) => item.reasoningPreference);
+  void reasoningPreferences;
+});
 void client.close();

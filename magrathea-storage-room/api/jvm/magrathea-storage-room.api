@@ -48,3 +48,27 @@ public final class saien/magrathea/storage/room/StoredRecordKind : java/lang/Enu
 	public static fun values ()[Lsaien/magrathea/storage/room/StoredRecordKind;
 }
 
+public final class saien/magrathea/storage/room/StoredRecordSchemaException : java/lang/IllegalStateException {
+	public fun <init> (Lsaien/magrathea/storage/room/StoredRecordSchemaIssue;)V
+	public final fun getIssue ()Lsaien/magrathea/storage/room/StoredRecordSchemaIssue;
+}
+
+public final class saien/magrathea/storage/room/StoredRecordSchemaIssue {
+	public fun <init> (Lsaien/magrathea/storage/room/StoredRecordKind;Ljava/lang/String;Lsaien/magrathea/core/StoredEnvelopeDecodeFailure;II)V
+	public final fun component1 ()Lsaien/magrathea/storage/room/StoredRecordKind;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Lsaien/magrathea/core/StoredEnvelopeDecodeFailure;
+	public final fun component4 ()I
+	public final fun component5 ()I
+	public final fun copy (Lsaien/magrathea/storage/room/StoredRecordKind;Ljava/lang/String;Lsaien/magrathea/core/StoredEnvelopeDecodeFailure;II)Lsaien/magrathea/storage/room/StoredRecordSchemaIssue;
+	public static synthetic fun copy$default (Lsaien/magrathea/storage/room/StoredRecordSchemaIssue;Lsaien/magrathea/storage/room/StoredRecordKind;Ljava/lang/String;Lsaien/magrathea/core/StoredEnvelopeDecodeFailure;IIILjava/lang/Object;)Lsaien/magrathea/storage/room/StoredRecordSchemaIssue;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCurrentSchemaVersion ()I
+	public final fun getFailure ()Lsaien/magrathea/core/StoredEnvelopeDecodeFailure;
+	public final fun getKind ()Lsaien/magrathea/storage/room/StoredRecordKind;
+	public final fun getSessionId ()Ljava/lang/String;
+	public final fun getStoredSchemaVersion ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+

@@ -24,6 +24,7 @@ import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ProviderConfig
 import saien.magrathea.core.ProviderCredential
+import saien.magrathea.core.ReasoningCapabilities
 import saien.magrathea.core.ReasoningPart
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
@@ -103,7 +104,7 @@ class GeminiInteractionsVerticalContractTest {
         model = ModelDescriptor(
             provider = "gemini",
             model = "gemini-contract-model",
-            supportsReasoning = true,
+            reasoningCapabilities = ReasoningCapabilities(),
             supportsStreaming = true,
         ),
         tools = listOf(WeatherTool.DEFINITION),

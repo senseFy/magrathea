@@ -15,6 +15,8 @@ import saien.magrathea.core.JsonPart
 import saien.magrathea.core.MediaReference
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.RemoteToolImageSource
+import saien.magrathea.core.ReasoningEffort
+import saien.magrathea.core.ReasoningPreference
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
@@ -36,14 +38,15 @@ class GatewayProtocolContractTest {
     )
 
     @Test
-    fun requestWireHasExactV2AndNoCredentialEndpointOrHeaderSurface() {
+    fun requestWireHasExactV3AndNoCredentialEndpointOrHeaderSurface() {
         val encoded = codec.encodeCreateRequest(request())
 
         assertEquals(
-            "{\"protocolVersion\":2,\"requestId\":\"session-1:0\",\"sessionId\":\"session-1\"," +
+            "{\"protocolVersion\":3,\"requestId\":\"session-1:0\",\"sessionId\":\"session-1\"," +
                 "\"turn\":0,\"model\":{\"provider\":\"gemini\",\"model\":\"gemini-test\"}," +
                 "\"messages\":[{\"id\":\"message-1\",\"role\":\"USER\",\"parts\":[{\"type\":\"text\"," +
-                "\"text\":\"hello\"}],\"createdAtEpochMs\":1,\"metadata\":{}}],\"tools\":[],\"options\":{}," +
+                "\"text\":\"hello\"}],\"createdAtEpochMs\":1,\"metadata\":{}}]," +
+                "\"reasoningPreference\":{\"type\":\"auto\"},\"tools\":[],\"options\":{}," +
                 "\"attachments\":[]}",
             encoded,
         )
@@ -54,11 +57,32 @@ class GatewayProtocolContractTest {
     }
 
     @Test
+    fun reasoningPreferenceVariantsHaveStableExactV3WireShapes() {
+        val disabled = request().copy(reasoningPreference = ReasoningPreference.Disabled)
+        val disabledWire = codec.encodeCreateRequest(disabled)
+        assertTrue("\"reasoningPreference\":{\"type\":\"disabled\"}" in disabledWire)
+        assertEquals(disabled, codec.decodeCreateRequest(disabledWire))
+
+        val effort = request().copy(
+            reasoningPreference = ReasoningPreference.Effort(ReasoningEffort.XHIGH),
+        )
+        val effortWire = codec.encodeCreateRequest(effort)
+        assertTrue(
+            "\"reasoningPreference\":{\"type\":\"effort\",\"level\":\"xhigh\"}" in effortWire,
+        )
+        assertEquals(effort, codec.decodeCreateRequest(effortWire))
+
+        assertFailsWith<GatewayProtocolException> {
+            codec.decodeCreateRequest(effortWire.replace("\"xhigh\"", "\"unknown\""))
+        }
+    }
+
+    @Test
     fun decoderRejectsUnknownVersionUnknownEventAndUnknownField() {
         val encoded = codec.encodeEnvelope(envelope(0, GatewayEvent.StreamOpened()))
 
         assertFailsWith<GatewayProtocolException> {
-            codec.decodeEnvelope(encoded.replace("\"protocolVersion\":2", "\"protocolVersion\":3"))
+            codec.decodeEnvelope(encoded.replace("\"protocolVersion\":3", "\"protocolVersion\":4"))
         }
         assertFailsWith<GatewayProtocolException> {
             codec.decodeEnvelope(encoded.replace("\"stream_opened\"", "\"unknown_opened\""))
@@ -340,7 +364,7 @@ class GatewayProtocolContractTest {
         }
         assertFailsWith<GatewayProtocolException> {
             codec.decodeProblem(
-                "{\"protocolVersion\":2,\"code\":\"invalid\",\"message\":\"safe\"," +
+                "{\"protocolVersion\":3,\"code\":\"invalid\",\"message\":\"safe\"," +
                     "\"retryAfterMillis\":-1}",
             )
         }

@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import saien.magrathea.core.ProviderCredential
+import saien.magrathea.core.ReasoningEffort
+import saien.magrathea.core.ReasoningPreference
 import saien.magrathea.provider.api.HttpHeader
 import saien.magrathea.provider.api.HttpMethod
 import saien.magrathea.provider.api.HttpRequestSpec
@@ -58,27 +60,43 @@ class OpenAiProviderAdapter(
         require(request.model.provider == key) {
             "OpenAI Provider profile $key cannot serve model Provider ${request.model.provider}"
         }
-        val credential = requireCredential(request)
-        val config = request.openAiTransportConfig()
-        val protocol = resolveProtocol(config)
+        val protocol = resolveProtocol(request.openAiTransportConfig())
+        val resolvedRequest = request.withResolvedReasoning(
+            protocol = protocol,
+            dialect = profile.dialect,
+            chatCompletionsReasoningFormat = profile.chatCompletionsReasoningFormat,
+            reasoningEffortMapping = profile.reasoningEffortMapping,
+            disabledReasoningValue = profile.disabledReasoningValue,
+        )
+        val credential = requireCredential(resolvedRequest)
+        val config = resolvedRequest.openAiTransportConfig()
         validateConfig(config, protocol)
         val payload = when (protocol) {
-            OpenAiWireProtocol.RESPONSES -> OpenAiResponsesRequestBuilder(key, json).build(request)
-            OpenAiWireProtocol.CHAT_COMPLETIONS -> OpenAiChatCompletionsRequestBuilder(json).build(request)
+            OpenAiWireProtocol.RESPONSES -> OpenAiResponsesRequestBuilder(key, json).build(resolvedRequest)
+            OpenAiWireProtocol.CHAT_COMPLETIONS -> OpenAiChatCompletionsRequestBuilder(
+                json = json,
+                reasoningFormat = profile.chatCompletionsReasoningFormat
+                    ?: OpenAiChatCompletionsReasoningFormat.REASONING_EFFORT,
+            ).build(resolvedRequest)
         }
         val body = json.encodeToString(JsonObject.serializer(), payload)
-        val endpoint = resolveEndpoint(request, credential, protocol)
+        val endpoint = resolveEndpoint(resolvedRequest, credential, protocol)
         val httpRequest = HttpRequestSpec(
             method = HttpMethod.POST,
             url = endpoint,
-            headers = buildHeaders(request, credential, config.authentication, request.model.supportsStreaming),
+            headers = buildHeaders(
+                resolvedRequest,
+                credential,
+                config.authentication,
+                resolvedRequest.model.supportsStreaming,
+            ),
             body = body,
-            timeouts = request.timeouts.toHttpTimeoutConfig(),
+            timeouts = resolvedRequest.timeouts.toHttpTimeoutConfig(),
         )
-        return if (request.model.supportsStreaming) {
-            streamResponse(request, httpRequest, config, protocol)
+        return if (resolvedRequest.model.supportsStreaming) {
+            streamResponse(resolvedRequest, httpRequest, config, protocol)
         } else {
-            executeResponse(request, httpRequest, config, protocol)
+            executeResponse(resolvedRequest, httpRequest, config, protocol)
         }
     }
 
@@ -227,6 +245,65 @@ private fun ProviderTransportConfig?.openAiConfigOrDefault(): OpenAiTransportCon
     null -> OpenAiTransportConfig()
     is OpenAiTransportConfig -> this
     else -> throw IllegalArgumentException("OpenAI provider received options for another provider family")
+}
+
+private fun ProviderRequest.withResolvedReasoning(
+    protocol: OpenAiWireProtocol,
+    dialect: OpenAiProtocolDialect,
+    chatCompletionsReasoningFormat: OpenAiChatCompletionsReasoningFormat?,
+    reasoningEffortMapping: Map<ReasoningEffort, String>,
+    disabledReasoningValue: String?,
+): ProviderRequest {
+    if (reasoningPreference == ReasoningPreference.Auto) return this
+    require(
+        protocol != OpenAiWireProtocol.CHAT_COMPLETIONS ||
+            chatCompletionsReasoningFormat != null,
+    ) {
+        "Provider-neutral reasoning requires an explicit compatible Chat Completions reasoning format"
+    }
+    val config = typedConfig.openAiConfigOrDefault()
+    require(config.reasoningEffort == null) {
+        "Provider-neutral reasoning cannot be combined with OpenAI reasoningEffort"
+    }
+    val effort = when (val preference = reasoningPreference) {
+        ReasoningPreference.Auto -> error("Auto reasoning is resolved before Provider mapping")
+        ReasoningPreference.Disabled -> {
+            require(config.reasoningSummary == null) {
+                "Disabled reasoning cannot be combined with an OpenAI reasoning summary"
+            }
+            val value = requireNotNull(disabledReasoningValue) {
+                "The selected OpenAI-family profile does not define how to disable reasoning"
+            }
+            if (dialect != OpenAiProtocolDialect.COMPATIBLE) {
+                require(value == REFERENCE_DISABLED_REASONING_VALUE) {
+                    "Disabled reasoning must map to none for the selected OpenAI-family dialect"
+                }
+            }
+            value
+        }
+        is ReasoningPreference.Effort -> {
+            val value = if (dialect == OpenAiProtocolDialect.COMPATIBLE) {
+                requireNotNull(reasoningEffortMapping[preference.level]) {
+                    "The selected compatible OpenAI-family profile has no mapping for ${preference.level}"
+                }
+            } else {
+                preference.level.referenceReasoningValue()
+            }
+            value
+        }
+    }
+    return copy(typedConfig = config.copy(reasoningEffort = effort))
+}
+
+private const val REFERENCE_DISABLED_REASONING_VALUE = "none"
+
+private fun ReasoningEffort.referenceReasoningValue(): String = when (this) {
+    ReasoningEffort.MINIMAL -> "minimal"
+    ReasoningEffort.LOW -> "low"
+    ReasoningEffort.MEDIUM -> "medium"
+    ReasoningEffort.HIGH -> "high"
+    ReasoningEffort.XHIGH -> "xhigh"
+    ReasoningEffort.MAX -> "max"
 }
 
 private val RESERVED_HEADERS = setOf(

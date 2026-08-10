@@ -21,6 +21,9 @@ import saien.magrathea.core.CredentialRef
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ProviderCredential
+import saien.magrathea.core.ReasoningCapabilities
+import saien.magrathea.core.ReasoningEffort
+import saien.magrathea.core.ReasoningPreference
 import saien.magrathea.core.TextPart
 import saien.magrathea.provider.api.HttpResponseSpec
 import saien.magrathea.provider.api.HttpRequestSpec
@@ -35,6 +38,101 @@ import saien.magrathea.provider.api.ProviderRequest
 import saien.magrathea.provider.api.ProviderStreamInterruptedException
 
 class GeminiProviderTransportContractTest {
+    @Test
+    fun modelReasoningCapabilityResolvesBeforeGeminiEncoding() = runTest {
+        val transport = ScriptedHttpTransport(
+            executeScripts = listOf(HttpResponseSpec(200, body = TOOL_INTERACTION_JSON)),
+        )
+        val model = ModelDescriptor(
+            provider = "gemini",
+            model = "gemini-contract-model",
+            reasoningCapabilities = ReasoningCapabilities(
+                supportedEfforts = setOf(ReasoningEffort.HIGH),
+            ),
+        )
+
+        GeminiProviderAdapter(transport = transport).generate(
+            request(streaming = false).copy(
+                model = model,
+                reasoningPreference = ReasoningPreference.Effort(ReasoningEffort.HIGH),
+            ),
+        ).toList()
+
+        val generationConfig = Json.parseToJsonElement(
+            transport.requests.single().body.orEmpty(),
+        ).jsonObject.getValue("generation_config").jsonObject
+        assertEquals("high", generationConfig.getValue("thinking_level").jsonPrimitive.content)
+    }
+
+    @Test
+    fun neutralAndNativeThinkingLevelConflictBeforeTransport() = runTest {
+        val transport = ScriptedHttpTransport()
+        val model = ModelDescriptor(
+            provider = "gemini",
+            model = "gemini-reasoning-contract",
+            reasoningCapabilities = ReasoningCapabilities(
+                supportedEfforts = setOf(ReasoningEffort.LOW),
+            ),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            GeminiProviderAdapter(transport = transport).generate(
+                request(streaming = false).copy(
+                    model = model,
+                    reasoningPreference = ReasoningPreference.Effort(ReasoningEffort.LOW),
+                    typedConfig = saien.magrathea.provider.api.GeminiTransportConfig(
+                        thinkingLevel = "low",
+                    ),
+                ),
+            ).toList()
+        }
+        assertTrue(transport.requests.isEmpty())
+    }
+
+    @Test
+    fun unsupportedCanonicalEffortFailsBeforeTransport() = runTest {
+        val transport = ScriptedHttpTransport()
+        val model = ModelDescriptor(
+            provider = "gemini",
+            model = "gemini-reasoning-contract",
+            reasoningCapabilities = ReasoningCapabilities(
+                supportedEfforts = setOf(ReasoningEffort.XHIGH, ReasoningEffort.MAX),
+            ),
+        )
+
+        listOf(ReasoningEffort.XHIGH, ReasoningEffort.MAX).forEach { effort ->
+            assertFailsWith<IllegalArgumentException> {
+                GeminiProviderAdapter(transport = transport).generate(
+                    request(streaming = false).copy(
+                        model = model,
+                        reasoningPreference = ReasoningPreference.Effort(effort),
+                    ),
+                ).toList()
+            }
+        }
+        assertTrue(transport.requests.isEmpty())
+    }
+
+    @Test
+    fun disabledReasoningIsRejectedBecauseInteractionsHasNoOffWireValue() = runTest {
+        val transport = ScriptedHttpTransport()
+        val model = ModelDescriptor(
+            provider = "gemini",
+            model = "gemini-reasoning-contract",
+            reasoningCapabilities = ReasoningCapabilities(supportsDisabled = true),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            GeminiProviderAdapter(transport = transport).generate(
+                request(streaming = false).copy(
+                    model = model,
+                    reasoningPreference = ReasoningPreference.Disabled,
+                ),
+            ).toList()
+        }
+        assertTrue(transport.requests.isEmpty())
+    }
+
     @Test
     fun streamingAdapterUsesStableV1SseAndNeverSerializesCredential() = runTest {
         val canary = "gemini-secret-canary"

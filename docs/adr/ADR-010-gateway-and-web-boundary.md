@@ -12,7 +12,7 @@ servers.
 ## Decision
 
 - Browsers access Providers only through a Magrathea Gateway.
-- Gateway `exact-v2` is a dedicated, strict wire protocol with its own DTOs and codec. Typed
+- Gateway `exact-v3` is a dedicated, strict wire protocol with its own DTOs and codec. Typed
   model-audience Tool images cross this boundary only as uploaded attachment references.
 - Stream creation and cancellation use an authenticated HTTP control plane. Events use sequenced
   Server-Sent Events with bounded replay, reconnect, idempotency, and terminal-state validation.
@@ -27,6 +27,8 @@ servers.
 - The server resolves a browser-supplied model reference to server-owned Provider configuration,
   endpoint, and credential. Browser requests cannot set an upstream endpoint, credential, or
   arbitrary Provider header.
+- Browser requests carry only Provider-neutral reasoning intent. The server resolves trusted model
+  capabilities and exact Provider wire values.
 - The browser composition routes each session's Provider/model reference through the same Gateway
   boundary, so changing Provider does not require a new browser client or expose a direct adapter.
 - Owner, tenant, request, session, stream, and idempotency identities are validated at every public

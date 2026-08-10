@@ -51,6 +51,8 @@ become executable only after their protocol lifecycle is finalized and their arg
 Reasoning has three separate meanings that must not be collapsed:
 
 - token usage reports how much internal reasoning a model consumed;
+- request intent selects `Auto`, explicit disable, or a semantic effort supported by trusted model
+  metadata;
 - visible reasoning is only the representation a Provider deliberately returned, classified as a
   Provider-defined view, a summary, or explicitly exposed reasoning text;
 - signatures, encrypted content, redacted blocks, and Provider-specific reasoning details are
@@ -70,6 +72,11 @@ transferred across models. This follows the continuation requirements documented
 [Anthropic extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking),
 [Gemini thought signatures](https://ai.google.dev/gemini-api/docs/thought-signatures), and
 [OpenRouter reasoning details](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens).
+
+Neutral request intent is resolved only at the adapter boundary. `Auto` emits no neutral override.
+Explicit choices require a model-level capability and exact mapping; unsupported choices and
+same-dimension Provider-native controls fail before transport. Typed native configuration remains
+available for controls that do not have a portable meaning.
 
 Gemini uses client-managed history. Initial and follow-up requests preserve interaction step order,
 tool results, reasoning metadata, and terminal state without relying on server-side conversation

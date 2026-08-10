@@ -240,8 +240,27 @@ data class AgentSessionSnapshot(
     }
 }
 
-const val CURRENT_STORAGE_SCHEMA_VERSION: Int = 5
+const val CURRENT_STORAGE_SCHEMA_VERSION: Int = 6
 
+/** The first schema covered by the SDK-owned migration chain; older schemas are a clean break. */
+const val MINIMUM_READABLE_STORAGE_SCHEMA_VERSION: Int = 6
+
+private val storageSchemaEvolution = StorageSchemaEvolution(
+    minimumReadableVersion = MINIMUM_READABLE_STORAGE_SCHEMA_VERSION,
+    currentVersion = CURRENT_STORAGE_SCHEMA_VERSION,
+    migrations = emptyList(),
+)
+
+/**
+ * Legacy generic session envelope retained for compatibility.
+ *
+ * This type is not the SDK's canonical durable wire contract. Use [AgentSessionSnapshotCodec] so
+ * version dispatch, strict validation, and migration metadata cannot be bypassed.
+ */
+@Deprecated(
+    message = "Use AgentSessionSnapshotCodec for durable session envelopes.",
+    level = DeprecationLevel.WARNING,
+)
 @Serializable
 data class StoredSessionEnvelope(
     val schemaVersion: Int,
@@ -249,6 +268,16 @@ data class StoredSessionEnvelope(
     val payload: AgentSessionSnapshot,
 )
 
+/**
+ * Legacy generic checkpoint envelope retained for compatibility.
+ *
+ * This type is not the SDK's canonical durable wire contract. Use [AgentCheckpointCodec] so
+ * version dispatch, strict validation, and migration metadata cannot be bypassed.
+ */
+@Deprecated(
+    message = "Use AgentCheckpointCodec for durable checkpoint envelopes.",
+    level = DeprecationLevel.WARNING,
+)
 @Serializable
 data class StoredCheckpointEnvelope(
     val schemaVersion: Int,
@@ -260,13 +289,7 @@ class AgentSessionSnapshotCodec(
     json: Json = Json,
     private val sdkVersion: String = MAGRATHEA_CORE_SDK_VERSION,
 ) {
-    private val json = Json(json) {
-        encodeDefaults = true
-        explicitNulls = true
-        ignoreUnknownKeys = false
-        isLenient = false
-        coerceInputValues = false
-    }
+    private val json = fixedStorageJson(json)
 
     init {
         require(sdkVersion.isNotBlank()) { "sdkVersion must not be blank" }
@@ -274,28 +297,26 @@ class AgentSessionSnapshotCodec(
 
     fun encode(snapshot: AgentSessionSnapshot): String {
         validateSessionIdentity(snapshot)
-        return json.encodeToString(
-            StoredSessionEnvelope.serializer(),
-            StoredSessionEnvelope(
-                schemaVersion = CURRENT_STORAGE_SCHEMA_VERSION,
-                sdkVersion = sdkVersion,
-                payload = snapshot,
-            ),
-        )
+        return StorageSchemaV6Adapter.encodeSession(json, sdkVersion, snapshot)
     }
 
     fun decode(payload: String): AgentSessionSnapshot {
-        val encoded = json.parseToJsonElement(payload)
-        val envelope = decodeCanonical {
-            json.decodeFromJsonElement(StoredSessionEnvelope.serializer(), encoded)
+        return decodeResult(payload).value
+    }
+
+    /** Decodes completely and reports a canonical payload when an adjacent migration was applied. */
+    fun decodeResult(payload: String): StoredEnvelopeDecodeResult<AgentSessionSnapshot> {
+        val evolved = storageSchemaEvolution.evolve(payload, json)
+        return evolved.decodeCurrentResult {
+            val envelope = StorageSchemaV6Adapter.decodeSession(json, evolved.document)
+            validateEnvelope(envelope.schemaVersion, envelope.sdkVersion)
+            validateSessionIdentity(envelope.payload)
+            validateCanonicalEnvelope(
+                encoded = evolved.document,
+                canonical = envelope.canonicalDocument,
+            )
+            ValidatedCurrentStoredEnvelope(envelope.payload, envelope.canonicalPayload)
         }
-        validateEnvelope(envelope.schemaVersion, envelope.sdkVersion)
-        validateSessionIdentity(envelope.payload)
-        validateCanonicalEnvelope(
-            encoded = encoded,
-            canonical = json.encodeToJsonElement(StoredSessionEnvelope.serializer(), envelope),
-        )
-        return envelope.payload
     }
 }
 
@@ -303,13 +324,7 @@ class AgentCheckpointCodec(
     json: Json = Json,
     private val sdkVersion: String = MAGRATHEA_CORE_SDK_VERSION,
 ) {
-    private val json = Json(json) {
-        encodeDefaults = true
-        explicitNulls = true
-        ignoreUnknownKeys = false
-        isLenient = false
-        coerceInputValues = false
-    }
+    private val json = fixedStorageJson(json)
 
     init {
         require(sdkVersion.isNotBlank()) { "sdkVersion must not be blank" }
@@ -317,37 +332,39 @@ class AgentCheckpointCodec(
 
     fun encode(checkpoint: AgentCheckpoint): String {
         validateCheckpointIdentity(checkpoint)
-        return json.encodeToString(
-            StoredCheckpointEnvelope.serializer(),
-            StoredCheckpointEnvelope(
-                schemaVersion = CURRENT_STORAGE_SCHEMA_VERSION,
-                sdkVersion = sdkVersion,
-                payload = checkpoint,
-            ),
-        )
+        return StorageSchemaV6Adapter.encodeCheckpoint(json, sdkVersion, checkpoint)
     }
 
     fun decode(payload: String): AgentCheckpoint {
-        val encoded = json.parseToJsonElement(payload)
-        val envelope = decodeCanonical {
-            json.decodeFromJsonElement(StoredCheckpointEnvelope.serializer(), encoded)
+        return decodeResult(payload).value
+    }
+
+    /** Decodes completely and reports a canonical payload when an adjacent migration was applied. */
+    fun decodeResult(payload: String): StoredEnvelopeDecodeResult<AgentCheckpoint> {
+        val evolved = storageSchemaEvolution.evolve(payload, json)
+        return evolved.decodeCurrentResult {
+            val envelope = StorageSchemaV6Adapter.decodeCheckpoint(json, evolved.document)
+            validateEnvelope(envelope.schemaVersion, envelope.sdkVersion)
+            validateCheckpointIdentity(envelope.payload)
+            validateCanonicalEnvelope(
+                encoded = evolved.document,
+                canonical = envelope.canonicalDocument,
+            )
+            ValidatedCurrentStoredEnvelope(envelope.payload, envelope.canonicalPayload)
         }
-        validateEnvelope(envelope.schemaVersion, envelope.sdkVersion)
-        validateCheckpointIdentity(envelope.payload)
-        validateCanonicalEnvelope(
-            encoded = encoded,
-            canonical = json.encodeToJsonElement(StoredCheckpointEnvelope.serializer(), envelope),
-        )
-        return envelope.payload
     }
 }
 
-private inline fun <T> decodeCanonical(block: () -> T): T = try {
-    block()
-} catch (failure: SerializationException) {
-    throw failure
-} catch (failure: IllegalArgumentException) {
-    throw SerializationException("Stored payload violates the current schema", failure)
+/** The storage wire format is SDK-owned; caller JSON settings must not create same-version variants. */
+private fun fixedStorageJson(
+    @Suppress("UNUSED_PARAMETER") source: Json,
+): Json = Json {
+    encodeDefaults = true
+    explicitNulls = true
+    ignoreUnknownKeys = false
+    isLenient = false
+    coerceInputValues = false
+    classDiscriminator = "type"
 }
 
 private fun validateEnvelope(schemaVersion: Int, sdkVersion: String) {

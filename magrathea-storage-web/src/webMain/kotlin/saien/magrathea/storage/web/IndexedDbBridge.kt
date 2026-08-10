@@ -13,6 +13,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 internal data class WebRawRecord(
@@ -25,10 +26,28 @@ internal data class WebRawPersistenceRecord(
     val checkpoint: WebRawRecord?,
 )
 
+@Serializable
+internal data class WebPayloadRewriteExpectation(
+    val store: String,
+    val key: String,
+    val expectedPayload: String?,
+    val rewritePayload: String?,
+) {
+    init {
+        require(store == WEB_SESSION_STORE || store == WEB_CHECKPOINT_STORE) {
+            "Unknown web persistence store"
+        }
+    }
+}
+
+internal const val WEB_SESSION_STORE = "sessions"
+internal const val WEB_CHECKPOINT_STORE = "checkpoints"
+
 internal interface WebRecordDatabase {
     suspend fun commit(key: String, sessionPayload: String, checkpointPayload: String?)
     suspend fun get(key: String): WebRawPersistenceRecord?
     suspend fun getAllSessions(): List<WebRawRecord>
+    suspend fun rewriteIfUnchanged(expectations: List<WebPayloadRewriteExpectation>): Boolean
     suspend fun delete(key: String)
     suspend fun clear()
 }
@@ -70,6 +89,21 @@ internal class IndexedDbRecordDatabase(
         val payload = execute(operation = "get_all_sessions", key = "", value = "")
             ?: throw WebStorageException(WebStorageFailure.OPERATION_FAILED)
         return decodeBridgePayload<List<BridgeRecord>>(payload).map { WebRawRecord(it.key, it.value) }
+    }
+
+    override suspend fun rewriteIfUnchanged(
+        expectations: List<WebPayloadRewriteExpectation>,
+    ): Boolean {
+        if (expectations.isEmpty()) return true
+        require(expectations.map { it.store to it.key }.distinct().size == expectations.size) {
+            "Web rewrite expectations must identify unique records"
+        }
+        val payload = execute(
+            operation = "rewrite_if_unchanged",
+            key = "",
+            value = json.encodeToString(expectations),
+        ) ?: throw WebStorageException(WebStorageFailure.OPERATION_FAILED)
+        return decodeBridgePayload(payload)
     }
 
     override suspend fun delete(key: String) {
@@ -285,6 +319,58 @@ private fun runIndexedDbOperation(
                 resultPayload = JSON.stringify(records);
               }
             };
+          } else if (operation === "rewrite_if_unchanged") {
+            const expectations = JSON.parse(value);
+            if (!Array.isArray(expectations) || expectations.length === 0) {
+              throw new Error("Invalid rewrite expectations");
+            }
+            const identities = new Set();
+            for (const item of expectations) {
+              if (
+                !item ||
+                (item.store !== "sessions" && item.store !== "checkpoints") ||
+                typeof item.key !== "string" ||
+                (item.expectedPayload !== null && typeof item.expectedPayload !== "string") ||
+                (item.rewritePayload !== null && typeof item.rewritePayload !== "string")
+              ) {
+                throw new Error("Invalid rewrite expectation");
+              }
+              const identity = JSON.stringify([item.store, item.key]);
+              if (identities.has(identity)) throw new Error("Duplicate rewrite expectation");
+              identities.add(identity);
+            }
+            transaction = database.transaction(
+              ["sessions", "checkpoints"],
+              "readwrite",
+              { durability: "strict" }
+            );
+            let remaining = expectations.length;
+            let unchanged = true;
+            for (const item of expectations) {
+              const request = transaction.objectStore(item.store).get(item.key);
+              request.onsuccess = () => {
+                const found = request.result !== undefined;
+                if (
+                  (item.expectedPayload === null && found) ||
+                  (item.expectedPayload !== null &&
+                    (!found || request.result !== item.expectedPayload))
+                ) {
+                  unchanged = false;
+                }
+                remaining -= 1;
+                if (remaining === 0) {
+                  if (unchanged) {
+                    for (const rewrite of expectations) {
+                      if (rewrite.rewritePayload !== null) {
+                        transaction.objectStore(rewrite.store)
+                          .put(rewrite.rewritePayload, rewrite.key);
+                      }
+                    }
+                  }
+                  resultPayload = JSON.stringify(unchanged);
+                }
+              };
+            }
           } else {
             database.close();
             finish(false, "operation_failed", null);

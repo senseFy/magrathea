@@ -14,17 +14,17 @@ The group and version come from `gradle.properties`:
 
 ```text
 group: saien.magrathea
-version: 0.1.0-alpha.2
+version: 0.1.0-alpha.3
 artifact: logical module name
 ```
 
 Examples:
 
 ```text
-saien.magrathea:magrathea-core:0.1.0-alpha.2
-saien.magrathea:magrathea-runtime:0.1.0-alpha.2
-saien.magrathea:magrathea-chatbot:0.1.0-alpha.2
-saien.magrathea:magrathea-provider-openai:0.1.0-alpha.2
+saien.magrathea:magrathea-core:0.1.0-alpha.3
+saien.magrathea:magrathea-runtime:0.1.0-alpha.3
+saien.magrathea:magrathea-chatbot:0.1.0-alpha.3
+saien.magrathea:magrathea-provider-openai:0.1.0-alpha.3
 ```
 
 Kotlin Multiplatform generates target variants from the 16 logical modules. Consumers declare the
@@ -67,9 +67,9 @@ repositories {
 }
 
 dependencies {
-    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.2")
-    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.2")
-    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.2")
+    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.3")
+    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.3")
+    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.3")
 }
 ```
 

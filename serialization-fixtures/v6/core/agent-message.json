@@ -1,0 +1,30 @@
+{
+  "id": "message-fixture-1",
+  "role": "ASSISTANT",
+  "parts": [
+    {
+      "type": "reasoning",
+      "text": "check sources",
+      "signature": "reason-sig"
+    },
+    {
+      "type": "text",
+      "text": "I will search.",
+      "phase": "FINAL"
+    },
+    {
+      "type": "tool_call",
+      "toolCallId": "call-1",
+      "toolName": "search",
+      "arguments": {"query": "kmp"},
+      "thoughtSignature": "thought-sig",
+      "providerCallId": "provider-call-1"
+    }
+  ],
+  "createdAtEpochMs": 1700000000000,
+  "metadata": {
+    "provider": "gemini",
+    "model": "gemini-contract"
+  },
+  "stopReason": "TOOL_CALLS"
+}

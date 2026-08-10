@@ -7,11 +7,17 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.CredentialRef
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ProviderCredential
+import saien.magrathea.core.ReasoningCapabilities
+import saien.magrathea.core.ReasoningEffort
+import saien.magrathea.core.ReasoningPreference
 import saien.magrathea.core.TextPart
 import saien.magrathea.provider.api.AnthropicAuthentication
 import saien.magrathea.provider.api.AnthropicTransportConfig
@@ -24,6 +30,172 @@ import saien.magrathea.provider.api.ProviderRequest
 import saien.magrathea.provider.api.ProviderStreamInterruptedException
 
 class AnthropicProviderTransportContractTest {
+    @Test
+    fun modelEffortCapabilityUsesAdaptiveThinking() = runTest {
+        val transport = ScriptedAnthropicTransport(
+            executeResponses = listOf(HttpResponseSpec(200, body = ANTHROPIC_TEXT_RESPONSE)),
+        )
+        val model = ModelDescriptor(
+            provider = "anthropic",
+            model = "claude-reasoning-contract",
+            reasoningCapabilities = ReasoningCapabilities(
+                supportedEfforts = setOf(ReasoningEffort.HIGH),
+            ),
+        )
+
+        AnthropicProviderAdapter(transport = transport).generate(
+            request(false, "secret").copy(
+                model = model,
+                reasoningPreference = ReasoningPreference.Effort(ReasoningEffort.HIGH),
+            ),
+        ).toList()
+
+        val payload = Json.parseToJsonElement(
+            transport.requests.single().first.body.orEmpty(),
+        ).jsonObject
+        assertEquals(
+            "adaptive",
+            payload.getValue("thinking").jsonObject.getValue("type").jsonPrimitive.content,
+        )
+        assertEquals(
+            "high",
+            payload.getValue("output_config").jsonObject.getValue("effort").jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun disabledReasoningRejectsNativeThinkingOptionsBeforeTransport() = runTest {
+        val model = ModelDescriptor(
+            provider = "anthropic",
+            model = "claude-reasoning-contract",
+            reasoningCapabilities = ReasoningCapabilities(supportsDisabled = true),
+        )
+        val transport = ScriptedAnthropicTransport()
+
+        assertFailsWith<IllegalArgumentException> {
+            AnthropicProviderAdapter(transport = transport).generate(
+                request(false, "secret").copy(
+                    model = model,
+                    reasoningPreference = ReasoningPreference.Disabled,
+                    typedConfig = AnthropicTransportConfig(thinkingMode = "adaptive"),
+                ),
+            ).toList()
+        }
+        assertTrue(transport.requests.isEmpty())
+    }
+
+    @Test
+    fun disabledReasoningUsesAnExplicitDisabledThinkingMode() = runTest {
+        val transport = ScriptedAnthropicTransport(
+            executeResponses = listOf(HttpResponseSpec(200, body = ANTHROPIC_TEXT_RESPONSE)),
+        )
+        val model = ModelDescriptor(
+            provider = "anthropic",
+            model = "claude-reasoning-contract",
+            reasoningCapabilities = ReasoningCapabilities(supportsDisabled = true),
+        )
+
+        AnthropicProviderAdapter(transport = transport).generate(
+            request(false, "secret").copy(
+                model = model,
+                reasoningPreference = ReasoningPreference.Disabled,
+            ),
+        ).toList()
+
+        val payload = Json.parseToJsonElement(
+            transport.requests.single().first.body.orEmpty(),
+        ).jsonObject
+        assertEquals(
+            "disabled",
+            payload.getValue("thinking").jsonObject.getValue("type").jsonPrimitive.content,
+        )
+        assertFalse("output_config" in payload)
+    }
+
+    @Test
+    fun neutralEffortRejectsNativeThinkingControlsBeforeTransport() = runTest {
+        val model = ModelDescriptor(
+            provider = "anthropic",
+            model = "claude-reasoning-contract",
+            reasoningCapabilities = ReasoningCapabilities(
+                supportedEfforts = setOf(ReasoningEffort.MEDIUM),
+            ),
+        )
+        listOf(
+            AnthropicTransportConfig(effort = "medium"),
+            AnthropicTransportConfig(thinkingMode = "adaptive"),
+            AnthropicTransportConfig(thinkingBudgetTokens = 2_048),
+        ).forEach { config ->
+            val transport = ScriptedAnthropicTransport()
+            assertFailsWith<IllegalArgumentException> {
+                AnthropicProviderAdapter(transport = transport).generate(
+                    request(false, "secret").copy(
+                        model = model,
+                        reasoningPreference =
+                            ReasoningPreference.Effort(ReasoningEffort.MEDIUM),
+                        typedConfig = config,
+                    ),
+                ).toList()
+            }
+            assertTrue(transport.requests.isEmpty())
+        }
+    }
+
+    @Test
+    fun xhighEffortUsesTheExactAnthropicWireValue() = runTest {
+        val transport = ScriptedAnthropicTransport(
+            executeResponses = listOf(HttpResponseSpec(200, body = ANTHROPIC_TEXT_RESPONSE)),
+        )
+        val model = ModelDescriptor(
+            provider = "anthropic",
+            model = "claude-reasoning-contract",
+            reasoningCapabilities = ReasoningCapabilities(
+                supportedEfforts = setOf(ReasoningEffort.XHIGH),
+            ),
+        )
+
+        AnthropicProviderAdapter(transport = transport).generate(
+            request(false, "secret").copy(
+                model = model,
+                reasoningPreference = ReasoningPreference.Effort(ReasoningEffort.XHIGH),
+            ),
+        ).toList()
+
+        val payload = Json.parseToJsonElement(
+            transport.requests.single().first.body.orEmpty(),
+        ).jsonObject
+        assertEquals(
+            "adaptive",
+            payload.getValue("thinking").jsonObject.getValue("type").jsonPrimitive.content,
+        )
+        assertEquals(
+            "xhigh",
+            payload.getValue("output_config").jsonObject.getValue("effort").jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun minimalEffortFailsBeforeTransport() = runTest {
+        val transport = ScriptedAnthropicTransport()
+        val model = ModelDescriptor(
+            provider = "anthropic",
+            model = "claude-reasoning-contract",
+            reasoningCapabilities = ReasoningCapabilities(
+                supportedEfforts = setOf(ReasoningEffort.MINIMAL),
+            ),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            AnthropicProviderAdapter(transport = transport).generate(
+                request(false, "secret").copy(
+                    model = model,
+                    reasoningPreference = ReasoningPreference.Effort(ReasoningEffort.MINIMAL),
+                ),
+            ).toList()
+        }
+        assertTrue(transport.requests.isEmpty())
+    }
+
     @Test
     fun adapterUsesNamedSseAndKeepsCredentialOutOfBodyAndDiagnostics() = runTest {
         val secret = "anthropic-secret-canary"

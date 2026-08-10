@@ -43,6 +43,9 @@ import saien.magrathea.core.MessageBlockPhase
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ProviderConfig
+import saien.magrathea.core.ReasoningCapabilities
+import saien.magrathea.core.ReasoningEffort
+import saien.magrathea.core.ReasoningPreference
 import saien.magrathea.core.ReasoningPart
 import saien.magrathea.core.ReasoningContentKind
 import saien.magrathea.core.StopReason
@@ -202,10 +205,13 @@ class ChatbotFacadeContractTest {
                 provider = "openai",
                 model = "openai-reasoning",
                 displayName = "OpenAI Reasoning",
-                supportsReasoning = true,
+                reasoningCapabilities = ReasoningCapabilities(
+                    supportedEfforts = setOf(ReasoningEffort.HIGH),
+                ),
                 supportsStreaming = true,
             ),
             credentialRef = CredentialRef(provider = "openai", profile = "openrouter"),
+            reasoningPreference = ReasoningPreference.Effort(ReasoningEffort.HIGH),
         )
         val client = testClient(
             runner = runner,
@@ -263,6 +269,7 @@ class ChatbotFacadeContractTest {
         advanceUntilIdle()
         assertEquals(updated.model, runner.requests.last().model)
         assertEquals(updated.credentialRef, runner.requests.last().engine.provider.credentialRef)
+        assertEquals(updated.reasoningPreference, runner.requests.last().reasoningPreference)
 
         session.close()
         val resumed = client.resumeSession(sessionId.value)

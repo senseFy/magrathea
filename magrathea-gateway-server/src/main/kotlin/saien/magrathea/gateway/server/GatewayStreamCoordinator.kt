@@ -29,6 +29,7 @@ import saien.magrathea.core.SystemEpochClock
 import saien.magrathea.core.ToolImageAttachmentReference
 import saien.magrathea.core.ToolResultImageContent
 import saien.magrathea.core.ToolResultPart
+import saien.magrathea.core.requireSupports
 import saien.magrathea.gateway.protocol.GATEWAY_ATTACHMENT_URI_PREFIX
 import saien.magrathea.gateway.protocol.GatewayEvent
 import saien.magrathea.gateway.protocol.GatewayFailureCode
@@ -180,6 +181,7 @@ class GatewayStreamCoordinator(
             ) {
                 throw GatewayAuthorizationException()
             }
+            resolvedModel.requireSupports(request.reasoningPreference)
             val provider = providerRegistry.get(resolvedModel.provider)
                 ?: throw GatewayAuthorizationException()
             val credential = credentialResolver.resolve(principal, resolvedModel)
@@ -209,6 +211,7 @@ class GatewayStreamCoordinator(
                             turn = request.turn,
                         ),
                         model = resolvedModel,
+                        reasoningPreference = request.reasoningPreference,
                         messages = messages,
                         tools = request.tools,
                         credential = credential,

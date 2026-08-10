@@ -23,6 +23,7 @@ import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ProviderConfig
 import saien.magrathea.core.ProviderCredential
+import saien.magrathea.core.ReasoningCapabilities
 import saien.magrathea.core.RuntimeConfig
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolDefinition
@@ -276,7 +277,7 @@ private fun scenarioRequest(
         model = ModelDescriptor(
             provider = providerKey,
             model = config.model,
-            supportsReasoning = config.scenario == "x-search",
+            reasoningCapabilities = ReasoningCapabilities().takeIf { config.scenario == "x-search" },
             supportsStreaming = config.streaming,
         ),
         tools = tools,

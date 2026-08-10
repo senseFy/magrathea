@@ -15,6 +15,7 @@ substitute for the public API or the tests themselves.
 | C-006 | A custom Provider needs only the public `ProviderAdapter` boundary | Isolated JVM sample and consumer |
 | C-007 | Each adapter's declared attachment MIME capability is an encodable wire upper bound; unsupported or mismatched MIME/data-URL input fails closed without exposing payload data | Provider capability and request-codec contracts |
 | C-008 | Visible reasoning is classified as Provider-defined, summary, or explicitly exposed text and follows independent start/delta/end block lifecycles; signatures, encrypted content, and redacted state remain opaque and never enter product-visible text | Provider codec, canonical assembler, Chatbot projection, and serialization contracts |
+| C-009 | Provider-neutral reasoning is validated against trusted model capabilities, `Auto` omits control, explicit choices map at the adapter boundary, and conflicting native controls fail before transport | Core capability, Chatbot, Gateway, and reference-adapter request contracts |
 
 ## Runtime and tools
 
@@ -47,7 +48,7 @@ substitute for the public API or the tests themselves.
 | ID | Invariant | Nearest verification boundary |
 |---|---|---|
 | S-001 | Chatbot snapshots are reduced from Agent events and terminal state matches the persisted session | Chatbot contracts |
-| S-002 | Session and checkpoint codecs accept only the committed strict schema-v5 envelope, including run identity, exact resume cursor, interruption metadata, context state, Tool journal, typed Tool content, and Tool origin | Serialization fixtures |
+| S-002 | Session and checkpoint codecs accept only the committed strict schema-v6 envelope, including run identity, exact resume cursor, interruption metadata, context state, Tool journal, typed Tool content, Tool origin, and reasoning preference | Serialization fixtures |
 | S-003 | A corrupt Room row is isolated and produces a content-free report | Room JVM, Android, and iOS contracts |
 | S-004 | Store handles and facade close operations are idempotent; closed resources reject further use | Ownership contracts |
 | S-005 | Android credentials use Keystore AES-GCM and no-backup ciphertext | Android host and device fixture |
@@ -55,13 +56,14 @@ substitute for the public API or the tests themselves.
 | S-007 | JVM credentials are explicitly supplied by the host | JVM facade and sample |
 | S-008 | IndexedDB stores strict envelopes and no Gateway or vendor credential | JS/Wasm browser contracts |
 | S-009 | Session Provider profile/model selection drives requests, history, persistence, switching, and resume; profile Provider identity must match the model, and active generation rejects switching without cancellation | Chatbot facade and browser contracts |
+| S-010 | Envelope schema is classified before current-payload decoding; schema 6 is the migration baseline, every later revision requires a contiguous adjacent migration, and incompatible records are surfaced without filtering or rewriting their stored bytes | Core migration registry, Room integration, and browser storage contracts |
 
 ## Gateway and Web
 
 | ID | Invariant | Nearest verification boundary |
 |---|---|---|
 | W-001 | Browser requests cannot carry vendor credentials, upstream endpoints, or arbitrary Provider headers | Gateway Provider negative contracts |
-| W-002 | Gateway `exact-v2` validates version, owner, tenant, request, session, stream, idempotency identity, and model-directed Tool attachment references | Protocol and server contracts |
+| W-002 | Gateway `exact-v3` validates version, owner, tenant, request, session, stream, idempotency identity, model-directed Tool attachment references, and reasoning intent | Protocol and server contracts |
 | W-003 | SSE sequence is continuous, replay is bounded, disconnect and Runtime resume reattach by stable invocation identity, and terminal streams are immutable | Server, Provider, and browser E2E |
 | W-004 | Client cancellation performs best-effort remote cancellation while preserving local cancellation | Real-HTTP JS/Wasm sample |
 | W-005 | Attachments use pre-uploaded, re-authorized references | Gateway attachment contracts |

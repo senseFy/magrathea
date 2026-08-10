@@ -188,6 +188,42 @@ with adapter capabilities; missing model metadata means unknown rather than text
 The same rule applies to streaming, Tool use, and reasoning: configure `ModelDescriptor` from
 trusted model metadata instead of inferring capability from a Provider name.
 
+## Reasoning preferences
+
+`ReasoningPreference` is a Provider-neutral request intent:
+
+- `Auto` omits the neutral control and preserves the Provider or model default;
+- `Disabled` requires explicit model support and a real Provider off value;
+- `Effort` carries one of `MINIMAL`, `LOW`, `MEDIUM`, `HIGH`, `XHIGH`, or `MAX`.
+
+`ModelDescriptor.reasoningCapabilities` declares canonical supported efforts and whether explicit
+disable is available. It contains no Provider wire values. A missing capability means that only
+`Auto` is valid.
+
+Reference adapters resolve the neutral intent at their wire boundary. OpenAI and xAI use
+`reasoning.effort` for Responses and `reasoning_effort` for Chat Completions. OpenRouter Chat
+Completions uses `reasoning: { effort }`. Gemini Interactions uses `thinking_level`. Anthropic uses
+adaptive thinking with `output_config.effort`; explicit disable uses disabled thinking only on
+models that declare it.
+
+Provider capability metadata remains model-specific. Anthropic
+[`xhigh`](https://platform.claude.com/docs/en/build-with-claude/effort) is available only on the
+models that declare it, while Anthropic does not expose a portable `minimal` effort. Current
+[xAI reasoning models](https://docs.x.ai/developers/model-capabilities/text/reasoning) do not
+support explicit disable, so the built-in xAI profile rejects `Disabled` before transport.
+
+Explicit unsupported choices fail before transport. A neutral choice also fails when combined
+with a Provider-native option for the same control dimension. `Auto` leaves typed Provider options
+untouched, so Provider-specific budgets, summaries, and other native controls remain available.
+For a compatible Chat Completions endpoint, set
+`OpenAiProviderProfile.chatCompletionsReasoningFormat` before using neutral reasoning controls. If
+the endpoint supports explicit effort, declare every supported semantic level's exact wire value
+with `OpenAiProviderProfile.reasoningEffortMapping`. Compatible mappings live at the Provider
+boundary; Runtime never guesses from a model id and never silently falls back. If the endpoint
+supports disabling reasoning, also declare its exact
+`OpenAiProviderProfile.disabledReasoningValue`; the adapter does not guess a compatible dialect's
+off value.
+
 ## Verification
 
 Deterministic protocol tests are part of the normal SDK gates. Controlled remote checks live in the

@@ -143,6 +143,15 @@ required_apple_tasks = %w[
 fail_contract("verify.yml does not run Linux and Web gates") unless
   run_commands(verify).include?("verifySdkLinux") &&
     run_commands(verify).include?("verifySdkWeb")
+linux_checkout = verify.fetch("jobs", {}).fetch("linux-gate", {}).fetch("steps", []).find do |step|
+  step["uses"]&.start_with?("actions/checkout@")
+end
+fail_contract("linux gate must fetch full history for append-only schema comparison") unless
+  linux_checkout&.dig("with", "fetch-depth") == 0
+fail_contract("verify.yml must compare the persistence schema ledger with its base commit") unless
+  run_commands(verify).include?("verify_persistence_schemas.py") &&
+    run_commands(verify).include?("--baseline") &&
+    run_commands(verify).include?("persistence/schema-ledger.json")
 fail_contract("verify.yml must retain Web failure diagnostics") unless
   retains_failure_diagnostics?(verify)
 fail_contract("verify.yml does not run the complete Apple gate matrix") unless

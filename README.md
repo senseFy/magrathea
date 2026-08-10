@@ -9,8 +9,8 @@ It provides the agent loop, Provider contracts, tools, persistence, and lifecycl
 bring their own UI and choose only the integrations they need.
 
 > [!NOTE]
-> `0.1.0-alpha.2` is the current Alpha source version. Its APIs and persisted formats may evolve before the
-> stable line.
+> `0.1.0-alpha.3` is the latest published Alpha. `main` may contain unreleased changes; APIs and
+> persisted formats may evolve before the stable line.
 
 ## Modules
 
@@ -34,6 +34,8 @@ and consumers declare the logical module coordinates they need.
 - Token-aware semantic context compaction while preserving authoritative full history.
 - Gemini Interactions, OpenAI Responses/Chat Completions, and Anthropic Messages reference
   adapters, plus a public custom Provider SPI.
+- Provider-neutral reasoning preferences validated against model-declared capabilities and mapped
+  to exact Provider controls only at the adapter boundary.
 - Provider-neutral chatbot sessions with per-session Provider/model selection and attachments.
 - Optional MCP, portable Web/Image Search, and cross-model X Search tools.
 - Room and IndexedDB persistence, protected mobile credentials, and a browser-safe Backend Gateway.
@@ -56,15 +58,15 @@ the modules your application needs:
 
 ```kotlin
 dependencies {
-    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.2")
-    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.2")
-    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.2")
+    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.3")
+    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.3")
+    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.3")
 }
 ```
 
 See the [Provider-neutral composition guide](docs/architecture.md#provider-neutral-runtime-and-chatbot-facade)
 and the [samples](samples). Release artifacts and supply-chain evidence:
-[`v0.1.0-alpha.2`](https://github.com/senseFy/magrathea/releases/tag/v0.1.0-alpha.2).
+[`v0.1.0-alpha.3`](https://github.com/senseFy/magrathea/releases/tag/v0.1.0-alpha.3).
 
 ## Platforms
 

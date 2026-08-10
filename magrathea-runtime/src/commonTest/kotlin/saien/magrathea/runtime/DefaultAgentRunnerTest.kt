@@ -27,6 +27,9 @@ import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ProviderConfig
 import saien.magrathea.core.ProviderCredential
+import saien.magrathea.core.ReasoningCapabilities
+import saien.magrathea.core.ReasoningEffort
+import saien.magrathea.core.ReasoningPreference
 import saien.magrathea.core.ReasoningPart
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
@@ -261,6 +264,35 @@ class DefaultAgentRunnerTest {
         ).toList()
 
         assertEquals(options, provider.request?.typedConfig)
+    }
+
+    @Test
+    fun reasoningPreferenceReachesTheProviderBoundary() = runTest {
+        val provider = RecordingProvider()
+        val runner = DefaultAgentRunner(
+            providerRegistry = InMemoryProviderRegistry(listOf(provider)),
+            toolRegistry = InMemoryToolRegistry(),
+            persistence = InMemoryAgentPersistence(),
+        )
+        val preference = ReasoningPreference.Effort(ReasoningEffort.XHIGH)
+
+        runner.run(
+            AgentRequest(
+                messages = listOf(
+                    AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("hello"))),
+                ),
+                model = ModelDescriptor(
+                    provider = provider.key,
+                    model = "reasoning-model",
+                    reasoningCapabilities = ReasoningCapabilities(
+                        supportedEfforts = setOf(ReasoningEffort.XHIGH),
+                    ),
+                ),
+                reasoningPreference = preference,
+            ),
+        ).toList()
+
+        assertEquals(preference, provider.requests.single().reasoningPreference)
     }
 
     @Test

@@ -10,16 +10,18 @@ Magrathea is Alpha. Its APIs and persisted formats may change before the stable 
 - The direct KMP facade supports text, attachments, metadata, and regenerate. The JavaScript/
   TypeScript convenience wrapper currently exposes text send only; attachment upload UX and host
   tool registration remain composition-level work.
-- The minified browser entry point is 1,394,588 bytes and exceeds Webpack's default performance
-  recommendation. The package gate enforces a 1,420,000-byte ceiling; browser hosts should load the
-  client on demand, and the budget should be reduced before a production release.
+- The minified browser entry point is 1,423,386 bytes and exceeds Webpack's default performance
+  recommendation. Provider-neutral reasoning controls increased the public Web facade in
+  `0.1.0-alpha.3`; the package gate now enforces a bounded 1,450,000-byte ceiling (26,614 bytes of
+  headroom). Browser hosts should load the client on demand, and the budget should be reduced before
+  a production release.
 - Thirteen mobile KMP modules publish Android, JVM, `iosArm64`, and `iosSimulatorArm64`; eight also
   publish JS/Wasm, and two additional modules are Web-only. Wasm is experimental. macOS Native,
   watchOS, and tvOS are not published targets.
 - Desktop means the JVM artifact, not a Kotlin/Native desktop target or an official UI/application
   shell. Recorded evidence includes a macOS-hosted JVM run and a defined Ubuntu CI gate, but no
   Windows host gate; Linux/Windows remain JVM-compatible rather than equally validated environments.
-- Backend Gateway v2 is defined and build-locally verified, but no Gateway has been deployed or
+- Backend Gateway v3 is defined and build-locally verified, but no Gateway has been deployed or
   subjected to a production penetration/operations review.
 - Portable Web Search requires a host-provided `WebSearchBackend`; Magrathea does not ship a search
   account or default vendor. OpenAI, Gemini, and Anthropic hosted search/grounding formats are not
