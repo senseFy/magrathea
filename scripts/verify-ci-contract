@@ -42,7 +42,7 @@ def all_steps(document)
 end
 
 def action_uses(document)
-  all_steps(document).filter_map { |step| step["uses"] }
+  all_steps(document).map { |step| step["uses"] }.compact
 end
 
 def retains_failure_diagnostics?(document)
@@ -59,15 +59,15 @@ def retains_failure_diagnostics?(document)
 end
 
 def run_commands(document)
-  all_steps(document).filter_map { |step| step["run"] }.join("\n")
+  all_steps(document).map { |step| step["run"] }.compact.join("\n")
 end
 
 def matrix_tasks(document, job_name)
-  document
+  entries = document
     .fetch("jobs", {})
     .fetch(job_name, {})
     .dig("strategy", "matrix", "include")
-    &.filter_map { |entry| entry["gradle_task"] } || []
+  Array(entries).map { |entry| entry["gradle_task"] }.compact
 end
 
 def pinned_action(action)

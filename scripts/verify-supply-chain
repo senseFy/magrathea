@@ -4,6 +4,7 @@
 require "digest"
 require "fileutils"
 require "json"
+require_relative "verify_normalized_sbom"
 
 root = File.expand_path(ARGV.fetch(0))
 version = ARGV.fetch(1)
@@ -17,6 +18,8 @@ def require_file(path)
   fail_contract("missing #{path}") unless File.file?(path)
   path
 end
+
+allowed_licenses = %w[Apache-2.0 MIT].freeze
 
 published_modules = %w[
   magrathea-core
@@ -39,11 +42,11 @@ published_modules = %w[
 
 wrapper_properties_path = require_file(File.join(root, "gradle", "wrapper", "gradle-wrapper.properties"))
 wrapper_jar_path = require_file(File.join(root, "gradle", "wrapper", "gradle-wrapper.jar"))
-wrapper_properties = File.readlines(wrapper_properties_path, chomp: true).filter_map do |line|
+wrapper_properties = File.readlines(wrapper_properties_path, chomp: true).map do |line|
   next if line.empty? || line.start_with?("#")
 
   line.split("=", 2) if line.include?("=")
-end.to_h
+end.compact.to_h
 expected_distribution = "https\\://services.gradle.org/distributions/gradle-9.3.1-bin.zip"
 expected_distribution_sha = "b266d5ff6b90eada6dc3b20cb090e3731302e553a27c5d3e4df1f0d76beaff06"
 expected_wrapper_jar_sha = "b3a875ddc1f044746e1b1a55f645584505f4a10438c1afea9f15e92a7c42ec13"
@@ -76,6 +79,58 @@ fail_contract("SBOM root name mismatch") unless metadata_component["name"] == "m
 fail_contract("SBOM root version mismatch") unless metadata_component["version"] == version
 
 components = sbom.fetch("components")
+web_ledger_path = require_file(File.join(root, "third-party", "web-runtime-licenses.json"))
+web_ledger = JSON.parse(File.read(web_ledger_path))
+fail_contract("unsupported Web runtime license ledger format") unless web_ledger["formatVersion"] == 1
+web_license_definitions = web_ledger.fetch("licenses") do
+  fail_contract("Web runtime license ledger has no licenses")
+end
+web_npm_components = web_ledger.fetch("npmComponents") do
+  fail_contract("Web runtime license ledger has no npm components")
+end
+fail_contract("Web runtime license ledger has no npm components") if web_npm_components.empty?
+
+reviewed_web_names = {}
+web_sbom_components = web_npm_components.map do |component|
+  name = component["name"].to_s
+  version_value = component["version"].to_s
+  role = component["role"].to_s
+  repository = component["repository"].to_s
+  license_id = component["license"].to_s
+  fail_contract("invalid Web npm component name: #{name}") unless
+    name.match?(/\A(?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+\z/)
+  fail_contract("duplicate Web npm component: #{name}") if reviewed_web_names.key?(name)
+  fail_contract("unversioned Web npm component: #{name}") if version_value.empty?
+  fail_contract("dynamic/SNAPSHOT Web npm component: #{name}:#{version_value}") if
+    version_value.match?(/SNAPSHOT|latest|\+/i)
+  fail_contract("invalid Web npm component role: #{name}:#{role}") unless
+    %w[runtimeDependency bundleGenerator].include?(role)
+  fail_contract("unsafe Web npm repository URL: #{name}") unless repository.start_with?("https://")
+  license_details = web_license_definitions[license_id]
+  fail_contract("unknown Web npm license: #{name}:#{license_id}") unless license_details.is_a?(Hash)
+  spdx = license_details["spdx"].to_s
+  fail_contract("license not allowed: npm:#{name}:#{spdx}") unless allowed_licenses.include?(spdx)
+
+  reviewed_web_names[name] = true
+  encoded_name = name.start_with?("@") ? "%40#{name.delete_prefix('@')}" : name
+  purl = "pkg:npm/#{encoded_name}@#{version_value}"
+  {
+    "type" => "library",
+    "name" => name,
+    "version" => version_value,
+    "bom-ref" => purl,
+    "purl" => purl,
+    "scope" => "required",
+    "licenses" => [{ "license" => { "id" => spdx } }],
+    "externalReferences" => [{ "type" => "vcs", "url" => repository }],
+    "properties" => [{ "name" => "magrathea:webBundleRole", "value" => role }],
+  }
+end
+web_sbom_components.sort_by! { |component| [component.fetch("name"), component.fetch("version")] }
+web_refs = web_sbom_components.map { |component| component.fetch("bom-ref") }
+colliding_web_ref = components.find { |component| web_refs.include?(component["bom-ref"]) }
+fail_contract("Web npm component already exists in generated SBOM: #{colliding_web_ref['bom-ref']}") if colliding_web_ref
+components.concat(web_sbom_components)
 fail_contract("production SBOM is unexpectedly small") if components.length < 50
 internal = components.select { |component| component["group"] == "saien.magrathea" }
 actual_modules = internal.map { |component| component.fetch("name") }.uniq.sort
@@ -94,16 +149,15 @@ end
 test_component = components.find(&test_only)
 fail_contract("test-only component entered production SBOM: #{test_component['group']}:#{test_component['name']}") if test_component
 
-allowed_licenses = %w[Apache-2.0 MIT].freeze
 components.each do |component|
   version_value = component["version"].to_s
   fail_contract("dynamic/SNAPSHOT component in SBOM: #{component['name']}:#{version_value}") if
     version_value.match?(/SNAPSHOT|latest|\+/i)
   next if component["group"] == "saien.magrathea"
 
-  licenses = Array(component["licenses"]).filter_map do |entry|
+  licenses = Array(component["licenses"]).map do |entry|
     entry.dig("license", "id") || entry.dig("license", "name") || entry["expression"]
-  end
+  end.compact
   fail_contract("unknown license: #{component['group']}:#{component['name']}:#{version_value}") if licenses.empty?
   usable = licenses.any? do |license|
     allowed_licenses.any? { |allowed| license == allowed || license.split(/\s+OR\s+/).include?(allowed) }
@@ -119,8 +173,18 @@ dependencies = sbom["dependencies"] ||= []
 dependencies.reject! { |dependency| dependency["ref"] == root_ref }
 dependencies << {
   "ref" => root_ref,
-  "dependsOn" => internal.map { |component| component.fetch("bom-ref") }.uniq.sort,
+  "dependsOn" => (internal.map { |component| component.fetch("bom-ref") } + web_refs).uniq.sort,
 }
+web_refs.each do |web_ref|
+  dependencies << { "ref" => web_ref, "dependsOn" => [] } unless
+    dependencies.any? { |dependency| dependency["ref"] == web_ref }
+end
+
+begin
+  MagratheaNormalizedSbom.verify!(sbom, web_ledger)
+rescue MagratheaNormalizedSbom::VerificationError => error
+  fail_contract(error.message)
+end
 
 reports = File.join(root, "build", "reports", "supply-chain")
 FileUtils.mkdir_p(reports)
@@ -128,10 +192,10 @@ normalized_sbom_path = File.join(reports, "magrathea-sbom.cdx.json")
 File.write(normalized_sbom_path, JSON.pretty_generate(sbom) + "\n")
 
 license_rows = components.map do |component|
-  licenses = Array(component["licenses"]).filter_map do |entry|
+  licenses = Array(component["licenses"]).map do |entry|
     entry.dig("license", "id") || entry.dig("license", "name") || entry["expression"]
-  end
-  [component["group"], component["name"], component["version"], licenses.sort.join(" OR ")]
+  end.compact
+  [component["group"].to_s, component["name"].to_s, component["version"].to_s, licenses.sort.join(" OR ")]
 end.uniq.sort
 license_report_path = File.join(reports, "third-party-licenses.tsv")
 File.open(license_report_path, "w") do |file|

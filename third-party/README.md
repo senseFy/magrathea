@@ -1,0 +1,7 @@
+# Third-party license evidence
+
+`web-runtime-licenses.json` is the reviewed allowlist for external components bundled into the standalone Web SDK. Its Maven coordinates must exactly match Gradle's resolved `jsRuntimeClasspath`. Its npm runtime dependencies must exactly match the Kotlin/JS-generated `package.json`, and the recorded Webpack version must match the bundle generator. The reviewed npm/generated-runtime entries are also merged into the aggregate CycloneDX SBOM and license report. Adding, removing, or upgrading a component therefore requires an explicit license review and ledger update.
+
+The Web package task checks installed npm package names, versions, SPDX metadata, and original `LICENSE` bytes against the vendored copies. It verifies the SHA-256 digest of every vendored license, generates `THIRD_PARTY_NOTICES.txt`, and copies both the notice inventory and full license texts into the archive. Any upstream `NOTICE` files found inside resolved Gradle runtime artifacts are preserved automatically. Source-map provenance must identify exactly the reviewed npm/generated runtime (`ws` and Webpack today); unknown bundled npm code and local absolute paths are rejected.
+
+Gradle dependency license conclusions in the ledger were checked against the corresponding published Maven POM metadata. npm conclusions are bound to the pinned installed package metadata and original license bytes. Every vendored license records its upstream `source` URL and digest.

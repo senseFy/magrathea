@@ -1,8 +1,12 @@
+import saien.magrathea.buildlogic.configurePortableKlibSourcePaths
+
 plugins {
     id("org.jetbrains.kotlin.multiplatform")
     id("com.android.kotlin.multiplatform.library")
     `maven-publish`
 }
+
+configurePortableKlibSourcePaths()
 
 kotlin {
     jvmToolchain(17)

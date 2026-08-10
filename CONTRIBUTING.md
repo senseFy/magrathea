@@ -17,9 +17,11 @@ Read:
 - [Known Issues and External Gates](docs/known-issues.md)
 - the relevant decision record under [`docs/adr`](docs/adr)
 
-Base requirements are JDK 17 and the checked-in Gradle wrapper. Android work additionally requires
-the Android SDK; Apple work requires macOS/Xcode; browser work uses the toolchains provisioned by
-the Gradle tasks.
+Base requirements are JDK 17 and the checked-in Gradle wrapper. Repository verification scripts are
+exercised on macOS and Ubuntu and additionally require Bash, Ruby, and Python 3.9 or newer; native
+Windows is not currently a verified host environment. Android work additionally requires the
+Android SDK; Apple work requires macOS/Xcode; browser work uses the toolchains provisioned by the
+Gradle tasks.
 
 ## Development workflow
 

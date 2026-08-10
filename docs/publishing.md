@@ -193,7 +193,9 @@ Build the browser JS/TypeScript package and Wasm preview:
 ```
 
 The staged package is under `build/web-package/magrathea-web-client`; its archive is under
-`build/distributions`. No repository task publishes it to npm.
+`build/distributions`. The archive includes `THIRD_PARTY_NOTICES.txt` and full reviewed license
+texts under `LICENSES/`; the package gate exact-matches those notices to the resolved Gradle and
+bundled npm runtime. No repository task publishes it to npm.
 
 ## Rollback
 

@@ -1,0 +1,129 @@
+{
+  "formatVersion": 1,
+  "licenses": {
+    "Apache-2.0": {
+      "spdx": "Apache-2.0",
+      "file": "third-party/licenses/Apache-2.0.txt",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "https://www.apache.org/licenses/LICENSE-2.0.txt"
+    },
+    "MIT-ws-8.20.1": {
+      "spdx": "MIT",
+      "file": "third-party/licenses/ws-8.20.1-MIT.txt",
+      "sha256": "2b29dcfe0d6471f7e8c92c5fb38c9f93edee10330937055440192f1832b1ecef",
+      "source": "https://github.com/websockets/ws/blob/8.20.1/LICENSE"
+    },
+    "MIT-webpack-5.101.3": {
+      "spdx": "MIT",
+      "file": "third-party/licenses/webpack-5.101.3-MIT.txt",
+      "sha256": "9068a8782d2fb4c6e432cfa25334efa56f722822180570802bf86e71b6003b1e",
+      "source": "https://github.com/webpack/webpack/blob/v5.101.3/LICENSE"
+    }
+  },
+  "components": [
+    {
+      "name": "Ktor",
+      "repository": "https://github.com/ktorio/ktor",
+      "license": "Apache-2.0",
+      "coordinates": [
+        "io.ktor:ktor-client-core-js:3.5.1",
+        "io.ktor:ktor-client-core:3.5.1",
+        "io.ktor:ktor-client-js-js:3.5.1",
+        "io.ktor:ktor-client-js:3.5.1",
+        "io.ktor:ktor-events-js:3.5.1",
+        "io.ktor:ktor-events:3.5.1",
+        "io.ktor:ktor-http-cio-js:3.5.1",
+        "io.ktor:ktor-http-cio:3.5.1",
+        "io.ktor:ktor-http-js:3.5.1",
+        "io.ktor:ktor-http:3.5.1",
+        "io.ktor:ktor-io-js:3.5.1",
+        "io.ktor:ktor-io:3.5.1",
+        "io.ktor:ktor-serialization-js:3.5.1",
+        "io.ktor:ktor-serialization:3.5.1",
+        "io.ktor:ktor-sse-js:3.5.1",
+        "io.ktor:ktor-sse:3.5.1",
+        "io.ktor:ktor-utils-js:3.5.1",
+        "io.ktor:ktor-utils:3.5.1",
+        "io.ktor:ktor-websocket-serialization-js:3.5.1",
+        "io.ktor:ktor-websocket-serialization:3.5.1",
+        "io.ktor:ktor-websockets-js:3.5.1",
+        "io.ktor:ktor-websockets:3.5.1"
+      ]
+    },
+    {
+      "name": "Kotlin standard library",
+      "repository": "https://github.com/JetBrains/kotlin",
+      "license": "Apache-2.0",
+      "coordinates": [
+        "org.jetbrains.kotlin:kotlin-dom-api-compat:2.4.0",
+        "org.jetbrains.kotlin:kotlin-stdlib-js:2.4.0",
+        "org.jetbrains.kotlin:kotlin-stdlib:2.4.0"
+      ]
+    },
+    {
+      "name": "kotlinx.atomicfu",
+      "repository": "https://github.com/Kotlin/kotlinx-atomicfu",
+      "license": "Apache-2.0",
+      "coordinates": [
+        "org.jetbrains.kotlinx:atomicfu-js:0.32.1",
+        "org.jetbrains.kotlinx:atomicfu:0.32.1"
+      ]
+    },
+    {
+      "name": "kotlinx-browser",
+      "repository": "https://github.com/Kotlin/kotlinx-browser",
+      "license": "Apache-2.0",
+      "coordinates": [
+        "org.jetbrains.kotlinx:kotlinx-browser-js:0.5.0",
+        "org.jetbrains.kotlinx:kotlinx-browser:0.5.0"
+      ]
+    },
+    {
+      "name": "kotlinx.coroutines",
+      "repository": "https://github.com/Kotlin/kotlinx.coroutines",
+      "license": "Apache-2.0",
+      "coordinates": [
+        "org.jetbrains.kotlinx:kotlinx-coroutines-core-js:1.11.0",
+        "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0"
+      ]
+    },
+    {
+      "name": "kotlinx-io",
+      "repository": "https://github.com/Kotlin/kotlinx-io",
+      "license": "Apache-2.0",
+      "coordinates": [
+        "org.jetbrains.kotlinx:kotlinx-io-bytestring-js:0.9.0",
+        "org.jetbrains.kotlinx:kotlinx-io-bytestring:0.9.0",
+        "org.jetbrains.kotlinx:kotlinx-io-core-js:0.9.0",
+        "org.jetbrains.kotlinx:kotlinx-io-core:0.9.0"
+      ]
+    },
+    {
+      "name": "kotlinx.serialization",
+      "repository": "https://github.com/Kotlin/kotlinx.serialization",
+      "license": "Apache-2.0",
+      "coordinates": [
+        "org.jetbrains.kotlinx:kotlinx-serialization-core-js:1.11.0",
+        "org.jetbrains.kotlinx:kotlinx-serialization-core:1.11.0",
+        "org.jetbrains.kotlinx:kotlinx-serialization-json-js:1.11.0",
+        "org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0"
+      ]
+    }
+  ],
+  "npmComponents": [
+    {
+      "name": "ws",
+      "version": "8.20.1",
+      "role": "runtimeDependency",
+      "repository": "https://github.com/websockets/ws",
+      "license": "MIT-ws-8.20.1"
+    },
+    {
+      "name": "webpack",
+      "version": "5.101.3",
+      "role": "bundleGenerator",
+      "repository": "https://github.com/webpack/webpack",
+      "license": "MIT-webpack-5.101.3"
+    }
+  ]
+}

@@ -64,6 +64,7 @@ The release candidate contains:
 
 - the release bundle and checksum;
 - the complete signed Maven repository;
+- the standalone Web archive with exact runtime notices and full third-party license texts;
 - the coordinate inventory and SHA-256 file manifest;
 - the SBOM, license report, and verification receipt.
 

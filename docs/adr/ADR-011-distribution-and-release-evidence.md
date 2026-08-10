@@ -6,13 +6,19 @@
 ## Decision
 
 - Every publishable module produces complete Maven metadata, sources, Dokka documentation, and the
-  artifacts for its supported targets.
+  artifacts for its supported targets. Every archive carries exactly one byte-identical copy of the
+  canonical project `LICENSE`.
 - Build-local repositories are consumed by isolated JVM, Android, Apple, JS, Wasm, and TypeScript
   builds. Samples compile against published artifacts instead of project dependencies.
 - Public JVM-bearing APIs are checked against committed ABI dumps; stored and wire formats are
   checked against committed fixtures.
 - The release gate validates fixed dependency versions, the Gradle wrapper, pinned GitHub Actions,
-  a production CycloneDX SBOM, third-party licenses, and negative supply-chain mutations.
+  a production CycloneDX SBOM, third-party licenses, and negative supply-chain mutations. The
+  aggregate SBOM and license report include npm/generated runtime code present in the Web bundle.
+- The standalone Web archive exact-matches its resolved Gradle runtime and bundled npm/generated
+  runtime against a reviewed ledger. It carries complete vendored license texts, preserves any
+  upstream `NOTICE` files found in resolved artifacts, and rejects source maps with local absolute
+  paths.
 - Remote Maven publication requires in-memory PGP signing and an immediate immutable-coordinate
   preflight. Repository credentials and signing material are environment-only.
 - The exact commit passes the complete CI gate before candidate preparation. Candidate preparation

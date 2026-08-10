@@ -6,13 +6,16 @@ import org.gradle.api.tasks.GradleBuild
 import org.gradle.api.tasks.Copy
 import org.gradle.api.tasks.Delete
 import org.gradle.api.tasks.Sync
+import org.gradle.api.tasks.bundling.AbstractArchiveTask
 import org.gradle.jvm.tasks.Jar
 import org.gradle.api.tasks.bundling.Zip
 import org.gradle.plugins.signing.SigningExtension
+import org.cyclonedx.Version
 import org.cyclonedx.gradle.CyclonedxAggregateTask
 import org.cyclonedx.gradle.CyclonedxDirectTask
 import org.cyclonedx.model.License
 import org.cyclonedx.model.LicenseChoice
+import org.cyclonedx.parsers.JsonParser
 
 plugins {
     alias(libs.plugins.androidKotlinMultiplatformLibrary) apply false
@@ -451,6 +454,7 @@ val verifyReleaseTagContract = tasks.register<Exec>("verifyReleaseTagContract") 
 
 val normalizedSdkSbom = layout.buildDirectory.file("reports/supply-chain/magrathea-sbom.cdx.json")
 val sdkLicenseReport = layout.buildDirectory.file("reports/supply-chain/third-party-licenses.tsv")
+val webRuntimeLicenseLedger = layout.projectDirectory.file("third-party/web-runtime-licenses.json")
 val generateSdkSbom = tasks.register<Exec>("generateSdkSbom") {
     group = "distribution"
     description = "Generate the production SBOM in an isolated task graph."
@@ -477,7 +481,9 @@ val verifySdkSupplyChain = tasks.register<Exec>("verifySdkSupplyChain") {
     inputs.file("build/reports/cyclonedx/bom.json")
     inputs.file("tooling/web-browser-e2e/package-lock.json")
     inputs.file("kotlin-js-store/yarn.lock")
+    inputs.file(webRuntimeLicenseLedger)
     inputs.file("scripts/verify-supply-chain")
+    inputs.file("scripts/verify_normalized_sbom.rb")
     outputs.file(normalizedSdkSbom)
     outputs.file(sdkLicenseReport)
     commandLine(
@@ -485,13 +491,21 @@ val verifySdkSupplyChain = tasks.register<Exec>("verifySdkSupplyChain") {
         rootDir.absolutePath,
         sdkVersion,
     )
+    doLast {
+        val schemaErrors = JsonParser().validate(normalizedSdkSbom.get().asFile, Version.VERSION_16)
+        check(schemaErrors.isEmpty()) {
+            "Normalized SDK SBOM failed the official CycloneDX 1.6 schema (${schemaErrors.size} errors)"
+        }
+    }
 }
 val verifySdkSupplyChainContract = tasks.register<Exec>("verifySdkSupplyChainContract") {
     group = "verification"
     description = "Mutation-test the wrapper, SBOM, and license gates."
     dependsOn(verifySdkSupplyChain)
+    inputs.file(webRuntimeLicenseLedger)
     inputs.file("scripts/verify-supply-chain-contract")
     inputs.file("scripts/verify-supply-chain")
+    inputs.file("scripts/verify_normalized_sbom.rb")
     commandLine(
         file("scripts/verify-supply-chain-contract").absolutePath,
         rootDir.absolutePath,
@@ -797,6 +811,265 @@ val verifyWebCrossBrowserRuntime = tasks.register<Exec>("verifyWebCrossBrowserRu
     }
 }
 
+val webClientProject = project(":magrathea-web-client")
+val generatedWebClientPackageJson = layout.buildDirectory.file("js/packages/magrathea-web-client/package.json")
+val kotlinJsNodeModulesDirectory = layout.buildDirectory.dir("js/node_modules")
+val webThirdPartyNoticeDirectory = webClientProject.layout.buildDirectory.dir("generated/web-third-party-notices")
+val generateWebThirdPartyNotices = webClientProject.tasks.register("generateWebThirdPartyNotices") {
+    group = "distribution"
+    description = "Verify the resolved Web runtime license ledger and generate distributable notices."
+    dependsOn(":magrathea-web-client:jsPackageJson", ":kotlinNpmInstall", ":kotlinStoreYarnLock")
+    inputs.file(webRuntimeLicenseLedger)
+    inputs.dir(layout.projectDirectory.dir("third-party/licenses"))
+    inputs.file(generatedWebClientPackageJson)
+    inputs.file(layout.projectDirectory.file("kotlin-js-store/yarn.lock"))
+    inputs.file(layout.projectDirectory.file("gradle/libs.versions.toml"))
+    outputs.dir(webThirdPartyNoticeDirectory)
+    // ResolutionResult cannot be modeled as a file input without also claiming every project
+    // compilation output. Always execute so transitive metadata changes cannot skip the legal gate.
+    outputs.upToDateWhen { false }
+
+    doLast {
+        val ledger = groovy.json.JsonSlurper().parse(webRuntimeLicenseLedger.asFile) as? Map<*, *>
+            ?: error("Web runtime license ledger must be a JSON object")
+        check(ledger["formatVersion"] == 1) { "Unsupported Web runtime license ledger format" }
+        val licenses = ledger["licenses"] as? Map<*, *> ?: error("Web runtime license ledger has no licenses")
+        val components = ledger["components"] as? List<*>
+            ?: error("Web runtime license ledger has no components")
+        val npmComponents = ledger["npmComponents"] as? List<*>
+            ?: error("Web runtime license ledger has no npm components")
+        check(licenses.isNotEmpty() && components.isNotEmpty() && npmComponents.isNotEmpty()) {
+            "Web runtime license ledger must not be empty"
+        }
+
+        val reviewedCoordinates = linkedMapOf<String, Map<*, *>>()
+        components.forEach { rawComponent ->
+            val component = rawComponent as? Map<*, *> ?: error("Invalid Web runtime component entry")
+            val name = component["name"] as? String ?: error("Web runtime component has no name")
+            val repository = component["repository"] as? String
+                ?: error("Web runtime component $name has no repository")
+            check(repository.startsWith("https://")) { "Web runtime component $name has an unsafe repository URL" }
+            val licenseId = component["license"] as? String
+                ?: error("Web runtime component $name has no license")
+            check(licenseId in licenses) { "Web runtime component $name references unknown license $licenseId" }
+            val coordinates = component["coordinates"] as? List<*>
+                ?: error("Web runtime component $name has no coordinates")
+            check(coordinates.isNotEmpty()) { "Web runtime component $name has no coordinates" }
+            coordinates.forEach { rawCoordinate ->
+                val coordinate = rawCoordinate as? String
+                    ?: error("Web runtime component $name has a non-string coordinate")
+                check(coordinate.matches(Regex("[^:]+:[^:]+:[^:]+"))) {
+                    "Invalid Web runtime coordinate: $coordinate"
+                }
+                check(reviewedCoordinates.put(coordinate, component) == null) {
+                    "Duplicate Web runtime coordinate: $coordinate"
+                }
+            }
+        }
+
+        val runtimeConfiguration = webClientProject.configurations.getByName("jsRuntimeClasspath")
+        val resolvedCoordinates = runtimeConfiguration.incoming.resolutionResult.allComponents
+            .mapNotNull { component ->
+                val identifier = component.id as? org.gradle.api.artifacts.component.ModuleComponentIdentifier
+                    ?: return@mapNotNull null
+                "${identifier.group}:${identifier.module}:${identifier.version}"
+            }
+            .toSortedSet()
+        val expectedCoordinates = reviewedCoordinates.keys.toSortedSet()
+        check(resolvedCoordinates == expectedCoordinates) {
+            val unreviewed = resolvedCoordinates - expectedCoordinates
+            val stale = expectedCoordinates - resolvedCoordinates
+            "Web runtime license ledger differs from jsRuntimeClasspath; " +
+                "unreviewed=${unreviewed.joinToString()} stale=${stale.joinToString()}"
+        }
+
+        val reviewedNpmPackages = linkedMapOf<String, Map<*, *>>()
+        npmComponents.forEach { rawComponent ->
+            val component = rawComponent as? Map<*, *> ?: error("Invalid Web npm component entry")
+            val name = component["name"] as? String ?: error("Web npm component has no name")
+            val version = component["version"] as? String ?: error("Web npm component $name has no version")
+            check(version.isNotBlank() && !version.contains(Regex("SNAPSHOT|latest|\\+", RegexOption.IGNORE_CASE))) {
+                "Web npm component $name has an unpinned version: $version"
+            }
+            val role = component["role"] as? String ?: error("Web npm component $name has no role")
+            check(role == "runtimeDependency" || role == "bundleGenerator") {
+                "Web npm component $name has unknown role: $role"
+            }
+            val repository = component["repository"] as? String
+                ?: error("Web npm component $name has no repository")
+            check(repository.startsWith("https://")) { "Web npm component $name has an unsafe repository URL" }
+            val licenseId = component["license"] as? String ?: error("Web npm component $name has no license")
+            check(licenseId in licenses) { "Web npm component $name references unknown license $licenseId" }
+            check(reviewedNpmPackages.put(name, component) == null) { "Duplicate Web npm package: $name" }
+        }
+
+        val generatedPackage = groovy.json.JsonSlurper().parse(generatedWebClientPackageJson.get().asFile) as? Map<*, *>
+            ?: error("Generated Web client package metadata must be a JSON object")
+        val generatedRuntimeDependencies = (generatedPackage["dependencies"] as? Map<*, *>).orEmpty()
+            .map { (name, version) -> name as String to version as String }
+            .toMap()
+        val reviewedRuntimeDependencies = reviewedNpmPackages.values
+            .filter { component -> component["role"] == "runtimeDependency" }
+            .associate { component -> component["name"] as String to component["version"] as String }
+        check(generatedRuntimeDependencies == reviewedRuntimeDependencies) {
+            "Generated Web npm runtime dependencies differ from the license ledger; " +
+                "actual=$generatedRuntimeDependencies reviewed=$reviewedRuntimeDependencies"
+        }
+        val generatedDevelopmentDependencies = (generatedPackage["devDependencies"] as? Map<*, *>).orEmpty()
+            .map { (name, version) -> name as String to version as String }
+            .toMap()
+        reviewedNpmPackages.values.filter { component -> component["role"] == "bundleGenerator" }.forEach { component ->
+            val name = component["name"] as String
+            val version = component["version"] as String
+            check(generatedDevelopmentDependencies[name] == version) {
+                "Generated Web bundle tool $name differs from the license ledger: " +
+                    "actual=${generatedDevelopmentDependencies[name]} reviewed=$version"
+            }
+        }
+
+        val outputDirectory = webThirdPartyNoticeDirectory.get().asFile
+        outputDirectory.deleteRecursively()
+        val outputLicenses = outputDirectory.resolve("LICENSES").apply { mkdirs() }
+        val licenseFiles = linkedMapOf<String, String>()
+        val vendoredLicenseSources = linkedMapOf<String, File>()
+        licenses.forEach { (rawLicenseId, rawDetails) ->
+            val licenseId = rawLicenseId as? String ?: error("Invalid Web runtime license ID")
+            val details = rawDetails as? Map<*, *> ?: error("Invalid Web runtime license entry: $licenseId")
+            val spdx = details["spdx"] as? String ?: error("License $licenseId has no SPDX identifier")
+            check(spdx == "Apache-2.0" || spdx == "MIT") { "License $licenseId has an unreviewed SPDX identifier: $spdx" }
+            val relativePath = details["file"] as? String ?: error("License $licenseId has no vendored file")
+            check(relativePath.startsWith("third-party/licenses/") && ".." !in relativePath) {
+                "License $licenseId points outside third-party/licenses"
+            }
+            val source = details["source"] as? String ?: error("License $licenseId has no source URL")
+            check(source.startsWith("https://")) { "License $licenseId has an unsafe source URL" }
+            val expectedSha256 = details["sha256"] as? String ?: error("License $licenseId has no SHA-256")
+            check(expectedSha256.matches(Regex("[0-9a-f]{64}"))) { "License $licenseId has an invalid SHA-256" }
+            val sourceFile = layout.projectDirectory.file(relativePath).asFile
+            check(sourceFile.isFile && sourceFile.length() > 0) { "Missing vendored license: $relativePath" }
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(sourceFile.readBytes())
+                .joinToString(separator = "") { byte -> "%02x".format(byte) }
+            check(digest == expectedSha256) { "Vendored license digest changed: $relativePath" }
+            val outputName = sourceFile.name
+            check(licenseFiles.put(licenseId, outputName) == null) { "Duplicate license ID: $licenseId" }
+            vendoredLicenseSources[licenseId] = sourceFile
+            sourceFile.copyTo(outputLicenses.resolve(outputName), overwrite = true)
+        }
+
+        val nodeModulesDirectory = kotlinJsNodeModulesDirectory.get().asFile
+        reviewedNpmPackages.forEach { (name, component) ->
+            val installedDirectory = nodeModulesDirectory.resolve(name)
+            val installedPackageFile = installedDirectory.resolve("package.json")
+            check(installedPackageFile.isFile) { "Reviewed Web npm package is not installed: $name" }
+            val installedPackage = groovy.json.JsonSlurper().parse(installedPackageFile) as? Map<*, *>
+                ?: error("Installed Web npm package metadata is invalid: $name")
+            val expectedVersion = component["version"] as String
+            val licenseId = component["license"] as String
+            val expectedSpdx = ((licenses[licenseId] ?: error("Unknown license $licenseId")) as Map<*, *>)["spdx"] as String
+            check(installedPackage["name"] == name && installedPackage["version"] == expectedVersion) {
+                "Installed Web npm package differs from the license ledger: $name"
+            }
+            check(installedPackage["license"] == expectedSpdx) {
+                "Installed Web npm package has unexpected license metadata: $name:${installedPackage["license"]}"
+            }
+            val installedLicense = installedDirectory.resolve("LICENSE")
+            check(installedLicense.isFile && installedLicense.length() > 0) {
+                "Installed Web npm package has no LICENSE file: $name"
+            }
+            check(installedLicense.readBytes().contentEquals(vendoredLicenseSources.getValue(licenseId).readBytes())) {
+                "Vendored license no longer matches the installed Web npm package: $name@$expectedVersion"
+            }
+        }
+
+        val extractedNotices = mutableListOf<String>()
+        runtimeConfiguration.incoming.artifacts.artifacts
+            .filter { artifact ->
+                artifact.id.componentIdentifier is org.gradle.api.artifacts.component.ModuleComponentIdentifier
+            }
+            .sortedBy { artifact -> artifact.id.displayName }
+            .forEach { artifact ->
+                val identifier = artifact.id.componentIdentifier as org.gradle.api.artifacts.component.ModuleComponentIdentifier
+                val coordinate = "${identifier.group}:${identifier.module}:${identifier.version}"
+                try {
+                    java.util.zip.ZipFile(artifact.file).use { archive ->
+                        archive.entries().asSequence()
+                            .filter { entry ->
+                                !entry.isDirectory && entry.name.substringAfterLast('/').matches(
+                                    Regex("NOTICE(?:\\.[A-Za-z0-9._-]+)?", RegexOption.IGNORE_CASE),
+                                )
+                            }
+                            .sortedBy { entry -> entry.name }
+                            .forEach { entry ->
+                                val noticeBytes = archive.getInputStream(entry).use { it.readBytes() }
+                                check(noticeBytes.isNotEmpty()) {
+                                    "Resolved artifact contains an empty NOTICE: ${artifact.id.displayName}!/${entry.name}"
+                                }
+                                val entryDigest = java.security.MessageDigest.getInstance("SHA-256")
+                                    .digest(entry.name.toByteArray())
+                                    .take(6)
+                                    .joinToString(separator = "") { byte -> "%02x".format(byte) }
+                                val outputName = "${coordinate.replace(Regex("[^A-Za-z0-9._-]"), "_")}-$entryDigest.txt"
+                                val relativeOutput = "UPSTREAM-NOTICES/$outputName"
+                                val noticeFile = outputDirectory.resolve(relativeOutput)
+                                noticeFile.parentFile.mkdirs()
+                                noticeFile.writeBytes(noticeBytes)
+                                extractedNotices += "$coordinate!/${entry.name} -> $relativeOutput"
+                            }
+                    }
+                } catch (_: java.util.zip.ZipException) {
+                    // Some resolved artifacts are not ZIP containers and therefore cannot embed NOTICE files.
+                }
+            }
+
+        val noticeText = buildString {
+            appendLine("Magrathea Web SDK third-party notices")
+            appendLine("=========================================")
+            appendLine()
+            appendLine("This distribution bundles the following external runtime components.")
+            appendLine("Full license terms are provided in the LICENSES directory.")
+            appendLine()
+            components.map { it as Map<*, *> }.sortedBy { it["name"] as String }.forEach { component ->
+                val name = component["name"] as String
+                val repository = component["repository"] as String
+                val licenseId = component["license"] as String
+                appendLine(name)
+                appendLine("  Repository: $repository")
+                val spdx = ((licenses[licenseId] ?: error("Unknown license $licenseId")) as Map<*, *>)["spdx"] as String
+                appendLine("  License: $spdx (LICENSES/${licenseFiles.getValue(licenseId)})")
+                appendLine("  Resolved coordinates:")
+                (component["coordinates"] as List<*>).map { it as String }.sorted().forEach { coordinate ->
+                    appendLine("    - $coordinate")
+                }
+                appendLine()
+            }
+            appendLine("Bundled npm and generated runtime code")
+            appendLine("--------------------------------------")
+            appendLine()
+            npmComponents.map { it as Map<*, *> }.sortedBy { it["name"] as String }.forEach { component ->
+                val name = component["name"] as String
+                val version = component["version"] as String
+                val role = component["role"] as String
+                val repository = component["repository"] as String
+                val licenseId = component["license"] as String
+                val spdx = ((licenses[licenseId] ?: error("Unknown license $licenseId")) as Map<*, *>)["spdx"] as String
+                appendLine("$name@$version")
+                appendLine("  Role: $role")
+                appendLine("  Repository: $repository")
+                appendLine("  License: $spdx (LICENSES/${licenseFiles.getValue(licenseId)})")
+                appendLine()
+            }
+            if (extractedNotices.isEmpty()) {
+                appendLine("No upstream NOTICE files were present in the resolved runtime artifacts.")
+            } else {
+                appendLine("Upstream NOTICE files preserved from resolved runtime artifacts:")
+                extractedNotices.forEach { notice -> appendLine("  - $notice") }
+            }
+        }
+        outputDirectory.resolve("THIRD_PARTY_NOTICES.txt").writeText(noticeText)
+    }
+}
+
 val webSdkPackageDirectory = layout.buildDirectory.dir("web-package/magrathea-web-client")
 val stageWebSdkPackage = tasks.register<Sync>("stageWebSdkPackage") {
     group = "distribution"
@@ -804,6 +1077,7 @@ val stageWebSdkPackage = tasks.register<Sync>("stageWebSdkPackage") {
     dependsOn(
         ":magrathea-web-client:jsBrowserProductionWebpack",
         ":magrathea-web-client:jsProductionExecutableValidateGeneratedByCompilerTypeScript",
+        generateWebThirdPartyNotices,
     )
     from(
         project(":magrathea-web-client").layout.buildDirectory
@@ -820,7 +1094,48 @@ val stageWebSdkPackage = tasks.register<Sync>("stageWebSdkPackage") {
     }
     from("magrathea-web-client/npm/README.md")
     from("LICENSE")
+    from(webThirdPartyNoticeDirectory)
     into(webSdkPackageDirectory)
+
+    doLast {
+        val directory = webSdkPackageDirectory.get().asFile
+        val absolutePathPattern = Regex(
+            "(?i)(?:^|/)(?:Users|home|private|var|opt|mnt|workspace)(?:/|$)|(?:^|/)[A-Za-z]:[\\\\/]",
+        )
+        val buildWorkspacePattern = Regex("(?:^|/)(?:work|__w)/[^/]+/(.+)$")
+        directory.listFiles().orEmpty().filter { it.name.endsWith(".js.map") }.forEach { sourceMapFile ->
+            @Suppress("UNCHECKED_CAST")
+            val sourceMap = groovy.json.JsonSlurper().parse(sourceMapFile) as? MutableMap<String, Any?>
+                ?: error("Invalid Web source map: $sourceMapFile")
+            val sources = sourceMap["sources"] as? List<*>
+                ?: error("Web source map has no sources: $sourceMapFile")
+            val normalizedSources = sources.map { rawSource ->
+                val source = rawSource as? String ?: error("Web source map contains a non-string source: $sourceMapFile")
+                if (!absolutePathPattern.containsMatchIn(source)) {
+                    source
+                } else {
+                    val workspaceMatch = buildWorkspacePattern.find(source)
+                    if (workspaceMatch == null) {
+                        source
+                    } else {
+                        val namespaceEnd = source.indexOf('/', startIndex = "webpack://".length)
+                        val namespace = if (namespaceEnd >= 0) source.substring(0, namespaceEnd) else "webpack://magrathea-web-client"
+                        "$namespace/third-party/${workspaceMatch.groupValues[1]}"
+                    }
+                }
+            }
+            sourceMap["sources"] = normalizedSources
+            sourceMapFile.writeText(groovy.json.JsonOutput.toJson(sourceMap) + "\n")
+            val leakedSource = normalizedSources.firstOrNull { source ->
+                source.contains(rootDir.absolutePath) ||
+                    source.contains(System.getProperty("user.home")) ||
+                    absolutePathPattern.containsMatchIn(source)
+            }
+            check(leakedSource == null) {
+                "Web source map exposes a local absolute path: $leakedSource"
+            }
+        }
+    }
 }
 
 val assembleWebSdkPackage = tasks.register<Zip>("assembleWebSdkPackage") {
@@ -835,14 +1150,29 @@ val assembleWebSdkPackage = tasks.register<Zip>("assembleWebSdkPackage") {
 val verifyWebSdkPackage = tasks.register("verifyWebSdkPackage") {
     group = "verification"
     description = "Validate Web package API, size, metadata, and absence of secrets/direct providers."
-    dependsOn(stageWebSdkPackage, assembleWebSdkPackage)
+    dependsOn(stageWebSdkPackage, assembleWebSdkPackage, verifySdkSupplyChain)
 
     doLast {
+        val licenseLedger = groovy.json.JsonSlurper().parse(webRuntimeLicenseLedger.asFile) as Map<*, *>
+        val ledgerLicenses = licenseLedger["licenses"] as? Map<*, *>
+            ?: error("Web runtime license ledger has no licenses")
+        val expectedLicenseArtifacts = ledgerLicenses.values.map { rawDetails ->
+            val details = rawDetails as? Map<*, *> ?: error("Invalid Web runtime license entry")
+            val relativePath = details["file"] as? String ?: error("Web runtime license entry has no file")
+            "LICENSES/${relativePath.substringAfterLast('/')}"
+        }.toSet()
         val directory = webSdkPackageDirectory.get().asFile
         val bundle = directory.resolve("magrathea-web-client.js")
         val definitions = directory.resolve("magrathea-web-client.d.ts")
         val packageJsonFile = directory.resolve("package.json")
-        listOf(bundle, definitions, packageJsonFile, directory.resolve("LICENSE"), directory.resolve("README.md"))
+        (listOf(
+            bundle,
+            definitions,
+            packageJsonFile,
+            directory.resolve("LICENSE"),
+            directory.resolve("README.md"),
+            directory.resolve("THIRD_PARTY_NOTICES.txt"),
+        ) + expectedLicenseArtifacts.map(directory::resolve))
             .forEach { artifact -> check(artifact.isFile && artifact.length() > 0) { "Missing Web package artifact: $artifact" } }
         check(directory.listFiles().orEmpty().any { it.name.matches(Regex("[0-9]+\\.js")) }) {
             "Web package is missing its production split chunk"
@@ -898,6 +1228,109 @@ val verifyWebSdkPackage = tasks.register("verifyWebSdkPackage") {
             "OpenAiProviderAdapter",
         ).forEach { forbidden ->
             check(forbidden !in scannedText) { "Forbidden secret/direct-provider marker in Web package: $forbidden" }
+        }
+
+        val sourceMapFiles = directory.listFiles().orEmpty().filter { file -> file.name.endsWith(".js.map") }
+        check(sourceMapFiles.isNotEmpty()) { "Web package is missing production source maps" }
+        val bundledNpmPackages = mutableSetOf<String>()
+        sourceMapFiles.forEach { sourceMapFile ->
+            val sourceMap = groovy.json.JsonSlurper().parse(sourceMapFile) as? Map<*, *>
+                ?: error("Invalid Web source map: $sourceMapFile")
+            val sources = sourceMap["sources"] as? List<*>
+                ?: error("Web source map has no sources: $sourceMapFile")
+            sources.map { rawSource -> rawSource as? String ?: error("Non-string Web source map entry") }.forEach { source ->
+                if ("/node_modules/" in source) {
+                    val packagePath = source.substringAfterLast("/node_modules/")
+                    val segments = packagePath.split('/')
+                    val packageName = if (segments.firstOrNull()?.startsWith('@') == true) {
+                        check(segments.size >= 2) { "Invalid scoped npm source path: $source" }
+                        "${segments[0]}/${segments[1]}"
+                    } else {
+                        segments.firstOrNull().orEmpty()
+                    }
+                    check(packageName.isNotBlank()) { "Invalid npm source path: $source" }
+                    bundledNpmPackages += packageName
+                }
+                if (
+                    "/webpack/bootstrap" in source ||
+                    "/webpack/runtime/" in source ||
+                    "/webpack/startup" in source ||
+                    "/webpack/universalModuleDefinition" in source
+                ) {
+                    bundledNpmPackages += "webpack"
+                }
+            }
+        }
+        val expectedNpmPackages = (licenseLedger["npmComponents"] as? List<*>)
+            ?.map { rawComponent ->
+                val component = rawComponent as? Map<*, *> ?: error("Invalid Web npm component entry")
+                component["name"] as? String ?: error("Web npm component has no name")
+            }
+            ?.toSet()
+            ?: error("Web runtime license ledger has no npm components")
+        check(bundledNpmPackages == expectedNpmPackages) {
+            "Bundled npm/generated runtime differs from the license ledger; " +
+                "actual=$bundledNpmPackages reviewed=$expectedNpmPackages"
+        }
+
+        val expectedNpmInventory = (licenseLedger["npmComponents"] as List<*>).associate { rawComponent ->
+            val component = rawComponent as Map<*, *>
+            val name = component["name"] as String
+            val version = component["version"] as String
+            val role = component["role"] as String
+            "$name@$version" to role
+        }
+        val normalizedSbom = groovy.json.JsonSlurper().parse(normalizedSdkSbom.get().asFile) as? Map<*, *>
+            ?: error("Normalized SDK SBOM must be a JSON object")
+        val sbomNpmInventory = (normalizedSbom["components"] as? List<*>)
+            ?.mapNotNull { rawComponent ->
+                val component = rawComponent as? Map<*, *> ?: return@mapNotNull null
+                val properties = component["properties"] as? List<*> ?: return@mapNotNull null
+                val role = properties.mapNotNull { rawProperty ->
+                    val property = rawProperty as? Map<*, *> ?: return@mapNotNull null
+                    if (property["name"] == "magrathea:webBundleRole") property["value"] as? String else null
+                }.singleOrNull() ?: return@mapNotNull null
+                val name = component["name"] as? String ?: error("Web SBOM component has no name")
+                val version = component["version"] as? String ?: error("Web SBOM component $name has no version")
+                "$name@$version" to role
+            }
+            ?.toMap()
+            ?: error("Normalized SDK SBOM has no components")
+        check(sbomNpmInventory == expectedNpmInventory) {
+            "Normalized SDK SBOM differs from the bundled npm/generated runtime; " +
+                "actual=$sbomNpmInventory reviewed=$expectedNpmInventory"
+        }
+        val licenseRows = sdkLicenseReport.get().asFile.readLines().drop(1).toSet()
+        (licenseLedger["npmComponents"] as List<*>).forEach { rawComponent ->
+            val component = rawComponent as Map<*, *>
+            val name = component["name"] as String
+            val version = component["version"] as String
+            val licenseId = component["license"] as String
+            val spdx = (ledgerLicenses[licenseId] as Map<*, *>)["spdx"] as String
+            check("\t$name\t$version\t$spdx" in licenseRows) {
+                "SDK license inventory is missing bundled Web component $name@$version"
+            }
+        }
+
+        val noticesText = directory.resolve("THIRD_PARTY_NOTICES.txt").readText()
+        (licenseLedger["components"] as List<*>).flatMap { rawComponent ->
+            val component = rawComponent as Map<*, *>
+            (component["coordinates"] as List<*>).map { it as String }
+        }.forEach { coordinate ->
+            check(coordinate in noticesText) { "Web third-party notices are missing $coordinate" }
+        }
+        (licenseLedger["npmComponents"] as List<*>).forEach { rawComponent ->
+            val component = rawComponent as Map<*, *>
+            val packageVersion = "${component["name"]}@${component["version"]}"
+            check(packageVersion in noticesText) { "Web third-party notices are missing $packageVersion" }
+        }
+
+        val webArchive = assembleWebSdkPackage.get().archiveFile.get().asFile
+        val archiveEntries = java.util.zip.ZipFile(webArchive).use { archive ->
+            archive.entries().asSequence().map { entry -> entry.name }.toSet()
+        }
+        (setOf("THIRD_PARTY_NOTICES.txt") + expectedLicenseArtifacts).forEach { expected ->
+            check(expected in archiveEntries) { "Web package archive is missing $expected" }
         }
     }
 }
@@ -1162,6 +1595,11 @@ fun Project.registerSdkJavadocJar(publication: MavenPublication) =
 fun Project.configureSdkPublishing() {
     val sdkProject = this
     pluginManager.apply("maven-publish")
+    tasks.withType<AbstractArchiveTask>().configureEach {
+        from(rootProject.layout.projectDirectory.file("LICENSE")) {
+            into("META-INF")
+        }
+    }
     // Dokka must observe the final Android/KMP plugin model. Applying it while the
     // root project is still configuring subprojects leaves AGP 9 source sets empty.
     afterEvaluate {

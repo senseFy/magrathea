@@ -3,6 +3,13 @@
 Notable changes to Magrathea are documented here. The project follows
 [Semantic Versioning](https://semver.org/) for published releases.
 
+## Unreleased
+
+### Changed
+
+- Published archives now carry the canonical project license, while the aggregate SBOM and license
+  report include npm and generated runtime code bundled into the standalone Web SDK.
+
 ## 0.1.0-alpha.2 — 2026-08-02
 
 ### Added

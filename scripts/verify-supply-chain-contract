@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 VERSION="${2:-0.1.0-alpha.2}"
-FIXTURE="$ROOT_DIR/build/supply-chain-contract-fixture"
+FIXTURE="${MAGRATHEA_SUPPLY_CHAIN_CONTRACT_FIXTURE:-$ROOT_DIR/build/supply-chain-contract-fixture}"
 
 fail() {
   printf 'supply-chain contract verification failed: %s\n' "$*" >&2
@@ -17,6 +17,7 @@ reset_fixture() {
     "$FIXTURE/build/reports/cyclonedx" \
     "$FIXTURE/tooling/web-browser-e2e" \
     "$FIXTURE/kotlin-js-store" \
+    "$FIXTURE/third-party" \
     "$FIXTURE/scripts"
   cp "$ROOT_DIR/gradle/wrapper/gradle-wrapper.properties" "$FIXTURE/gradle/wrapper/"
   cp "$ROOT_DIR/gradle/wrapper/gradle-wrapper.jar" "$FIXTURE/gradle/wrapper/"
@@ -24,7 +25,40 @@ reset_fixture() {
   cp "$ROOT_DIR/build/reports/cyclonedx/bom.json" "$FIXTURE/build/reports/cyclonedx/"
   cp "$ROOT_DIR/tooling/web-browser-e2e/package-lock.json" "$FIXTURE/tooling/web-browser-e2e/"
   cp "$ROOT_DIR/kotlin-js-store/yarn.lock" "$FIXTURE/kotlin-js-store/"
+  cp "$ROOT_DIR/third-party/web-runtime-licenses.json" "$FIXTURE/third-party/"
   cp "$ROOT_DIR/scripts/verify-supply-chain" "$FIXTURE/scripts/"
+  cp "$ROOT_DIR/scripts/verify_normalized_sbom.rb" "$FIXTURE/scripts/"
+}
+
+verify_web_inventory() {
+  ruby -rjson -e '
+    root = ARGV.fetch(0)
+    ledger = JSON.parse(File.read(File.join(root, "third-party", "web-runtime-licenses.json")))
+    bom = JSON.parse(File.read(File.join(root, "build", "reports", "supply-chain", "magrathea-sbom.cdx.json")))
+    expected = ledger.fetch("npmComponents").to_h do |component|
+      license = ledger.fetch("licenses").fetch(component.fetch("license")).fetch("spdx")
+      [component.fetch("name"), [component.fetch("version"), component.fetch("role"), license]]
+    end
+    actual = bom.fetch("components").each_with_object({}) do |component, inventory|
+      role = Array(component["properties"]).find do |property|
+        property["name"] == "magrathea:webBundleRole"
+      end&.fetch("value")
+      next unless role
+
+      licenses = Array(component["licenses"]).map { |entry| entry.dig("license", "id") }.compact
+      inventory[component.fetch("name")] = [component.fetch("version"), role, licenses.fetch(0)]
+    end
+    abort "normalized SBOM Web inventory mismatch: #{actual}" unless actual == expected
+
+    rows = File.readlines(
+      File.join(root, "build", "reports", "supply-chain", "third-party-licenses.tsv"),
+      chomp: true,
+    )
+    expected.each do |name, (version, _role, license)|
+      row = [nil, name, version, license].join("\t")
+      abort "license report is missing #{name}@#{version}" unless rows.include?(row)
+    end
+  ' "$FIXTURE"
 }
 
 expect_rejected() {
@@ -36,8 +70,21 @@ expect_rejected() {
   [[ "$output" == *"$expected"* ]] || fail "unexpected rejection: $output"
 }
 
+expect_normalized_rejected() {
+  local expected="$1"
+  local output
+  if output="$(ruby \
+    "$FIXTURE/scripts/verify_normalized_sbom.rb" \
+    "$FIXTURE/build/reports/supply-chain/magrathea-sbom.cdx.json" \
+    "$FIXTURE/third-party/web-runtime-licenses.json" 2>&1)"; then
+    fail "unsafe normalized SBOM fixture unexpectedly passed"
+  fi
+  [[ "$output" == *"$expected"* ]] || fail "unexpected normalized SBOM rejection: $output"
+}
+
 reset_fixture
 "$FIXTURE/scripts/verify-supply-chain" "$FIXTURE" "$VERSION" >/dev/null
+verify_web_inventory
 
 reset_fixture
 ruby -pi -e 'sub(/distributionSha256Sum=.*/, "distributionSha256Sum=" + "0" * 64)' \
@@ -70,5 +117,64 @@ ruby -rjson -e '
 ' "$FIXTURE/build/reports/cyclonedx/bom.json"
 expect_rejected "unknown license"
 
+reset_fixture
+ruby -rjson -e '
+  path = ARGV.fetch(0)
+  ledger = JSON.parse(File.read(path))
+  ledger.fetch("licenses")["GPL-test"] = {"spdx" => "GPL-3.0-only"}
+  ledger.fetch("npmComponents").fetch(0)["license"] = "GPL-test"
+  File.write(path, JSON.pretty_generate(ledger))
+' "$FIXTURE/third-party/web-runtime-licenses.json"
+expect_rejected "license not allowed: npm"
+
+reset_fixture
+"$FIXTURE/scripts/verify-supply-chain" "$FIXTURE" "$VERSION" >/dev/null
+ruby -rjson -e '
+  path = ARGV.fetch(0)
+  bom = JSON.parse(File.read(path))
+  component = bom.fetch("components").find do |candidate|
+    Array(candidate["properties"]).any? { |property| property["name"] == "magrathea:webBundleRole" }
+  end
+  component["purl"] = "pkg:npm/tampered@0"
+  File.write(path, JSON.pretty_generate(bom))
+' "$FIXTURE/build/reports/supply-chain/magrathea-sbom.cdx.json"
+expect_normalized_rejected "component identity mismatch"
+
+reset_fixture
+"$FIXTURE/scripts/verify-supply-chain" "$FIXTURE" "$VERSION" >/dev/null
+ruby -rjson -e '
+  path = ARGV.fetch(0)
+  bom = JSON.parse(File.read(path))
+  component = bom.fetch("components").find do |candidate|
+    Array(candidate["properties"]).any? { |property| property["name"] == "magrathea:webBundleRole" }
+  end
+  component["scope"] = "optional"
+  File.write(path, JSON.pretty_generate(bom))
+' "$FIXTURE/build/reports/supply-chain/magrathea-sbom.cdx.json"
+expect_normalized_rejected "component scope mismatch"
+
+reset_fixture
+"$FIXTURE/scripts/verify-supply-chain" "$FIXTURE" "$VERSION" >/dev/null
+ruby -rjson -e '
+  path = ARGV.fetch(0)
+  bom = JSON.parse(File.read(path))
+  root_ref = bom.dig("metadata", "component", "bom-ref")
+  root = bom.fetch("dependencies").find { |dependency| dependency["ref"] == root_ref }
+  root.fetch("dependsOn").reject! { |reference| reference.start_with?("pkg:npm/") }
+  File.write(path, JSON.pretty_generate(bom))
+' "$FIXTURE/build/reports/supply-chain/magrathea-sbom.cdx.json"
+expect_normalized_rejected "root dependency graph mismatch"
+
+reset_fixture
+"$FIXTURE/scripts/verify-supply-chain" "$FIXTURE" "$VERSION" >/dev/null
+ruby -rjson -e '
+  path = ARGV.fetch(0)
+  bom = JSON.parse(File.read(path))
+  leaf = bom.fetch("dependencies").find { |dependency| dependency["ref"].start_with?("pkg:npm/") }
+  leaf["dependsOn"] = [bom.dig("metadata", "component", "bom-ref")]
+  File.write(path, JSON.pretty_generate(bom))
+' "$FIXTURE/build/reports/supply-chain/magrathea-sbom.cdx.json"
+expect_normalized_rejected "leaf dependency graph mismatch"
+
 rm -rf "$FIXTURE"
-printf 'MAGRATHEA_SUPPLY_CHAIN_CONTRACT_PASS negative_cases=3\n'
+printf 'MAGRATHEA_SUPPLY_CHAIN_CONTRACT_PASS negative_cases=8\n'
