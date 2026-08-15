@@ -65,6 +65,7 @@ public final class saien/magrathea/chatbot/ChatbotException : java/lang/IllegalS
 }
 
 public final class saien/magrathea/chatbot/ChatbotFailure : java/lang/Enum {
+	public static final field ACCESS_DENIED Lsaien/magrathea/chatbot/ChatbotFailure;
 	public static final field AUTHENTICATION Lsaien/magrathea/chatbot/ChatbotFailure;
 	public static final field BUSY Lsaien/magrathea/chatbot/ChatbotFailure;
 	public static final field CLOSED Lsaien/magrathea/chatbot/ChatbotFailure;

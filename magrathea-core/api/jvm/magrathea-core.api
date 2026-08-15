@@ -508,6 +508,7 @@ public final class saien/magrathea/core/AgentFailureCode : java/lang/Enum {
 	public static final field PROVIDER_CLIENT Lsaien/magrathea/core/AgentFailureCode;
 	public static final field PROVIDER_NETWORK Lsaien/magrathea/core/AgentFailureCode;
 	public static final field PROVIDER_NOT_FOUND Lsaien/magrathea/core/AgentFailureCode;
+	public static final field PROVIDER_PERMISSION Lsaien/magrathea/core/AgentFailureCode;
 	public static final field PROVIDER_PROTOCOL Lsaien/magrathea/core/AgentFailureCode;
 	public static final field PROVIDER_RATE_LIMIT Lsaien/magrathea/core/AgentFailureCode;
 	public static final field PROVIDER_SERVER Lsaien/magrathea/core/AgentFailureCode;

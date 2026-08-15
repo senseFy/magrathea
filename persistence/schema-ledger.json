@@ -85,7 +85,7 @@
             "versionPattern": "internal\\s+const\\s+val\\s+STORAGE_SCHEMA_V6_VERSION\\s*:\\s*Int\\s*=\\s*([0-9]+)",
             "descriptorFixture": {
               "path": "serialization-fixtures/v6/core/storage-schema-descriptor.sha256",
-              "sha256": "eeaa79450d6dbea8733fc15c33ce9986e9cb72a14c76d3ace75d9154287054f8"
+              "sha256": "0139cd2f86ad6d91936deafe614794767f93659e901b0ca6378dc6c0a86752d1"
             }
           },
           "fixtures": [

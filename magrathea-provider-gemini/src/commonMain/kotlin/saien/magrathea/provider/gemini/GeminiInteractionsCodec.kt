@@ -20,6 +20,7 @@ import saien.magrathea.provider.api.ProviderClientException
 import saien.magrathea.provider.api.ProviderContextLimitException
 import saien.magrathea.provider.api.ProviderEvent
 import saien.magrathea.provider.api.ProviderNetworkException
+import saien.magrathea.provider.api.ProviderPermissionException
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRateLimitException
 import saien.magrathea.provider.api.ProviderServerException
@@ -427,7 +428,7 @@ private fun throwGeminiInteractionFailure(error: JsonObject): Nothing {
             message = "Gemini authentication failed",
             statusCode = 401,
         )
-        "PERMISSION_DENIED" -> ProviderAuthException(
+        "PERMISSION_DENIED" -> ProviderPermissionException(
             message = "Gemini permission was denied",
             statusCode = 403,
         )

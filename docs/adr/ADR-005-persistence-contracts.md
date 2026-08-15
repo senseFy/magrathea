@@ -79,6 +79,17 @@ isolation as frozen leaf DTOs for every nested subtype. New schema work should r
 internals with immutable leaf DTOs incrementally; any observable wire change still requires a new
 adjacent schema.
 
+## Additive enum evolution within a frozen schema
+
+The descriptor fingerprint may be refrozen without a new adjacent schema only when a change is
+additive and provably unobservable in persisted payloads. The one accepted case so far is adding
+`AgentFailureCode.PROVIDER_PERMISSION`: the only persisted reference to that enum is
+`ProviderInterruption.code`, whose constructor restricts values to the recoverable set
+(`PROVIDER_NETWORK`, `TIMEOUT`, `PROVIDER_RATE_LIMIT`, `PROVIDER_SERVER`), so the new value can
+never be written to storage and older releases can decode every payload a newer release produces.
+`CoreContractsTest.providerInterruptionRejectsNonRecoverableFailureCodes` pins that guarantee;
+widening the recoverable set is an observable wire change and requires a new adjacent schema.
+
 ## Historical clean breaks
 
 Schemas 3→4, 4→5, and 5→6 were alpha clean breaks rather than migrations. Recovery-state, typed Tool

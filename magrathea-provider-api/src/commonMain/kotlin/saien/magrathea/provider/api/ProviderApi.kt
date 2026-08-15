@@ -516,6 +516,19 @@ class ProviderAuthException(
     retryAfterMillis: Long? = null,
 ) : ProviderHttpException(message, cause, statusCode, retryAfterMillis)
 
+/**
+ * The Provider recognized the credential but refused this request's access, for example a key
+ * restricted to specific models, an account policy blocking a model's upstream routes, or a plan
+ * without access to the requested resource. Distinct from [ProviderAuthException] so consumers
+ * can guide users toward account permissions instead of credential rotation.
+ */
+class ProviderPermissionException(
+    message: String,
+    cause: Throwable? = null,
+    statusCode: Int = 403,
+    retryAfterMillis: Long? = null,
+) : ProviderHttpException(message, cause, statusCode, retryAfterMillis)
+
 class ProviderClientException(
     message: String,
     cause: Throwable? = null,

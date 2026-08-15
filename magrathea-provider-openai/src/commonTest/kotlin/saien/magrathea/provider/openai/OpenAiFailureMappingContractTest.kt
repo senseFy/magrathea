@@ -6,6 +6,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import saien.magrathea.provider.api.ProviderAuthException
 import saien.magrathea.provider.api.ProviderClientException
+import saien.magrathea.provider.api.ProviderPermissionException
 import saien.magrathea.provider.api.ProviderRateLimitException
 import saien.magrathea.provider.api.ProviderServerException
 
@@ -14,7 +15,7 @@ class OpenAiFailureMappingContractTest {
     fun canonicalErrorTypeDeterminesTheTypedFailureAndStatus() {
         assertEquals(
             403,
-            failure<ProviderAuthException>("server_error", "permission_denied").statusCode,
+            failure<ProviderPermissionException>("server_error", "permission_denied").statusCode,
         )
         assertEquals(
             429,

@@ -256,7 +256,11 @@ fun HttpResponseSpec.requireSuccessful(
     throw when {
         statusCode in setOf(400, 413, 422) && isProviderContextLimitError(body) ->
             ProviderContextLimitException(statusCode = statusCode)
-        statusCode == 401 || statusCode == 403 -> ProviderAuthException(
+        statusCode == 401 -> ProviderAuthException(
+            message = message,
+            statusCode = statusCode,
+        )
+        statusCode == 403 -> ProviderPermissionException(
             message = message,
             statusCode = statusCode,
         )

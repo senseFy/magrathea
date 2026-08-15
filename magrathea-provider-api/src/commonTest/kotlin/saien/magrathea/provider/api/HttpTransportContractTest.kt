@@ -154,7 +154,7 @@ class HttpTransportContractTest {
         }
 
         assertIs<ProviderAuthException>(failure(401))
-        assertIs<ProviderAuthException>(failure(403))
+        assertIs<ProviderPermissionException>(failure(403))
         assertIs<ProviderClientException>(failure(400))
         assertIs<ProviderRateLimitException>(failure(429))
         assertIs<ProviderServerException>(failure(500))

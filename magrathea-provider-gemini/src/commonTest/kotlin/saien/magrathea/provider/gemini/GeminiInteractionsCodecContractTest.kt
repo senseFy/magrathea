@@ -23,6 +23,7 @@ import saien.magrathea.provider.api.ProviderEvent
 import saien.magrathea.provider.api.ProviderEventAssembler
 import saien.magrathea.provider.api.ProviderException
 import saien.magrathea.provider.api.ProviderNetworkException
+import saien.magrathea.provider.api.ProviderPermissionException
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRateLimitException
 import saien.magrathea.provider.api.ProviderServerException
@@ -178,7 +179,7 @@ class GeminiInteractionsCodecContractTest {
         val unknown = interactionFailure("FUTURE_GOOGLE_STATUS", "unknown", canary)
 
         assertEquals(401, assertIs<ProviderAuthException>(authentication).statusCode)
-        assertEquals(403, assertIs<ProviderAuthException>(permission).statusCode)
+        assertEquals(403, assertIs<ProviderPermissionException>(permission).statusCode)
         assertEquals(400, assertIs<ProviderClientException>(client).statusCode)
         assertEquals(429, assertIs<ProviderRateLimitException>(rateLimit).statusCode)
         assertEquals(

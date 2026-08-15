@@ -3,6 +3,7 @@ package saien.magrathea.provider.openai
 import saien.magrathea.provider.api.ProviderAuthException
 import saien.magrathea.provider.api.ProviderClientException
 import saien.magrathea.provider.api.ProviderContextLimitException
+import saien.magrathea.provider.api.ProviderPermissionException
 import saien.magrathea.provider.api.ProviderRateLimitException
 import saien.magrathea.provider.api.ProviderServerException
 import saien.magrathea.provider.api.isProviderContextLimitError
@@ -29,7 +30,7 @@ internal fun throwOpenAiInBandFailure(
         "authentication", "authentication_error", "invalid_api_key", "unauthorized" ->
             throw ProviderAuthException(safeMessage, statusCode = 401)
         "permission_denied", "permission_error" ->
-            throw ProviderAuthException(safeMessage, statusCode = 403)
+            throw ProviderPermissionException(safeMessage, statusCode = 403)
         "rate_limit_exceeded", "rate_limit_error", "too_many_requests", "insufficient_quota" ->
             throw ProviderRateLimitException(safeMessage, statusCode = 429)
         "payment_required" ->
@@ -68,15 +69,19 @@ internal fun throwOpenAiInBandFailure(
     }
 
     throw when {
-        numericCode == 401 || numericCode == 403 ->
+        numericCode == 401 ->
             ProviderAuthException(safeMessage, statusCode = numericCode)
+        numericCode == 403 ->
+            ProviderPermissionException(safeMessage, statusCode = numericCode)
         numericCode == 429 ->
             ProviderRateLimitException(safeMessage, statusCode = numericCode)
         numericCode != null && numericCode in 400..499 ->
             ProviderClientException(safeMessage, statusCode = numericCode)
         numericCode != null && numericCode >= 500 ->
             ProviderServerException(safeMessage, statusCode = numericCode)
-        normalized.containsAny("authentication", "permission denied", "invalid api key", "unauthorized") ->
+        normalized.containsAny("permission denied") ->
+            ProviderPermissionException(safeMessage, statusCode = 403)
+        normalized.containsAny("authentication", "invalid api key", "unauthorized") ->
             ProviderAuthException(safeMessage, statusCode = 401)
         normalized.containsAny(
             "rate_limit",

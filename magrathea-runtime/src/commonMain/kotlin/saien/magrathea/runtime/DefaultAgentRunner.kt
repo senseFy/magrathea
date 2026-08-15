@@ -136,6 +136,7 @@ import saien.magrathea.provider.api.ProviderInvocationInvalidatedException
 import saien.magrathea.provider.api.ProviderInvocationResumeMode
 import saien.magrathea.provider.api.ProviderHttpException
 import saien.magrathea.provider.api.ProviderNetworkException
+import saien.magrathea.provider.api.ProviderPermissionException
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRateLimitException
 import saien.magrathea.provider.api.ProviderRegistry
@@ -3228,6 +3229,7 @@ private fun Throwable.toAgentFailureCode(): AgentFailureCode = when (val failure
     is AgentRuntimeFailure -> failure.code
     is ProviderContextLimitException -> AgentFailureCode.CONTEXT_LIMIT
     is ProviderAuthException -> AgentFailureCode.PROVIDER_AUTH
+    is ProviderPermissionException -> AgentFailureCode.PROVIDER_PERMISSION
     is ProviderRateLimitException -> AgentFailureCode.PROVIDER_RATE_LIMIT
     is ProviderTimeoutException -> AgentFailureCode.TIMEOUT
     is ProviderNetworkException -> AgentFailureCode.PROVIDER_NETWORK

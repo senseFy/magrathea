@@ -16,6 +16,7 @@ import saien.magrathea.provider.api.ProviderChunk
 import saien.magrathea.provider.api.ProviderClientException
 import saien.magrathea.provider.api.ProviderContextLimitException
 import saien.magrathea.provider.api.ProviderEvent
+import saien.magrathea.provider.api.ProviderPermissionException
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRateLimitException
 import saien.magrathea.provider.api.ProviderServerException
@@ -255,9 +256,13 @@ internal class AnthropicMessagesCodec(
             throw ProviderContextLimitException()
         }
         throw when (type) {
-            "authentication_error", "permission_error" -> ProviderAuthException(
+            "authentication_error" -> ProviderAuthException(
                 "Anthropic stream failed with code $type",
-                statusCode = if (type == "permission_error") 403 else 401,
+                statusCode = 401,
+            )
+            "permission_error" -> ProviderPermissionException(
+                "Anthropic stream failed with code $type",
+                statusCode = 403,
             )
             "rate_limit_error" -> ProviderRateLimitException("Anthropic stream failed with code $type")
             "invalid_request_error" -> ProviderClientException(

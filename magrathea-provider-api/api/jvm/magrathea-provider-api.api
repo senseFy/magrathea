@@ -966,6 +966,11 @@ public class saien/magrathea/provider/api/ProviderNetworkException : saien/magra
 	public fun getRetryable ()Z
 }
 
+public final class saien/magrathea/provider/api/ProviderPermissionException : saien/magrathea/provider/api/ProviderHttpException {
+	public fun <init> (Ljava/lang/String;Ljava/lang/Throwable;ILjava/lang/Long;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;ILjava/lang/Long;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
 public final class saien/magrathea/provider/api/ProviderProtocolException : saien/magrathea/provider/api/ProviderException {
 	public fun <init> (Ljava/lang/String;Ljava/lang/Throwable;)V
 	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V

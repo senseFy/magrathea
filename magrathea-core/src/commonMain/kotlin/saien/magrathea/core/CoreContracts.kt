@@ -179,6 +179,9 @@ enum class AgentFailureCode {
     CREDENTIAL_UNAVAILABLE,
     PROVIDER_NOT_FOUND,
     PROVIDER_AUTH,
+
+    /** The credential was accepted but the Provider refused this request's access. */
+    PROVIDER_PERMISSION,
     PROVIDER_RATE_LIMIT,
     TIMEOUT,
     PROVIDER_NETWORK,

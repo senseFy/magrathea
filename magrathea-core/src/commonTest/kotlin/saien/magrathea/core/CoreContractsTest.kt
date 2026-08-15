@@ -21,6 +21,25 @@ class CoreContractsTest {
     }
 
     @Test
+    fun providerInterruptionRejectsNonRecoverableFailureCodes() {
+        // The persisted-schema descriptor was refrozen for additive failure codes on the
+        // guarantee that non-recoverable codes can never enter a persisted interruption.
+        listOf(
+            AgentFailureCode.PROVIDER_AUTH,
+            AgentFailureCode.PROVIDER_PERMISSION,
+            AgentFailureCode.PROVIDER_PROTOCOL,
+            AgentFailureCode.PROVIDER_CLIENT,
+        ).forEach { code ->
+            assertFailsWith<IllegalArgumentException> {
+                ProviderInterruption(
+                    code = code,
+                    phase = ProviderInterruptionPhase.AFTER_FIRST_EVENT,
+                )
+            }
+        }
+    }
+
+    @Test
     fun textShouldJoinTextParts() {
         val message = AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("a"), TextPart("b"), JsonPart(JsonObject(emptyMap()))))
         assertTrue(message.text() == "ab")

@@ -312,6 +312,9 @@ enum class ChatbotFailure {
     CLOSED,
     NOT_FOUND,
     AUTHENTICATION,
+
+    /** The credential works but the Provider refused access to the requested resource. */
+    ACCESS_DENIED,
     RATE_LIMITED,
     CONTEXT_LIMIT,
     TIMEOUT,
@@ -439,6 +442,7 @@ private fun List<saien.magrathea.core.Citation>.toChatbotCitations(): List<Chatb
 internal fun AgentFailureCode.toChatbotFailure(): ChatbotFailure = when (this) {
     AgentFailureCode.NOT_FOUND -> ChatbotFailure.NOT_FOUND
     AgentFailureCode.PROVIDER_AUTH, AgentFailureCode.CREDENTIAL_UNAVAILABLE -> ChatbotFailure.AUTHENTICATION
+    AgentFailureCode.PROVIDER_PERMISSION -> ChatbotFailure.ACCESS_DENIED
     AgentFailureCode.PROVIDER_RATE_LIMIT -> ChatbotFailure.RATE_LIMITED
     AgentFailureCode.CONTEXT_LIMIT -> ChatbotFailure.CONTEXT_LIMIT
     AgentFailureCode.TIMEOUT -> ChatbotFailure.TIMEOUT
