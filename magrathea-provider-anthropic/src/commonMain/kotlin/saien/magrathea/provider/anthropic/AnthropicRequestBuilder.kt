@@ -15,6 +15,7 @@ import saien.magrathea.core.AttachmentPart
 import saien.magrathea.core.InlineToolImageSource
 import saien.magrathea.core.JsonPart
 import saien.magrathea.core.MessageRole
+import saien.magrathea.core.ReasoningPart
 import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
@@ -103,6 +104,10 @@ internal class AnthropicRequestBuilder(
                     when (part) {
                         is TextPart -> if (part.text.isNotBlank()) add(textBlock(part.text))
                         is JsonPart -> add(textBlock(json.encodeToString(JsonElement.serializer(), part.value)))
+                        // Reasoning cannot be replayed without the same-model authoritative
+                        // blocks (signatures included), so interrupted-stream recovery and
+                        // cross-model replays drop it instead of failing the request.
+                        is ReasoningPart -> Unit
                         is ToolCallPart -> {
                             if (part.partial) throw ProviderProtocolException("Anthropic cannot replay a partial tool call")
                             if (part.arguments !is JsonObject) {

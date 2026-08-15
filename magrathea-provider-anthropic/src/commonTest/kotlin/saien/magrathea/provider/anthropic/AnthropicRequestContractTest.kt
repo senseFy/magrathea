@@ -17,6 +17,7 @@ import saien.magrathea.core.InlineToolImageSource
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ModelInputModality
+import saien.magrathea.core.ReasoningPart
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolResultAudience
@@ -375,6 +376,27 @@ class AnthropicRequestContractTest {
         val content = payload["messages"]!!.jsonArray.single().jsonObject["content"]!!.jsonArray
         assertEquals(listOf("text", "tool_use"), content.map { it.jsonObject["type"]!!.jsonPrimitive.content })
         assertEquals("foreign-call-1", content[1].jsonObject["id"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun interruptedReplayDropsReasoningAndKeepsAnswerText() {
+        val payload = builder.build(
+            request(
+                messages = listOf(
+                    AgentMessage(
+                        role = MessageRole.ASSISTANT,
+                        parts = listOf(
+                            ReasoningPart("Half-finished reasoning."),
+                            TextPart("Partial answer text."),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val content = payload["messages"]!!.jsonArray.single().jsonObject["content"]!!.jsonArray
+        assertEquals(listOf("text"), content.map { it.jsonObject["type"]!!.jsonPrimitive.content })
+        assertEquals("Partial answer text.", content[0].jsonObject["text"]!!.jsonPrimitive.content)
     }
 
     private fun request(

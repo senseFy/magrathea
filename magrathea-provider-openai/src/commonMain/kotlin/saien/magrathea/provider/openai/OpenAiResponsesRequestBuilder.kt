@@ -15,6 +15,7 @@ import saien.magrathea.core.AttachmentPart
 import saien.magrathea.core.InlineToolImageSource
 import saien.magrathea.core.JsonPart
 import saien.magrathea.core.MessageRole
+import saien.magrathea.core.ReasoningPart
 import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
@@ -122,8 +123,15 @@ internal class OpenAiResponsesRequestBuilder(
             )
         }
 
+        // The Responses API can only replay reasoning through the same-model
+        // authoritative output item, so interrupted-stream recovery and cross-model
+        // replays drop it rather than fail; a message with nothing left (a stream
+        // cut during the reasoning phase) is skipped entirely.
+        val replayableParts = message.parts.filterNot { part -> part is ReasoningPart }
+        if (replayableParts.isEmpty() && message.parts.isNotEmpty()) return emptyList()
+
         return buildList {
-            val visibleContent = message.parts.mapNotNull { part ->
+            val visibleContent = replayableParts.mapNotNull { part ->
                 when (part) {
                     is TextPart -> part.text.takeIf(String::isNotBlank)
                     is JsonPart -> json.encodeToString(JsonElement.serializer(), part.value)
@@ -139,7 +147,7 @@ internal class OpenAiResponsesRequestBuilder(
                     put("content", visibleContent)
                 })
             }
-            message.parts.filterIsInstance<ToolCallPart>().forEach { call ->
+            replayableParts.filterIsInstance<ToolCallPart>().forEach { call ->
                 if (call.partial) throw ProviderProtocolException("OpenAI cannot replay a partial tool call")
                 if (call.arguments !is JsonObject) {
                     throw ProviderProtocolException("OpenAI tool arguments must be an object")

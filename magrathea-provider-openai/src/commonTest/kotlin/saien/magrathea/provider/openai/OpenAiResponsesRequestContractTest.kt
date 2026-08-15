@@ -20,6 +20,7 @@ import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ModelInputModality
 import saien.magrathea.core.ReasoningCapabilities
+import saien.magrathea.core.ReasoningPart
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolResultAudience
@@ -468,6 +469,49 @@ class OpenAiResponsesRequestContractTest {
         assertEquals("assistant", input[0].jsonObject["role"]!!.jsonPrimitive.content)
         assertEquals("function_call", input[1].jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("foreign-call-1", input[1].jsonObject["call_id"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun interruptedReplayDropsReasoningAndKeepsAnswerText() {
+        val payload = builder.build(
+            request(
+                messages = listOf(
+                    AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("Question"))),
+                    AgentMessage(
+                        role = MessageRole.ASSISTANT,
+                        parts = listOf(
+                            ReasoningPart("Half-finished reasoning summary."),
+                            TextPart("Partial answer text."),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val input = payload["input"]!!.jsonArray
+        assertEquals(2, input.size)
+        val assistant = input[1].jsonObject
+        assertEquals("assistant", assistant["role"]!!.jsonPrimitive.content)
+        assertEquals("Partial answer text.", assistant["content"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun interruptedReplayWithOnlyReasoningSkipsTheMessage() {
+        val payload = builder.build(
+            request(
+                messages = listOf(
+                    AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("Question"))),
+                    AgentMessage(
+                        role = MessageRole.ASSISTANT,
+                        parts = listOf(ReasoningPart("Stream ended during reasoning.")),
+                    ),
+                ),
+            ),
+        )
+
+        val input = payload["input"]!!.jsonArray
+        assertEquals(1, input.size)
+        assertEquals("user", input[0].jsonObject["role"]!!.jsonPrimitive.content)
     }
 
     private fun request(
