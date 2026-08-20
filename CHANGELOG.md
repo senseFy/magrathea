@@ -5,6 +5,8 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## 0.1.0-alpha.4 — 2026-08-19
+
 ### Added
 
 - Provider failures now distinguish accepted credentials with denied resource access from

@@ -3,7 +3,7 @@ plugins {
     application
 }
 
-val magratheaVersion = providers.gradleProperty("magrathea.version").orElse("0.1.0-alpha.3")
+val magratheaVersion = providers.gradleProperty("magrathea.version").orElse("0.1.0-alpha.4")
 providers.gradleProperty("magrathea.consumer.buildDir").orNull?.let { consumerBuildDirectory ->
     layout.buildDirectory.set(file(consumerBuildDirectory))
 }
