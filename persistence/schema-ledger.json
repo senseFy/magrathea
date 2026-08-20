@@ -2,6 +2,18 @@
   "ledgerFormatVersion": 1,
   "policyDocument": "docs/adr/ADR-005-persistence-contracts.md#schema-evolution",
   "migrationIds": [],
+  "descriptorRefreezes": [
+    {
+      "id": "agent-storage.v6.provider-permission-enum",
+      "domain": "agent-storage-envelopes",
+      "version": 6,
+      "descriptorPath": "serialization-fixtures/v6/core/storage-schema-descriptor.sha256",
+      "fromSha256": "eeaa79450d6dbea8733fc15c33ce9986e9cb72a14c76d3ace75d9154287054f8",
+      "toSha256": "0139cd2f86ad6d91936deafe614794767f93659e901b0ca6378dc6c0a86752d1",
+      "decision": "docs/adr/ADR-005-persistence-contracts.md#additive-enum-evolution-within-a-frozen-schema",
+      "reason": "PROVIDER_PERMISSION cannot occur in the only persisted AgentFailureCode field, so persisted payloads remain unchanged."
+    }
+  ],
   "domains": [
     {
       "id": "agent-storage-envelopes",

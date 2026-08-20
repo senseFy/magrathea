@@ -338,17 +338,109 @@ def verify_fixture(
     return kind
 
 
+def validate_descriptor_refreezes(
+    root: Path,
+    raw_refreezes: Any,
+    domains: list[Any],
+    label: str,
+    verify_documents: bool,
+) -> list[dict[str, Any]]:
+    refreezes = expect_array(raw_refreezes, label)
+    domain_lookup = {
+        expect_string(expect_object(domain, f"{label}.domain")["id"], f"{label}.domain.id"): domain
+        for domain in domains
+    }
+    ids: list[str] = []
+    last_digest_by_target: dict[tuple[str, int, str], str] = {}
+    targets: dict[tuple[str, int, str], dict[str, Any]] = {}
+
+    for index, raw_refreeze in enumerate(refreezes):
+        refreeze_label = f"{label}[{index}]"
+        refreeze = expect_object(raw_refreeze, refreeze_label)
+        expect_exact_keys(
+            refreeze,
+            {
+                "id",
+                "domain",
+                "version",
+                "descriptorPath",
+                "fromSha256",
+                "toSha256",
+                "decision",
+                "reason",
+            },
+            refreeze_label,
+        )
+        refreeze_id = expect_string(refreeze["id"], f"{refreeze_label}.id")
+        if not re.fullmatch(r"[a-z](?:[a-z0-9.-]{1,126}[a-z0-9])", refreeze_id):
+            fail(f"{refreeze_label}.id must be a stable lowercase ID")
+        if refreeze_id in ids:
+            fail(f"{refreeze_label}.id is duplicated")
+        ids.append(refreeze_id)
+
+        domain_id = expect_string(refreeze["domain"], f"{refreeze_label}.domain")
+        domain = domain_lookup.get(domain_id)
+        if domain is None:
+            fail(f"{refreeze_label}.domain is unknown")
+        version = expect_positive_int(refreeze["version"], f"{refreeze_label}.version")
+        version_entry = next(
+            (entry for entry in domain["versions"] if entry.get("version") == version),
+            None,
+        )
+        if version_entry is None:
+            fail(f"{refreeze_label} targets an unknown schema version")
+        adapter = expect_object(version_entry.get("adapter"), f"{refreeze_label}.adapter")
+        descriptor = expect_object(
+            adapter.get("descriptorFixture"), f"{refreeze_label}.descriptorFixture"
+        )
+        descriptor_path = expect_string(
+            refreeze["descriptorPath"], f"{refreeze_label}.descriptorPath"
+        )
+        if descriptor.get("path") != descriptor_path:
+            fail(f"{refreeze_label}.descriptorPath does not match the schema adapter")
+
+        from_digest = expect_string(refreeze["fromSha256"], f"{refreeze_label}.fromSha256")
+        to_digest = expect_string(refreeze["toSha256"], f"{refreeze_label}.toSha256")
+        if not re.fullmatch(r"[0-9a-f]{64}", from_digest) or not re.fullmatch(
+            r"[0-9a-f]{64}", to_digest
+        ):
+            fail(f"{refreeze_label} digests must be lowercase SHA-256")
+        if from_digest == to_digest:
+            fail(f"{refreeze_label} must change the descriptor digest")
+
+        target = (domain_id, version, descriptor_path)
+        previous_digest = last_digest_by_target.get(target)
+        if previous_digest is not None and from_digest != previous_digest:
+            fail(f"{refreeze_label}.fromSha256 does not continue its refreeze history")
+        last_digest_by_target[target] = to_digest
+        targets[target] = descriptor
+
+        reason = expect_string(refreeze["reason"], f"{refreeze_label}.reason")
+        if len(reason.strip()) < 40:
+            fail(f"{refreeze_label}.reason must explain why persisted bytes are unchanged")
+        if verify_documents:
+            verify_document_anchor(root, refreeze["decision"], f"{refreeze_label}.decision")
+
+    for target, final_digest in last_digest_by_target.items():
+        if targets[target].get("sha256") != final_digest:
+            fail(f"{label} final digest does not match the current schema ledger for {target}")
+    return refreezes
+
+
 def validate_ledger(
     root: Path,
     ledger: dict[str, Any],
     label: str,
     verify_sources_and_files: bool = True,
 ) -> dict[str, Any]:
-    expect_exact_keys(
-        ledger,
-        {"ledgerFormatVersion", "policyDocument", "migrationIds", "domains"},
-        label,
-    )
+    required_keys = {"ledgerFormatVersion", "policyDocument", "migrationIds", "domains"}
+    optional_keys = {"descriptorRefreezes"}
+    actual_keys = set(ledger)
+    if not required_keys.issubset(actual_keys) or actual_keys - required_keys - optional_keys:
+        fail(
+            f"{label} keys must be {sorted(required_keys)} with optional "
+            f"{sorted(optional_keys)}, got {sorted(actual_keys)}"
+        )
     if ledger["ledgerFormatVersion"] != 1:
         fail(f"{label}.ledgerFormatVersion must be 1")
     if verify_sources_and_files:
@@ -560,6 +652,13 @@ def validate_ledger(
                 f"{domain_label}.migrationProbe",
             )
 
+    ledger["descriptorRefreezes"] = validate_descriptor_refreezes(
+        root,
+        ledger.get("descriptorRefreezes", []),
+        domains,
+        f"{label}.descriptorRefreezes",
+        verify_sources_and_files,
+    )
     if set(migration_ids) != used_migrations:
         fail(f"{label}.migrationIds must exactly match migration transitions")
     return ledger
@@ -572,6 +671,12 @@ def verify_append_only(baseline: dict[str, Any], current: dict[str, Any]) -> Non
     old_migrations = baseline["migrationIds"]
     if current["migrationIds"][: len(old_migrations)] != old_migrations:
         fail("append-only migration ID history changed")
+    old_refreezes = baseline["descriptorRefreezes"]
+    current_refreezes = current["descriptorRefreezes"]
+    if current_refreezes[: len(old_refreezes)] != old_refreezes:
+        fail("append-only descriptor refreeze history changed")
+    appended_refreezes = current_refreezes[len(old_refreezes) :]
+    used_refreeze_ids: set[str] = set()
     current_domains = {domain["id"]: domain for domain in current["domains"]}
     for old_domain in baseline["domains"]:
         domain_id = old_domain["id"]
@@ -595,11 +700,44 @@ def verify_append_only(baseline: dict[str, Any], current: dict[str, Any]) -> Non
         if new_current == old_current and old_domain["currentCodecProbe"] != new_domain["currentCodecProbe"]:
             fail(f"domain {domain_id!r} changed its codec binding without a schema version bump")
         old_versions = old_domain["versions"]
-        if new_domain["versions"][: len(old_versions)] != old_versions:
+        expected_old_versions = copy.deepcopy(old_versions)
+        for refreeze in appended_refreezes:
+            if refreeze["domain"] != domain_id:
+                continue
+            version_entry = next(
+                (
+                    entry
+                    for entry in expected_old_versions
+                    if entry["version"] == refreeze["version"]
+                ),
+                None,
+            )
+            if version_entry is None:
+                fail(
+                    f"descriptor refreeze {refreeze['id']!r} does not target frozen baseline history"
+                )
+            adapter = version_entry.get("adapter")
+            descriptor = adapter.get("descriptorFixture") if adapter else None
+            if descriptor is None or descriptor.get("path") != refreeze["descriptorPath"]:
+                fail(f"descriptor refreeze {refreeze['id']!r} targets a different descriptor")
+            previous_digest = descriptor.get("sha256")
+            if previous_digest == refreeze["fromSha256"]:
+                descriptor["sha256"] = refreeze["toSha256"]
+            elif previous_digest != refreeze["toSha256"]:
+                fail(f"descriptor refreeze {refreeze['id']!r} has the wrong previous digest")
+            used_refreeze_ids.add(refreeze["id"])
+        if new_domain["versions"][: len(old_versions)] != expected_old_versions:
             fail(f"append-only domain {domain_id!r} changed frozen version/fixture history")
         old_transitions = old_domain["transitions"]
         if new_domain["transitions"][: len(old_transitions)] != old_transitions:
             fail(f"append-only domain {domain_id!r} changed transition history")
+    unused_refreezes = [
+        refreeze["id"]
+        for refreeze in appended_refreezes
+        if refreeze["id"] not in used_refreeze_ids
+    ]
+    if unused_refreezes:
+        fail(f"descriptor refreezes do not authorize frozen baseline changes: {unused_refreezes}")
 
 
 def run_contract_self_test(root: Path, ledger: dict[str, Any]) -> None:
@@ -620,6 +758,76 @@ def run_contract_self_test(root: Path, ledger: dict[str, Any]) -> None:
         pass
     else:
         fail("self-test: append-only gate accepted a rewritten frozen adapter checksum")
+
+    changed_descriptor = copy.deepcopy(ledger)
+    changed_descriptor["domains"][0]["versions"][-1]["adapter"]["descriptorFixture"][
+        "sha256"
+    ] = "0" * 64
+    try:
+        verify_append_only(ledger, changed_descriptor)
+    except VerificationError:
+        pass
+    else:
+        fail("self-test: append-only gate accepted an unauthorized descriptor refreeze")
+
+    recorded_descriptor = copy.deepcopy(ledger)
+    descriptor = recorded_descriptor["domains"][0]["versions"][-1]["adapter"][
+        "descriptorFixture"
+    ]
+    previous_descriptor_digest = descriptor["sha256"]
+    replacement_descriptor_digest = "0" * 64
+    descriptor["sha256"] = replacement_descriptor_digest
+    recorded_descriptor["descriptorRefreezes"].append(
+        {
+            "id": "self-test.descriptor-refreeze",
+            "domain": recorded_descriptor["domains"][0]["id"],
+            "version": recorded_descriptor["domains"][0]["versions"][-1]["version"],
+            "descriptorPath": descriptor["path"],
+            "fromSha256": previous_descriptor_digest,
+            "toSha256": replacement_descriptor_digest,
+            "decision": (
+                "docs/adr/ADR-005-persistence-contracts.md"
+                "#additive-enum-evolution-within-a-frozen-schema"
+            ),
+            "reason": (
+                "Self-test only: persisted payloads remain unchanged under this exact refreeze."
+            ),
+        }
+    )
+    normalized_recorded_descriptor = validate_ledger(
+        root,
+        recorded_descriptor,
+        "self-test recorded descriptor refreeze",
+        verify_sources_and_files=False,
+    )
+    verify_append_only(ledger, normalized_recorded_descriptor)
+
+    backfill_baseline = copy.deepcopy(ledger)
+    backfill_baseline["descriptorRefreezes"] = backfill_baseline["descriptorRefreezes"][:-1]
+    verify_append_only(backfill_baseline, ledger)
+
+    wrong_previous_digest = copy.deepcopy(normalized_recorded_descriptor)
+    wrong_previous_digest["descriptorRefreezes"][-1]["fromSha256"] = "1" * 64
+    try:
+        validate_ledger(
+            root,
+            wrong_previous_digest,
+            "self-test descriptor refreeze with wrong previous digest",
+            verify_sources_and_files=False,
+        )
+    except VerificationError:
+        pass
+    else:
+        fail("self-test: schema gate accepted a descriptor refreeze with the wrong prior digest")
+
+    rewritten_refreeze = copy.deepcopy(ledger)
+    rewritten_refreeze["descriptorRefreezes"][0]["reason"] += " Rewritten."
+    try:
+        verify_append_only(ledger, rewritten_refreeze)
+    except VerificationError:
+        pass
+    else:
+        fail("self-test: append-only gate accepted rewritten descriptor refreeze history")
 
     changed_codec = copy.deepcopy(ledger)
     changed_codec["domains"][0]["currentCodecProbe"]["requiredPatterns"].append(
@@ -815,7 +1023,8 @@ def main() -> int:
     print(
         f"Verified {len(current['domains'])} persistence domain, "
         f"{fixture_count} frozen envelope fixtures, serializer-descriptor fixtures="
-        f"{descriptor_count}, and append-only schema policy."
+        f"{descriptor_count}, descriptor-refreezes={len(current['descriptorRefreezes'])}, "
+        "and append-only schema policy."
     )
     return 0
 

@@ -82,8 +82,11 @@ adjacent schema.
 ## Additive enum evolution within a frozen schema
 
 The descriptor fingerprint may be refrozen without a new adjacent schema only when a change is
-additive and provably unobservable in persisted payloads. The one accepted case so far is adding
-`AgentFailureCode.PROVIDER_PERMISSION`: the only persisted reference to that enum is
+additive and provably unobservable in persisted payloads. Each exception must append a
+`descriptorRefreezes` record to the schema ledger that binds the domain, schema version, descriptor
+path, previous and replacement SHA-256 values, and this decision. CI permits only that exact
+descriptor change; the authorization history itself is append-only. The one accepted case so far is
+adding `AgentFailureCode.PROVIDER_PERMISSION`: the only persisted reference to that enum is
 `ProviderInterruption.code`, whose constructor restricts values to the recoverable set
 (`PROVIDER_NETWORK`, `TIMEOUT`, `PROVIDER_RATE_LIMIT`, `PROVIDER_SERVER`), so the new value can
 never be written to storage and older releases can decode every payload a newer release produces.
