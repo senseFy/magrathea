@@ -1,22 +1,34 @@
-name: Build Magrathea Release Candidate
+name: Release Magrathea SDK
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer version to release, without the leading v
+        required: true
+        type: string
 
 permissions:
   contents: read
-  actions: read
-  id-token: write
-  attestations: write
 
 concurrency:
-  group: magrathea-release-candidate
+  group: magrathea-release-${{ inputs.version }}
   cancel-in-progress: false
 
 jobs:
-  release-bundle:
+  release-candidate:
     runs-on: macos-15
     timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      commit: ${{ steps.release.outputs.commit }}
+      ci_run_id: ${{ steps.release.outputs.ci_run_id }}
     steps:
       - name: Check out source
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -35,11 +47,40 @@ jobs:
       - name: Set up Gradle build cache
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
 
-      - name: Require successful CI for the exact main commit
-        id: ci
+      - name: Validate release request and require successful exact-SHA CI
+        id: release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
+          if [[ ! "$REQUESTED_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "$REQUESTED_VERSION is not a supported SemVer version." >&2
+            exit 1
+          fi
+          CONFIGURED_VERSION="$(
+            awk -F= '$1 == "magrathea.version" {
+              print substr($0, index($0, "=") + 1)
+              exit
+            }' gradle.properties
+          )"
+          if [[ "$REQUESTED_VERSION" != "$CONFIGURED_VERSION" ]]; then
+            echo "Requested version $REQUESTED_VERSION does not match magrathea.version=$CONFIGURED_VERSION." >&2
+            exit 1
+          fi
+          RELEASE_DATE="$(
+            awk -v prefix="## $REQUESTED_VERSION — " '
+              index($0, prefix) == 1 {
+                print substr($0, length(prefix) + 1)
+                exit
+              }
+            ' CHANGELOG.md
+          )"
+          if [[ ! "$RELEASE_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            echo "CHANGELOG entry for $REQUESTED_VERSION has no release date." >&2
+            exit 1
+          fi
+          test -s "docs/releases/v$REQUESTED_VERSION.md"
+
           RELEASE_COMMIT="$(git rev-parse HEAD)"
           git fetch --no-tags origin main
           git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main
@@ -63,15 +104,17 @@ jobs:
             echo "No successful Verify Magrathea SDK run exists for $RELEASE_COMMIT." >&2
             exit 1
           fi
+          echo "version=$REQUESTED_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$REQUESTED_VERSION" >> "$GITHUB_OUTPUT"
           echo "commit=$RELEASE_COMMIT" >> "$GITHUB_OUTPUT"
-          echo "run_id=$CI_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "ci_run_id=$CI_RUN_ID" >> "$GITHUB_OUTPUT"
 
       - name: Build and verify the immutable release candidate
         timeout-minutes: 110
         env:
           MAGRATHEA_SIGNING_KEY: ${{ secrets.MAGRATHEA_SIGNING_KEY }}
           MAGRATHEA_SIGNING_PASSWORD: ${{ secrets.MAGRATHEA_SIGNING_PASSWORD }}
-          VERIFIED_CI_RUN_ID: ${{ steps.ci.outputs.run_id }}
+          VERIFIED_CI_RUN_ID: ${{ steps.release.outputs.ci_run_id }}
         run: |
           scripts/run-with-heartbeat \
             --label release-candidate-preparation \
@@ -85,14 +128,9 @@ jobs:
       - name: Verify the completed candidate against the release key
         timeout-minutes: 15
         env:
-          RELEASE_COMMIT: ${{ steps.ci.outputs.commit }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
         run: |
-          RELEASE_VERSION="$(
-            awk -F= '$1 == "magrathea.version" {
-              print substr($0, index($0, "=") + 1)
-              exit
-            }' gradle.properties
-          )"
           CANDIDATE="$GITHUB_WORKSPACE/build/distributions/Magrathea-$RELEASE_VERSION-release-candidate.zip"
           scripts/verify-release-candidate \
             "$GITHUB_WORKSPACE" \
@@ -100,14 +138,13 @@ jobs:
             "$CANDIDATE.sha256" \
             "$RELEASE_COMMIT" \
             "$RELEASE_VERSION" \
-            "$GITHUB_RUN_ID" \
             "$RUNNER_TEMP/verified-release-candidate"
 
-      - name: Retain release-candidate failure diagnostics
+      - name: Retain release failure diagnostics
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: magrathea-release-candidate-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          name: magrathea-release-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -133,20 +170,387 @@ jobs:
         with:
           subject-path: build/distributions/Magrathea-*-release-candidate.zip
 
-      - name: Attest release-bundle provenance
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4
-        with:
-          subject-path: build/distributions/Magrathea-*-release-bundle.zip
-
       - name: Summarize release candidate
         env:
-          RELEASE_COMMIT: ${{ steps.ci.outputs.commit }}
-          CI_RUN_ID: ${{ steps.ci.outputs.run_id }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+          CI_RUN_ID: ${{ steps.release.outputs.ci_run_id }}
         run: |
           {
             echo "## Release candidate"
             echo
+            echo "- Version: \`$RELEASE_VERSION\`"
             echo "- Commit: \`$RELEASE_COMMIT\`"
             echo "- Verified CI run: \`$CI_RUN_ID\`"
-            echo "- Candidate run: \`$GITHUB_RUN_ID\` attempt \`$GITHUB_RUN_ATTEMPT\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  prepare-publish:
+    needs: release-candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      packages: read
+    outputs:
+      version: ${{ needs.release-candidate.outputs.version }}
+      tag: ${{ needs.release-candidate.outputs.tag }}
+      commit: ${{ needs.release-candidate.outputs.commit }}
+      publish_mode: ${{ steps.remote.outputs.mode }}
+    steps:
+      - name: Check out the verified release commit
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release-candidate.outputs.commit }}
+
+      - name: Download the verified candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: magrathea-release-candidate
+          path: release-candidate
+
+      - name: Plan a fresh or resumable publication
+        id: remote
+        env:
+          GITHUB_SAIEN_MAVEN_USERNAME: ${{ github.actor }}
+          GITHUB_SAIEN_MAVEN_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ needs.release-candidate.outputs.version }}
+        run: |
+          CANDIDATE="$GITHUB_WORKSPACE/release-candidate/Magrathea-$RELEASE_VERSION-release-candidate.zip"
+          (
+            cd "$GITHUB_WORKSPACE/release-candidate"
+            shasum -a 256 -c "$(basename "$CANDIDATE").sha256"
+          )
+          EVIDENCE="$RUNNER_TEMP/candidate-evidence"
+          STAGED="$RUNNER_TEMP/candidate-bundle"
+          unzip -q "$CANDIDATE" -d "$EVIDENCE"
+          unzip -q \
+            "$EVIDENCE/distributions/Magrathea-$RELEASE_VERSION-release-bundle.zip" \
+            "maven/*" \
+            -d "$STAGED"
+          COORDINATES="$EVIDENCE/distributions/Magrathea-$RELEASE_VERSION-maven-coordinates.txt"
+          MANIFEST="$EVIDENCE/distributions/Magrathea-$RELEASE_VERSION-maven-files.sha256"
+          MAVEN_REPOSITORY="$STAGED/maven"
+          PREFLIGHT_LOG="$RUNNER_TEMP/remote-preflight.log"
+          set +e
+          scripts/verify-remote-version-absent \
+            "https://maven.pkg.github.com/sensefy/magrathea" \
+            "saien.magrathea" \
+            "$RELEASE_VERSION" \
+            < "$COORDINATES" > "$PREFLIGHT_LOG" 2>&1
+          status=$?
+          set -e
+          cat "$PREFLIGHT_LOG"
+          if [[ "$status" -eq 0 ]]; then
+            mode=fresh
+          elif grep -Fq "immutable coordinate already exists" "$PREFLIGHT_LOG"; then
+            scripts/resume-publish-sdk \
+              --project-dir "$GITHUB_WORKSPACE" \
+              --repository-url "https://maven.pkg.github.com/sensefy/magrathea" \
+              --coordinates-file "$COORDINATES" \
+              --local-maven-repository "$MAVEN_REPOSITORY" \
+              --manifest-file "$MANIFEST" \
+              --exact-files \
+              --plan-only
+            mode=resume
+          else
+            exit "$status"
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+      - name: Create or validate the annotated release tag
+        env:
+          RELEASE_VERSION: ${{ needs.release-candidate.outputs.version }}
+          RELEASE_TAG: ${{ needs.release-candidate.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.release-candidate.outputs.commit }}
+        run: |
+          git fetch --no-tags origin main
+          tag_exists=false
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+            tag_exists=true
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$RELEASE_TAG" -m "Magrathea $RELEASE_VERSION"
+          fi
+          [[ "$(scripts/verify-release-tag "$RELEASE_TAG")" == "$RELEASE_VERSION" ]]
+          if [[ "$tag_exists" == false ]]; then
+            git push origin "refs/tags/$RELEASE_TAG"
+          fi
+          REMOTE_COMMIT="$(
+            git ls-remote origin "refs/tags/$RELEASE_TAG^{}" |
+              awk 'NR == 1 { print $1 }'
+          )"
+          [[ "$REMOTE_COMMIT" == "$RELEASE_COMMIT" ]]
+
+      - name: Summarize release authorization
+        env:
+          RELEASE_VERSION: ${{ needs.release-candidate.outputs.version }}
+          RELEASE_TAG: ${{ needs.release-candidate.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.release-candidate.outputs.commit }}
+          PUBLISH_MODE: ${{ steps.remote.outputs.mode }}
+        run: |
+          {
+            echo "## Authorized release"
+            echo
+            echo "- Version: \`$RELEASE_VERSION\`"
+            echo "- Tag: \`$RELEASE_TAG\`"
+            echo "- Commit: \`$RELEASE_COMMIT\`"
+            echo "- Publication mode: \`$PUBLISH_MODE\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish-maven:
+    needs: prepare-publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include:
+          - name: foundation
+            modules: >-
+              magrathea-core magrathea-provider-api magrathea-credentials
+              magrathea-storage-web magrathea-gateway-server
+          - name: runtime
+            modules: >-
+              magrathea-runtime magrathea-mcp magrathea-provider-openai
+              magrathea-web-client
+          - name: policy-protocol
+            modules: >-
+              magrathea-policy magrathea-gateway-protocol magrathea-provider-gemini
+          - name: product
+            modules: >-
+              magrathea-provider-gateway magrathea-chatbot
+              magrathea-provider-anthropic magrathea-storage-room
+    name: publish-maven (${{ matrix.name }})
+    steps:
+      - name: Check out the verified release commit
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare-publish.outputs.commit }}
+
+      - name: Download the verified candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: magrathea-release-candidate
+          path: release-candidate
+
+      - name: Publish exact signed Maven files
+        env:
+          GITHUB_SAIEN_MAVEN_USERNAME: ${{ github.actor }}
+          GITHUB_SAIEN_MAVEN_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ needs.prepare-publish.outputs.version }}
+          PUBLISH_MODE: ${{ needs.prepare-publish.outputs.publish_mode }}
+          RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          SHARD_MODULES: ${{ matrix.modules }}
+          SHARD_NAME: ${{ matrix.name }}
+        run: |
+          CANDIDATE="$GITHUB_WORKSPACE/release-candidate/Magrathea-$RELEASE_VERSION-release-candidate.zip"
+          CHECKSUM="$CANDIDATE.sha256"
+          (
+            cd "$GITHUB_WORKSPACE/release-candidate"
+            shasum -a 256 -c "$(basename "$CHECKSUM")"
+          )
+          EVIDENCE="$RUNNER_TEMP/candidate-evidence"
+          STAGED="$RUNNER_TEMP/candidate-bundle"
+          unzip -q "$CANDIDATE" -d "$EVIDENCE"
+          unzip -q \
+            "$EVIDENCE/distributions/Magrathea-$RELEASE_VERSION-release-bundle.zip" \
+            "maven/*" \
+            -d "$STAGED"
+          read -r -a modules <<< "$SHARD_MODULES"
+          COORDINATES="$RUNNER_TEMP/$SHARD_NAME-coordinates.txt"
+          scripts/select-publishing-coordinates \
+            "$EVIDENCE/distributions/Magrathea-$RELEASE_VERSION-maven-coordinates.txt" \
+            "${modules[@]}" \
+            > "$COORDINATES"
+          publisher_args=(
+            --project-dir "$GITHUB_WORKSPACE"
+            --repository-url "https://maven.pkg.github.com/sensefy/magrathea"
+            --coordinates-file "$COORDINATES"
+            --local-maven-repository "$STAGED/maven"
+            --manifest-file "$EVIDENCE/distributions/Magrathea-$RELEASE_VERSION-maven-files.sha256"
+            --exact-files
+          )
+          EFFECTIVE_MODE="$PUBLISH_MODE"
+          if [[ "$PUBLISH_MODE" == fresh && "$RELEASE_RUN_ATTEMPT" != 1 ]]; then
+            EFFECTIVE_MODE=resume
+          fi
+          if [[ "$EFFECTIVE_MODE" == fresh ]]; then
+            publisher_args+=(--fresh)
+          fi
+          scripts/run-with-heartbeat \
+            --label "maven-$SHARD_NAME" \
+            --interval 300 \
+            -- \
+            scripts/resume-publish-sdk "${publisher_args[@]}"
+          {
+            echo "## Maven shard: $SHARD_NAME"
+            echo
+            echo "- Coordinates: \`$(wc -l < "$COORDINATES" | tr -d ' ')\`"
+            echo "- Mode: \`$EFFECTIVE_MODE\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  github-release:
+    needs: [prepare-publish, publish-maven]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      packages: read
+    steps:
+      - name: Check out the verified release commit
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare-publish.outputs.commit }}
+
+      - name: Download the verified candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: magrathea-release-candidate
+          path: release-candidate
+
+      - name: Extract release assets
+        env:
+          RELEASE_VERSION: ${{ needs.prepare-publish.outputs.version }}
+        run: |
+          CANDIDATE="$GITHUB_WORKSPACE/release-candidate/Magrathea-$RELEASE_VERSION-release-candidate.zip"
+          (
+            cd "$GITHUB_WORKSPACE/release-candidate"
+            shasum -a 256 -c "$(basename "$CANDIDATE").sha256"
+          )
+          mkdir release-assets
+          unzip -q "$CANDIDATE" -d release-assets
+
+      - name: Validate published Maven coordinates
+        env:
+          GITHUB_SAIEN_MAVEN_USERNAME: ${{ github.actor }}
+          GITHUB_SAIEN_MAVEN_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ needs.prepare-publish.outputs.version }}
+        run: |
+          scripts/verify-remote-version-present \
+            "https://maven.pkg.github.com/sensefy/magrathea" \
+            "saien.magrathea" \
+            "$RELEASE_VERSION" \
+            < "release-assets/distributions/Magrathea-$RELEASE_VERSION-maven-coordinates.txt"
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Set up Java 17
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle build cache
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Resolve the published SDK from an isolated consumer
+        env:
+          GITHUB_PACKAGES_USERNAME: ${{ github.actor }}
+          GITHUB_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ needs.prepare-publish.outputs.version }}
+        run: |
+          ./gradlew -p tooling/kmp-consumer \
+            clean jvmTest compileAndroidMain \
+            -Pmagrathea.repository=https://maven.pkg.github.com/sensefy/magrathea \
+            -Pmagrathea.version="$RELEASE_VERSION" \
+            -Pmagrathea.consumer.buildDir="$RUNNER_TEMP/magrathea-remote-consumer" \
+            --refresh-dependencies \
+            --no-daemon \
+            --stacktrace
+
+      - name: Create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ needs.prepare-publish.outputs.version }}
+          RELEASE_TAG: ${{ needs.prepare-publish.outputs.tag }}
+        run: |
+          BUNDLE="release-assets/distributions/Magrathea-$RELEASE_VERSION-release-bundle.zip"
+          CHECKSUM="$BUNDLE.sha256"
+          COORDINATES="release-assets/distributions/Magrathea-$RELEASE_VERSION-maven-coordinates.txt"
+          MANIFEST="release-assets/distributions/Magrathea-$RELEASE_VERSION-maven-files.sha256"
+          SBOM="release-assets/reports/supply-chain/magrathea-sbom.cdx.json"
+          LICENSES="release-assets/reports/supply-chain/third-party-licenses.tsv"
+          RECEIPT="release-assets/release/publish-verification.receipt"
+          RELEASE_ASSETS=(
+            "$BUNDLE"
+            "$CHECKSUM"
+            "$COORDINATES"
+            "$MANIFEST"
+            "$SBOM"
+            "$LICENSES"
+            "$RECEIPT"
+          )
+          IS_PRERELEASE=false
+          if [[ "$RELEASE_VERSION" == *-* ]]; then
+            IS_PRERELEASE=true
+          fi
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            EXISTING_ASSETS="$(
+              gh release view "$RELEASE_TAG" \
+                --repo "$GITHUB_REPOSITORY" \
+                --json assets \
+                --jq '.assets[].name'
+            )"
+            MISSING_ASSETS=()
+            mkdir -p "$RUNNER_TEMP/existing-release-assets"
+            for asset in "${RELEASE_ASSETS[@]}"; do
+              name="$(basename "$asset")"
+              if grep -Fxq "$name" <<< "$EXISTING_ASSETS"; then
+                gh release download "$RELEASE_TAG" \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --pattern "$name" \
+                  --dir "$RUNNER_TEMP/existing-release-assets"
+                cmp "$asset" "$RUNNER_TEMP/existing-release-assets/$name"
+              else
+                MISSING_ASSETS+=("$asset")
+              fi
+            done
+            if [[ "${#MISSING_ASSETS[@]}" -gt 0 ]]; then
+              gh release upload "$RELEASE_TAG" \
+                "${MISSING_ASSETS[@]}" \
+                --repo "$GITHUB_REPOSITORY"
+            fi
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Magrathea $RELEASE_VERSION" \
+              --notes-file "docs/releases/$RELEASE_TAG.md" \
+              --prerelease="$IS_PRERELEASE"
+          else
+            RELEASE_FLAGS=()
+            if [[ "$IS_PRERELEASE" == true ]]; then
+              RELEASE_FLAGS+=(--prerelease)
+            fi
+            gh release create "$RELEASE_TAG" \
+              "${RELEASE_ASSETS[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "Magrathea $RELEASE_VERSION" \
+              --notes-file "docs/releases/$RELEASE_TAG.md" \
+              "${RELEASE_FLAGS[@]}"
+          fi
+
+      - name: Summarize completed release
+        env:
+          RELEASE_VERSION: ${{ needs.prepare-publish.outputs.version }}
+          RELEASE_TAG: ${{ needs.prepare-publish.outputs.tag }}
+        run: |
+          {
+            echo "## Published release"
+            echo
+            echo "- Version: \`$RELEASE_VERSION\`"
+            echo "- Tag: \`$RELEASE_TAG\`"
+            echo "- Remote coordinates and isolated consumer: verified"
           } >> "$GITHUB_STEP_SUMMARY"

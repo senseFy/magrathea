@@ -27,7 +27,6 @@
 
 | Document | Purpose |
 |---|---|
-| [Verification status](verification-status.md) | Current evidence and what it does not prove |
 | [Known issues](known-issues.md) | Alpha limitations and external gates |
 | [Publishing](publishing.md) | Coordinates, local publication, and registry configuration |
 | [Release process](release-process.md) | Maintainer gates, evidence, immutable release, and rollback |

@@ -9,7 +9,6 @@ REPOSITORY="$BUILD/bundle/maven"
 VERSION="9.8.7-alpha.1"
 GROUP="saien.magrathea"
 COMMIT="0123456789abcdef0123456789abcdef01234567"
-RUN_ID="123456"
 CI_RUN_ID="123450"
 COORDINATES="$BUILD/distributions/Magrathea-$VERSION-maven-coordinates.txt"
 MANIFEST="$BUILD/distributions/Magrathea-$VERSION-maven-files.sha256"
@@ -147,16 +146,13 @@ printf '%s  %s\n' "$(shasum -a 256 "$BUNDLE" | awk '{ print $1 }')" "$(basename 
 modules="$FIXTURE/modules.txt"
 printf 'magrathea-core\n' > "$modules"
 printf '%s\n' \
-  'format=2' \
+  'format=3' \
   "head=$COMMIT" \
   "group=$GROUP" \
   "version=$VERSION" \
   'repository_url=https://maven.pkg.github.com/sensefy/magrathea' \
   "ci_run_id=$CI_RUN_ID" \
-  "candidate_run_id=$RUN_ID" \
-  'candidate_run_attempt=1' \
   "modules_sha256=$(shasum -a 256 "$modules" | awk '{ print $1 }')" \
-  'signing_key_sha256=contract-private-key-digest' \
   "release_public_key_sha256=$(shasum -a 256 "$SOURCE/docs/release-signing-key.asc" | awk '{ print $1 }')" \
   "coordinates_sha256=$(shasum -a 256 "$COORDINATES" | awk '{ print $1 }')" \
   "maven_manifest_sha256=$(shasum -a 256 "$MANIFEST" | awk '{ print $1 }')" \
@@ -184,10 +180,9 @@ output="$(
     "$CANDIDATE_CHECKSUM" \
     "$COMMIT" \
     "$VERSION" \
-    "$RUN_ID" \
     "$FIXTURE/verified"
 )"
-[[ "$output" == *"MAGRATHEA_RELEASE_CANDIDATE_VERIFIED version=$VERSION coordinates=2 signatures=4 ci_run_id=$CI_RUN_ID candidate_run_id=$RUN_ID"* ]] || {
+[[ "$output" == *"MAGRATHEA_RELEASE_CANDIDATE_VERIFIED version=$VERSION coordinates=2 signatures=4 ci_run_id=$CI_RUN_ID"* ]] || {
   printf 'release candidate contract failed: valid candidate was rejected: %s\n' "$output" >&2
   exit 1
 }
@@ -199,7 +194,6 @@ if mismatch_output="$(
     "$CANDIDATE_CHECKSUM" \
     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
     "$VERSION" \
-    "$RUN_ID" \
     "$FIXTURE/mismatch" 2>&1
 )"; then
   printf 'release candidate contract failed: wrong commit unexpectedly passed\n' >&2

@@ -127,7 +127,6 @@ end
 verify_path, verify = load_workflow(root, "verify.yml")
 nightly_path, nightly = load_workflow(root, "nightly.yml")
 release_path, release = load_workflow(root, "release.yml")
-publish_path, publish = load_workflow(root, "publish-release.yml")
 
 fail_contract("verify.yml must trigger on PR and main push") unless
   triggers(verify).key?("pull_request") && triggers(verify).key?("push")
@@ -176,7 +175,13 @@ fail_contract("nightly.yml must retain the OSV report") unless
 
 release_triggers = triggers(release).keys
 fail_contract("release.yml must be manual-only") unless release_triggers == ["workflow_dispatch"]
-fail_contract("release.yml missing release-bundle job") unless release.fetch("jobs", {}).key?("release-bundle")
+version_input = triggers(release).dig("workflow_dispatch", "inputs", "version")
+fail_contract("release.yml must require one explicit version input") unless
+  version_input.is_a?(Hash) && version_input["required"] == true && version_input["type"] == "string"
+%w[release-candidate prepare-publish publish-maven github-release].each do |job|
+  fail_contract("release.yml missing #{job}") unless release.fetch("jobs", {}).key?(job)
+end
+
 release_runs = run_commands(release)
 release_preparation = all_steps(release).find do |step|
   step["run"]&.include?("scripts/publish-sdk") &&
@@ -199,9 +204,13 @@ fail_contract("release.yml must require successful CI for the exact commit") unl
   release_runs.include?("actions/workflows/verify.yml/runs") &&
     release_runs.include?("head_sha=$RELEASE_COMMIT") &&
     release_runs.include?("status=success")
+fail_contract("release.yml must bind the requested version to source metadata") unless
+  release_runs.include?("REQUESTED_VERSION") &&
+    release_runs.include?("magrathea.version") &&
+    release_runs.include?("docs/releases/v$REQUESTED_VERSION.md")
+
 local_candidate_verification = all_steps(release).find do |step|
-  step["run"]&.include?("scripts/verify-release-candidate") &&
-    step["run"]&.include?('"$GITHUB_RUN_ID"')
+  step["run"]&.include?("scripts/verify-release-candidate")
 end
 fail_contract("release.yml must verify the completed candidate against the checked-in release key") unless
   local_candidate_verification
@@ -209,53 +218,55 @@ fail_contract("release.yml candidate verification must have a bounded step timeo
   local_candidate_verification["timeout-minutes"].to_i.between?(1, 30)
 fail_contract("release.yml must upload the immutable candidate with the reviewed action") unless
   action_uses(release).any? { |action| action.start_with?("actions/upload-artifact@") && pinned_action(action) }
-fail_contract("release.yml must attest both the candidate and bundle") unless
+fail_contract("release.yml must attest the outer candidate exactly once") unless
   action_uses(release).count { |action|
     action.start_with?("actions/attest-build-provenance@") && pinned_action(action)
-  } == 2
+  } == 1 && all_steps(release).any? { |step|
+    step["uses"]&.start_with?("actions/attest-build-provenance@") &&
+      step.dig("with", "subject-path")&.include?("release-candidate.zip")
+  }
 fail_contract("release.yml must not boot a simulator after exact-SHA CI") if
   release_runs.include?("simctl")
-fail_contract("release.yml performs a forbidden publish/tag/release side effect") if
-  release_runs.match?(/publishSdk|publishToMaven|git\s+tag|gh\s+release|create-release/i)
+fail_contract("release.yml must not query or promote a candidate from another workflow run") if
+  release_runs.include?("actions/workflows/release.yml/runs") ||
+    release_runs.include?("CANDIDATE_RUN_ID") ||
+    release.to_s.include?("promoted-candidate")
 
-publish_triggers = triggers(publish)
-fail_contract("publish-release.yml must trigger only for version tags") unless
-  publish_triggers.keys == ["push"] && publish_triggers.dig("push", "tags") == ["v*"]
-%w[promote-candidate publish-maven github-release].each do |job|
-  fail_contract("publish-release.yml missing #{job}") unless publish.fetch("jobs", {}).key?(job)
-end
-publish_runs = run_commands(publish)
-tag_validation = publish_runs.index('scripts/verify-release-tag "$GITHUB_REF_NAME"')
-candidate_verification = publish_runs.index("scripts/verify-release-candidate")
+release_jobs = release.fetch("jobs")
+candidate_runs = run_commands("jobs" => { "release-candidate" => release_jobs.fetch("release-candidate") })
+prepare_runs = run_commands("jobs" => { "prepare-publish" => release_jobs.fetch("prepare-publish") })
+publish_runs = run_commands("jobs" => { "publish-maven" => release_jobs.fetch("publish-maven") })
+github_release_runs = run_commands("jobs" => { "github-release" => release_jobs.fetch("github-release") })
+candidate_verification = candidate_runs.index("scripts/verify-release-candidate")
+tag_creation = prepare_runs.index('git tag -a "$RELEASE_TAG"')
+tag_validation = prepare_runs.index('scripts/verify-release-tag "$RELEASE_TAG"')
+tag_push = prepare_runs.index('git push origin "refs/tags/$RELEASE_TAG"')
 publication = publish_runs.index("scripts/resume-publish-sdk")
-remote_validation = publish_runs.index("scripts/verify-remote-version-present")
-consumer_validation = publish_runs.index("-p tooling/kmp-consumer")
-release_creation = publish_runs.index("gh release create")
-fail_contract("publish-release.yml must validate the tag before promoting a candidate") unless
-  tag_validation && candidate_verification && tag_validation < candidate_verification
-fail_contract("publish-release.yml must promote rather than rebuild the candidate") if
-  publish_runs.include?("--prepare-only") ||
-    publish_runs.include?("verifySdkRelease") ||
-    publish_runs.include?("prepareSdkRelease") ||
-    publish_runs.include?("simctl")
-fail_contract("publish-release.yml must verify candidate provenance and exact contents") unless
-  publish_runs.include?("gh attestation verify") &&
-    publish_runs.include?("CANDIDATE_RUN_ID") &&
-    publish_runs.include?("maven-files.sha256")
-fail_contract("publish-release.yml must use manifest-bound exact-byte publication") unless
+remote_validation = github_release_runs.index("scripts/verify-remote-version-present")
+consumer_validation = github_release_runs.index("-p tooling/kmp-consumer")
+release_creation = github_release_runs.index("gh release create")
+fail_contract("release.yml must create, validate, and push one annotated tag after candidate verification") unless
+  candidate_verification && tag_creation && tag_validation && tag_push &&
+    release_jobs.dig("prepare-publish", "needs") == "release-candidate" &&
+    tag_creation < tag_validation && tag_validation < tag_push
+fail_contract("release.yml must publish only after the annotated tag is authorized") unless
+  publication && release_jobs.dig("publish-maven", "needs") == "prepare-publish"
+fail_contract("release.yml must use manifest-bound exact-byte publication") unless
   publication &&
-    publish_runs.include?("--exact-files") &&
-    publish_runs.include?("--manifest-file") &&
-    publish_runs.include?("select-publishing-coordinates")
-fail_contract("publish-release.yml must emit five-minute publication heartbeats") unless
-  publish_runs.include?("scripts/run-with-heartbeat") &&
-    publish_runs.include?("--interval 300")
-fail_contract("tag promotion must not receive release signing material") if
-  publish_runs.include?("MAGRATHEA_SIGNING_KEY") ||
-    publish_runs.include?("MAGRATHEA_SIGNING_PASSWORD")
-publish_strategy = publish.dig("jobs", "publish-maven", "strategy") || {}
+    release_runs.include?("--exact-files") &&
+    release_runs.include?("--manifest-file") &&
+    release_runs.include?("select-publishing-coordinates")
+fail_contract("release.yml must emit five-minute publication heartbeats") unless
+  release_runs.include?("scripts/run-with-heartbeat") &&
+    release_runs.include?("--interval 300")
+non_candidate_jobs = release.fetch("jobs", {}).reject { |name, _job| name == "release-candidate" }
+fail_contract("only candidate preparation may receive release signing material") if
+  non_candidate_jobs.to_s.include?("MAGRATHEA_SIGNING_KEY") ||
+    non_candidate_jobs.to_s.include?("MAGRATHEA_SIGNING_PASSWORD")
+
+publish_strategy = release.dig("jobs", "publish-maven", "strategy") || {}
 publish_matrix = publish_strategy.dig("matrix", "include") || []
-fail_contract("publish-release.yml must publish four logical-module shards") unless
+fail_contract("release.yml must publish four logical-module shards") unless
   publish_matrix.length == 4 &&
     publish_strategy["max-parallel"] == 4 &&
     publish_matrix.all? { |entry| entry["name"] && entry["modules"] }
@@ -278,39 +289,40 @@ expected_publish_modules = %w[
   magrathea-web-client
 ]
 actual_publish_modules = publish_matrix.flat_map { |entry| entry.fetch("modules").split }
-fail_contract("publish-release.yml shards must own every logical module exactly once") unless
+fail_contract("release.yml shards must own every logical module exactly once") unless
   actual_publish_modules.length == actual_publish_modules.uniq.length &&
     actual_publish_modules.sort == expected_publish_modules.sort
-fail_contract("publish-release.yml must support safe reruns of a partial version") unless
-  publish_runs.include?("--plan-only") &&
-    publish_runs.include?("mode=resume") &&
-    publish_runs.include?("--fresh") &&
-    publish_runs.include?("cmp \"$asset\"") &&
-    !publish_runs.include?("--clobber")
-fail_contract("publish-release.yml must validate remote coordinates before creating the release") unless
+fail_contract("release.yml must support same-run retries of a partial version") unless
+  release_runs.include?("--plan-only") &&
+    release_runs.include?("mode=resume") &&
+    release_runs.include?("--fresh") &&
+    release.to_s.include?("github.run_attempt") &&
+    release_runs.include?('RELEASE_RUN_ATTEMPT" != 1') &&
+    release_runs.include?("cmp \"$asset\"") &&
+    !release_runs.include?("--clobber")
+fail_contract("release.yml must validate remote coordinates before creating the release") unless
   remote_validation && release_creation && remote_validation < release_creation
-fail_contract("publish-release.yml must resolve JVM and Android variants from an isolated remote consumer") unless
+fail_contract("release.yml must resolve JVM and Android variants from an isolated remote consumer") unless
   consumer_validation &&
-    publish_runs.include?("jvmTest compileAndroidMain") &&
+    release_runs.include?("jvmTest compileAndroidMain") &&
     consumer_validation < release_creation
-fail_contract("publish-release.yml must upload the verified assets with the reviewed action") unless
-  action_uses(publish).any? { |action| action.start_with?("actions/upload-artifact@") && pinned_action(action) }
-fail_contract("publish-release.yml must download the exact verified assets with the reviewed action") unless
-  action_uses(publish).any? { |action| action.start_with?("actions/download-artifact@") && pinned_action(action) }
-checkout_step = all_steps(publish).find { |step| step["uses"]&.start_with?("actions/checkout@") }
-fail_contract("publish-release.yml must fetch full tag history") unless
+fail_contract("release.yml must create the GitHub Release only after all Maven shards pass") unless
+  Array(release_jobs.dig("github-release", "needs")).sort == %w[prepare-publish publish-maven].sort
+fail_contract("release.yml must download the same-run candidate with the reviewed action") unless
+  action_uses(release).any? { |action| action.start_with?("actions/download-artifact@") && pinned_action(action) }
+checkout_step = all_steps(release).find { |step| step["uses"]&.start_with?("actions/checkout@") }
+fail_contract("release.yml must fetch full source history") unless
   checkout_step&.dig("with", "fetch-depth") == 0
 
 {
   verify_path => verify,
   nightly_path => nightly,
   release_path => release,
-  publish_path => publish,
 }.each do |path, workflow|
   uses = action_uses(workflow)
   fail_contract("#{File.basename(path)} must use the reviewed checkout commit") unless
     uses.any? { |action| action.start_with?("actions/checkout@") && pinned_action(action) }
-  if %w[verify.yml nightly.yml release.yml publish-release.yml].include?(File.basename(path))
+  if %w[verify.yml nightly.yml release.yml].include?(File.basename(path))
     fail_contract("#{File.basename(path)} must use the reviewed setup-java commit") unless
       uses.any? { |action| action.start_with?("actions/setup-java@") && pinned_action(action) }
     fail_contract("#{File.basename(path)} must use the reviewed Gradle cache action") unless
@@ -337,29 +349,31 @@ end
   fail_contract("#{File.basename(path)} must keep contents read-only") unless permissions["contents"] == "read"
 end
 
-release_permissions = release.fetch("permissions", {})
-fail_contract("release attestation needs id-token: write") unless release_permissions["id-token"] == "write"
-fail_contract("release attestation needs attestations: write") unless release_permissions["attestations"] == "write"
-
-publish_permissions = publish.fetch("permissions", {})
-fail_contract("publish workflow must default to read-only contents") unless
-  publish_permissions == { "contents" => "read" }
-promote_permissions = publish.fetch("jobs", {}).fetch("promote-candidate", {}).fetch("permissions", {})
-fail_contract("candidate promotion needs actions, attestations, contents, and packages read") unless
-  promote_permissions == {
+candidate_permissions = release.fetch("jobs", {}).fetch("release-candidate", {}).fetch("permissions", {})
+fail_contract("candidate preparation needs source/artifact read and provenance write") unless
+  candidate_permissions == {
     "contents" => "read",
     "actions" => "read",
-    "packages" => "read",
-    "attestations" => "read",
+    "id-token" => "write",
+    "attestations" => "write",
   }
-package_permissions = publish.fetch("jobs", {}).fetch("publish-maven", {}).fetch("permissions", {})
+
+prepare_permissions = release.fetch("jobs", {}).fetch("prepare-publish", {}).fetch("permissions", {})
+fail_contract("tag authorization needs contents write plus source/artifact/package read") unless
+  prepare_permissions == {
+    "contents" => "write",
+    "actions" => "read",
+    "packages" => "read",
+  }
+
+package_permissions = release.fetch("jobs", {}).fetch("publish-maven", {}).fetch("permissions", {})
 fail_contract("exact publication must have only packages write plus source/artifact read") unless
   package_permissions == {
     "contents" => "read",
     "actions" => "read",
     "packages" => "write",
   }
-github_release_permissions = publish.fetch("jobs", {}).fetch("github-release", {}).fetch("permissions", {})
+github_release_permissions = release.fetch("jobs", {}).fetch("github-release", {}).fetch("permissions", {})
 fail_contract("GitHub Release creation needs contents: write") unless
   github_release_permissions["contents"] == "write"
 fail_contract("remote consumer verification needs packages: read") unless
@@ -367,5 +381,5 @@ fail_contract("remote consumer verification needs packages: read") unless
 fail_contract("GitHub Release job has unexpected permissions") unless
   github_release_permissions.keys.sort == %w[actions contents packages].sort
 
-puts "MAGRATHEA_CI_CONTRACT_PASS workflows=4 promotion=exact-byte shards=4"
+puts "MAGRATHEA_CI_CONTRACT_PASS workflows=3 release=single-run promotion=exact-byte shards=4"
 RUBY

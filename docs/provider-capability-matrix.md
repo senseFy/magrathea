@@ -56,6 +56,6 @@ mapping.
 
 Android host and iOS Simulator suites exercise shared codecs, request mapping, and transport
 boundaries. Browser production bundles run through Playwright Chromium, Firefox, and WebKit-engine
-automation. Evidence limitations are tracked in [Verification Status](verification-status.md).
+automation. Broader validation gaps are tracked in [Known Issues](known-issues.md).
 
 See [ADR-007](adr/ADR-007-reference-provider-contracts.md) for the Provider contract.

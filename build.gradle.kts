@@ -465,7 +465,7 @@ val verifySdkRollbackContract = tasks.register<Exec>("verifySdkRollbackContract"
 
 val verifyCiContract = tasks.register<Exec>("verifyCiContract") {
     group = "verification"
-    description = "Parse and validate verification, candidate, and tag-driven release workflow contracts."
+    description = "Parse and validate verification, nightly, and single-run release workflow contracts."
     commandLine(
         "/bin/bash",
         file("scripts/verify-ci-contract").absolutePath,
@@ -475,11 +475,23 @@ val verifyCiContract = tasks.register<Exec>("verifyCiContract") {
 
 val verifyReleaseTagContract = tasks.register<Exec>("verifyReleaseTagContract") {
     group = "verification"
-    description = "Mutation-test version-tag, changelog, release-note, and annotated-tag enforcement."
+    description = "Mutation-test automated annotated-tag version, changelog, and release-note enforcement."
     inputs.file("scripts/verify-release-tag")
     inputs.file("scripts/verify-release-tag-contract")
     commandLine(
         file("scripts/verify-release-tag-contract").absolutePath,
+        rootDir.absolutePath,
+    )
+}
+
+val verifyPrepareReleaseContract = tasks.register<Exec>("verifyPrepareReleaseContract") {
+    group = "verification"
+    description = "Mutation-test the one-command release preparation entry point."
+    inputs.file("scripts/prepare-release")
+    inputs.file("scripts/release-version-files.txt")
+    inputs.file("scripts/verify-prepare-release-contract")
+    commandLine(
+        file("scripts/verify-prepare-release-contract").absolutePath,
         rootDir.absolutePath,
     )
 }
@@ -556,6 +568,7 @@ val verifySdkQuick = tasks.register("verifySdkQuick") {
         verifyReleaseCandidateContract,
         verifySdkRollbackContract,
         verifyCiContract,
+        verifyPrepareReleaseContract,
         verifyReleaseTagContract,
         verifySdkPublicationArtifactIsolation,
     )

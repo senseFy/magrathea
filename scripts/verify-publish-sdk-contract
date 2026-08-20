@@ -33,15 +33,15 @@ expect_rejected() {
 help="$(run_publisher --help)"
 [[ "$help" != *"--password"* ]] || fail "help exposes a password argument"
 [[ "$help" != *"--allow-dirty"* ]] || fail "help exposes a dirty remote path"
-[[ "$help" == *"--prepare-only"* && "$help" == *"--use-prepared"* ]] ||
-  fail "help omits the staged release flow"
+[[ "$help" == *"--prepare-only"* && "$help" != *"--use-prepared"* ]] ||
+  fail "help does not expose the single candidate-preparation path"
 [[ "$help" == *"--verified-ci-run"* ]] ||
   fail "help omits the exact-SHA CI promotion flow"
 
 expect_rejected "does not allow --skip-tests" --target github --skip-tests --dry-run
 expect_rejected "does not allow --no-clean" --target custom --repo-url https://example.invalid/releases --no-clean --dry-run
-expect_rejected "require a remote publish target" --prepare-only
-expect_rejected "cannot be combined" --target github --prepare-only --use-prepared
+expect_rejected "requires a remote publish target" --prepare-only
+expect_rejected "Unknown option: --use-prepared" --target github --use-prepared
 expect_rejected "positive numeric workflow run ID" --target github --prepare-only --verified-ci-run invalid
 expect_rejected "valid only with --prepare-only" --target github --verified-ci-run 123
 expect_rejected "Unknown option: --password" --password secret
@@ -68,8 +68,8 @@ grep -Fq "tr '.' '/'" "$PUBLISHER" ||
   fail "publisher does not use a Bash 3.2-compatible Maven group path"
 grep -Fq 'publish-verification.receipt' "$PUBLISHER" ||
   fail "publisher does not bind staged publication to a verification receipt"
-grep -Fq 'signing_key_sha256' "$PUBLISHER" ||
-  fail "verification receipt is not bound to signing material"
+grep -Fq 'release_public_key_sha256' "$PUBLISHER" ||
+  fail "verification receipt is not bound to the release key"
 grep -Fq 'publication-docs/${publication.name}' "$ROOT_DIR/build.gradle.kts" ||
   fail "publication javadoc outputs are not isolated before signing"
 
@@ -140,8 +140,8 @@ fi
   -s "$fixture_root/build/distributions/Magrathea-0.1.0-alpha.1-release-candidate.zip.sha256" &&
   -s "$fixture_root/build/distributions/Magrathea-0.1.0-alpha.1-maven-files.sha256" ]] ||
   fail "release preparation did not produce the complete promotion evidence"
-grep -Fxq 'format=2' "$fixture_root/build/release/publish-verification.receipt" ||
-  fail "release preparation did not write a format-2 receipt"
+grep -Fxq 'format=3' "$fixture_root/build/release/publish-verification.receipt" ||
+  fail "release preparation did not write a format-3 receipt"
 grep -Fxq 'ci_run_id=12345' "$fixture_root/build/release/publish-verification.receipt" ||
   fail "release receipt is not bound to the exact-SHA CI run"
 
@@ -190,4 +190,4 @@ for module in \
   grep -Fq "\"$module\"" "$PUBLISHER" || fail "publisher module inventory misses $module"
 done
 
-printf 'MAGRATHEA_PUBLISH_CONTRACT_PASS signing_graphs=2 preflight_order=verified staged_release=bound bash32_empty_args=verified\n'
+printf 'MAGRATHEA_PUBLISH_CONTRACT_PASS signing_graphs=2 preflight_order=verified candidate=bound bash32_empty_args=verified\n'

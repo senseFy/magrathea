@@ -28,10 +28,12 @@ Gradle tasks.
 1. Keep a change within one documented layer or explain any new dependency direction.
 2. Implement the behavior and add the smallest reasonable contract or regression test that would
    fail without it.
-3. Run the narrow module test while iterating, then the smallest relevant repository gate.
-4. Update public documentation, serialization fixtures, or ABI baselines only when the contract
+3. Add a consumer-visible summary under `CHANGELOG.md`'s `Unreleased` section when the change
+   affects shipped behavior or a public contract.
+4. Run the narrow module test while iterating, then the smallest relevant repository gate.
+5. Update public documentation, serialization fixtures, or ABI baselines only when the contract
    intentionally changes.
-5. Before requesting review, ensure the worktree contains no credentials, generated build output,
+6. Before requesting review, ensure the worktree contains no credentials, generated build output,
    or unrelated formatting.
 
 Useful gates:
@@ -65,6 +67,19 @@ focused module tests during normal edit/compile cycles.
 - Link to the authoritative topic instead of repeating protocol, release, or verification details.
 - Keep examples executable in shape and separate secret values from configuration.
 - Record release evidence only in the verification, known-issues, and release documents that own it.
+
+### Changelog discipline
+
+Every user-visible behavior or contract change must update `CHANGELOG.md` under `Unreleased` in the
+same change or pull request. Use the appropriate `Added`, `Changed`, `Fixed`, or `Security`
+subsection and describe the consumer-visible outcome rather than implementation details. Internal
+refactors, tests, build-only maintenance, and documentation-only corrections may omit an entry when
+they do not change shipped behavior; mark the pull-request checklist item as not applicable and
+explain why.
+
+Implementation changes do not create dated release sections or change `magrathea.version`.
+`scripts/prepare-release` promotes the reviewed `Unreleased` content and generates release notes at
+release time.
 
 ## Pull requests and issues
 

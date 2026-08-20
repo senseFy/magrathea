@@ -14,7 +14,6 @@ NO_CLEAN=false
 PRINT_ONLY=false
 COMMIT_VERSION=false
 PREPARE_ONLY=false
-USE_PREPARED=false
 VERIFIED_CI_RUN_ID=""
 MODULES=()
 GRADLE_ARGS=()
@@ -103,17 +102,6 @@ effective_version() {
   fi
 }
 
-read_receipt_property() {
-  local key="$1"
-  local receipt="$2"
-  awk -F= -v key="$key" '
-    $1 == key {
-      print substr($0, index($0, "=") + 1)
-      exit
-    }
-  ' "$receipt"
-}
-
 write_verification_receipt() {
   local distributions_dir="$ROOT_DIR/build/distributions"
   local release_dir="$ROOT_DIR/build/release"
@@ -127,7 +115,6 @@ write_verification_receipt() {
   local actual_bundle_digest
   local head
   local modules_digest
-  local signing_key_digest
   local public_key_digest
   local coordinates_digest
   local maven_manifest_digest
@@ -167,23 +154,19 @@ write_verification_receipt() {
 
   head="$(git -C "$ROOT_DIR" rev-parse HEAD)"
   modules_digest="$(selected_modules | sha256_stdin)"
-  signing_key_digest="$(printf '%s' "$SIGNING_KEY" | sha256_stdin)"
   public_key_digest="$(sha256_file "$public_key")"
   coordinates_digest="$(sha256_file "$coordinates_file")"
   maven_manifest_digest="$(sha256_file "$maven_manifest")"
   tmp_receipt="$(mktemp "$release_dir/.publish-verification.XXXXXX")"
   chmod 0600 "$tmp_receipt"
   printf '%s\n' \
-    "format=2" \
+    "format=3" \
     "head=$head" \
     "group=$PUBLISH_GROUP" \
     "version=$PUBLISH_VERSION" \
     "repository_url=$REPOSITORY_URL" \
     "ci_run_id=${VERIFIED_CI_RUN_ID:-none}" \
-    "candidate_run_id=${GITHUB_RUN_ID:-local}" \
-    "candidate_run_attempt=${GITHUB_RUN_ATTEMPT:-local}" \
     "modules_sha256=$modules_digest" \
-    "signing_key_sha256=$signing_key_digest" \
     "release_public_key_sha256=$public_key_digest" \
     "coordinates_sha256=$coordinates_digest" \
     "maven_manifest_sha256=$maven_manifest_digest" \
@@ -234,58 +217,6 @@ package_release_candidate() {
   printf '%s  %s\n' "$(sha256_file "$candidate")" "$(basename "$candidate")" \
     > "$candidate_checksum"
   log "Prepared immutable release candidate: $candidate"
-}
-
-validate_verification_receipt() {
-  local distributions_dir="$ROOT_DIR/build/distributions"
-  local receipt="$ROOT_DIR/build/release/publish-verification.receipt"
-  local bundle="$distributions_dir/Magrathea-$PUBLISH_VERSION-release-bundle.zip"
-  local checksum_file="$bundle.sha256"
-  local coordinates_file="$distributions_dir/Magrathea-$PUBLISH_VERSION-maven-coordinates.txt"
-  local maven_manifest="$distributions_dir/Magrathea-$PUBLISH_VERSION-maven-files.sha256"
-  local public_key="$ROOT_DIR/docs/release-signing-key.asc"
-  local expected_modules_digest
-  local expected_signing_key_digest
-  local expected_bundle_digest
-
-  [[ -s "$receipt" ]] || {
-    echo "--use-prepared requires a verification receipt from --prepare-only." >&2
-    exit 2
-  }
-  [[ "$(read_receipt_property format "$receipt")" == "2" ]] ||
-    { echo "Prepared verification receipt has an unsupported format." >&2; exit 2; }
-  [[ "$(read_receipt_property head "$receipt")" == "$(git -C "$ROOT_DIR" rev-parse HEAD)" ]] ||
-    { echo "Prepared verification receipt belongs to a different commit." >&2; exit 2; }
-  [[ "$(read_receipt_property group "$receipt")" == "$PUBLISH_GROUP" ]] ||
-    { echo "Prepared verification receipt has a different group." >&2; exit 2; }
-  [[ "$(read_receipt_property version "$receipt")" == "$PUBLISH_VERSION" ]] ||
-    { echo "Prepared verification receipt has a different version." >&2; exit 2; }
-  [[ "$(read_receipt_property repository_url "$receipt")" == "$REPOSITORY_URL" ]] ||
-    { echo "Prepared verification receipt targets a different repository." >&2; exit 2; }
-
-  expected_modules_digest="$(selected_modules | sha256_stdin)"
-  [[ "$(read_receipt_property modules_sha256 "$receipt")" == "$expected_modules_digest" ]] ||
-    { echo "Prepared verification receipt has a different module selection." >&2; exit 2; }
-  expected_signing_key_digest="$(printf '%s' "$SIGNING_KEY" | sha256_stdin)"
-  [[ "$(read_receipt_property signing_key_sha256 "$receipt")" == "$expected_signing_key_digest" ]] ||
-    { echo "Prepared verification receipt was created with different signing material." >&2; exit 2; }
-  [[ "$(read_receipt_property release_public_key_sha256 "$receipt")" == "$(sha256_file "$public_key")" ]] ||
-    { echo "Prepared verification receipt has a different release public key." >&2; exit 2; }
-
-  [[ -s "$bundle" && -s "$checksum_file" && -s "$coordinates_file" &&
-    -s "$maven_manifest" ]] ||
-    { echo "Prepared release artifacts are missing." >&2; exit 2; }
-  expected_bundle_digest="$(read_receipt_property bundle_sha256 "$receipt")"
-  [[ "$(sha256_file "$bundle")" == "$expected_bundle_digest" ]] ||
-    { echo "Prepared release bundle changed after verification." >&2; exit 2; }
-  [[ "$(awk 'NR == 1 { print $1 }' "$checksum_file")" == "$expected_bundle_digest" ]] ||
-    { echo "Prepared release checksum changed after verification." >&2; exit 2; }
-  [[ "$(sha256_file "$coordinates_file")" == "$(read_receipt_property coordinates_sha256 "$receipt")" ]] ||
-    { echo "Prepared publication coordinate inventory changed after verification." >&2; exit 2; }
-  [[ "$(sha256_file "$maven_manifest")" == "$(read_receipt_property maven_manifest_sha256 "$receipt")" ]] ||
-    { echo "Prepared Maven file manifest changed after verification." >&2; exit 2; }
-
-  log "Prepared release receipt matches the current commit, artifacts, modules, and signing key"
 }
 
 selected_modules() {
@@ -392,7 +323,6 @@ Remote repository options:
   MAGRATHEA_PUBLISH_USERNAME    Maven repository username
   MAGRATHEA_PUBLISH_PASSWORD    Maven repository password/token
   --prepare-only                Verify and stage a remote release without publishing
-  --use-prepared                Publish a staged release receipt without repeating verification
   --verified-ci-run RUN_ID      Use the release-only gate after an exact-SHA CI run
 
 Signing options for remote repositories:
@@ -461,10 +391,6 @@ while [[ $# -gt 0 ]]; do
       PREPARE_ONLY=true
       shift
       ;;
-    --use-prepared)
-      USE_PREPARED=true
-      shift
-      ;;
     --verified-ci-run)
       VERIFIED_CI_RUN_ID="${2:?missing value for --verified-ci-run}"
       shift 2
@@ -489,11 +415,6 @@ case "$TARGET" in
     ;;
 esac
 
-if [[ "$PREPARE_ONLY" == true && "$USE_PREPARED" == true ]]; then
-  echo "--prepare-only and --use-prepared cannot be combined." >&2
-  exit 2
-fi
-
 if [[ -n "$VERIFIED_CI_RUN_ID" ]]; then
   [[ "$VERIFIED_CI_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
     echo "--verified-ci-run requires a positive numeric workflow run ID." >&2
@@ -505,14 +426,13 @@ if [[ -n "$VERIFIED_CI_RUN_ID" ]]; then
   }
 fi
 
-if [[ ( "$PREPARE_ONLY" == true || "$USE_PREPARED" == true ) && "$TARGET" == "local" ]]; then
-  echo "--prepare-only and --use-prepared require a remote publish target." >&2
+if [[ "$PREPARE_ONLY" == true && "$TARGET" == "local" ]]; then
+  echo "--prepare-only requires a remote publish target." >&2
   exit 2
 fi
 
-if [[ ( "$PREPARE_ONLY" == true || "$USE_PREPARED" == true ) &&
-  ( "$DRY_RUN" == true || "$PRINT_ONLY" == true ) ]]; then
-  echo "Prepared release modes cannot be combined with --dry-run or --print." >&2
+if [[ "$PREPARE_ONLY" == true && ( "$DRY_RUN" == true || "$PRINT_ONLY" == true ) ]]; then
+  echo "--prepare-only cannot be combined with --dry-run or --print." >&2
   exit 2
 fi
 
@@ -641,16 +561,14 @@ if [[ "$DRY_RUN" == true ]]; then
 fi
 
 VERIFY_TASKS=()
-if [[ "$USE_PREPARED" != true ]]; then
-  if [[ "$NO_CLEAN" != true ]]; then
-    VERIFY_TASKS+=("clean")
-  fi
-  if [[ "$SKIP_TESTS" != true ]]; then
-    if [[ -n "$VERIFIED_CI_RUN_ID" ]]; then
-      VERIFY_TASKS+=("prepareSdkRelease")
-    else
-      VERIFY_TASKS+=("verifySdkRelease")
-    fi
+if [[ "$NO_CLEAN" != true ]]; then
+  VERIFY_TASKS+=("clean")
+fi
+if [[ "$SKIP_TESTS" != true ]]; then
+  if [[ -n "$VERIFIED_CI_RUN_ID" ]]; then
+    VERIFY_TASKS+=("prepareSdkRelease")
+  else
+    VERIFY_TASKS+=("verifySdkRelease")
   fi
 fi
 
@@ -659,15 +577,11 @@ if [[ ${#VERIFY_TASKS[@]} -gt 0 ]]; then
   run_gradle "${VERIFY_TASKS[@]}"
   log "Verification completed"
 else
-  log "Using an existing verified release receipt"
+  log "No verification tasks selected"
 fi
 
 if [[ "$TARGET" != "local" && "$DRY_RUN" != true ]]; then
-  if [[ "$USE_PREPARED" == true ]]; then
-    validate_verification_receipt
-  else
-    write_verification_receipt
-  fi
+  write_verification_receipt
 fi
 
 if [[ "$PREPARE_ONLY" == true ]]; then

@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="${1:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION RUN_ID OUTPUT_DIR}"
-CANDIDATE="${2:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION RUN_ID OUTPUT_DIR}"
-CHECKSUM="${3:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION RUN_ID OUTPUT_DIR}"
-EXPECTED_COMMIT="${4:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION RUN_ID OUTPUT_DIR}"
-EXPECTED_VERSION="${5:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION RUN_ID OUTPUT_DIR}"
-EXPECTED_RUN_ID="${6:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION RUN_ID OUTPUT_DIR}"
-OUTPUT_DIR="${7:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION RUN_ID OUTPUT_DIR}"
+ROOT_DIR="${1:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION OUTPUT_DIR}"
+CANDIDATE="${2:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION OUTPUT_DIR}"
+CHECKSUM="${3:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION OUTPUT_DIR}"
+EXPECTED_COMMIT="${4:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION OUTPUT_DIR}"
+EXPECTED_VERSION="${5:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION OUTPUT_DIR}"
+OUTPUT_DIR="${6:?usage: verify-release-candidate ROOT_DIR CANDIDATE CHECKSUM COMMIT VERSION OUTPUT_DIR}"
 
 fail() {
   printf 'release candidate verification failed: %s\n' "$*" >&2
@@ -37,7 +36,6 @@ sha256_file() {
 [[ -s "$CANDIDATE" && -s "$CHECKSUM" ]] || fail "candidate archive or checksum is missing"
 [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail "expected commit is invalid"
 [[ "$EXPECTED_VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]] || fail "expected version is invalid"
-[[ "$EXPECTED_RUN_ID" =~ ^[1-9][0-9]*$ ]] || fail "candidate run ID is invalid"
 [[ ! -e "$OUTPUT_DIR" ]] || fail "output directory must not already exist"
 
 expected_candidate_digest="$(awk 'NR == 1 { print $1 }' "$CHECKSUM")"
@@ -90,7 +88,7 @@ public_key="$ROOT_DIR/docs/release-signing-key.asc"
   -s "$bundle" && -s "$bundle_checksum" && -s "$public_key" ]] ||
   fail "candidate evidence set is incomplete"
 
-[[ "$(read_property format "$receipt")" == "2" ]] ||
+[[ "$(read_property format "$receipt")" == "3" ]] ||
   fail "candidate receipt format is unsupported"
 [[ "$(read_property head "$receipt")" == "$EXPECTED_COMMIT" ]] ||
   fail "candidate belongs to a different commit"
@@ -102,10 +100,6 @@ group_path="$(printf '%s' "$group" | tr '.' '/')"
   fail "candidate belongs to a different version"
 [[ "$(read_property repository_url "$receipt")" == "https://maven.pkg.github.com/sensefy/magrathea" ]] ||
   fail "candidate targets a different Maven repository"
-[[ "$(read_property candidate_run_id "$receipt")" == "$EXPECTED_RUN_ID" ]] ||
-  fail "candidate receipt belongs to a different workflow run"
-[[ "$(read_property candidate_run_attempt "$receipt")" =~ ^[1-9][0-9]*$ ]] ||
-  fail "candidate receipt has no workflow attempt"
 ci_run_id="$(read_property ci_run_id "$receipt")"
 [[ "$ci_run_id" =~ ^[1-9][0-9]*$ ]] ||
   fail "candidate is not bound to an exact-SHA CI run"
@@ -223,6 +217,5 @@ fingerprint="$(
 )"
 [[ "$fingerprint" =~ ^[0-9A-F]{40}$ ]] || fail "release signing fingerprint is invalid"
 
-printf 'MAGRATHEA_RELEASE_CANDIDATE_VERIFIED version=%s coordinates=%s signatures=%s ci_run_id=%s candidate_run_id=%s fingerprint=%s\n' \
-  "$EXPECTED_VERSION" "$coordinate_count" "$signature_count" "$ci_run_id" \
-  "$EXPECTED_RUN_ID" "$fingerprint"
+printf 'MAGRATHEA_RELEASE_CANDIDATE_VERIFIED version=%s coordinates=%s signatures=%s ci_run_id=%s fingerprint=%s\n' \
+  "$EXPECTED_VERSION" "$coordinate_count" "$signature_count" "$ci_run_id" "$fingerprint"

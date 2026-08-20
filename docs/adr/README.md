@@ -2,8 +2,8 @@
 
 These records define the architectural decisions that shape the current Magrathea SDK. They are
 normative where they describe a security boundary, public protocol, persistence format, or module
-dependency direction. Implementation status and platform evidence are tracked separately in
-[Verification Status](../verification-status.md).
+dependency direction. Platform limitations and external validation gaps are tracked separately in
+[Known Issues](../known-issues.md).
 
 | ADR | Decision |
 |---|---|

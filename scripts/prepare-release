@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""Prepare Magrathea's reviewed release commit from one version argument."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+from typing import NoReturn, Optional
+
+
+SEMVER = re.compile(
+    r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+    r"(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$"
+)
+
+
+def fail(message: str) -> NoReturn:
+    print(f"prepare-release failed: {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def run(root: Path, *command: str, capture: bool = False) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        cwd=root,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.PIPE if capture else None,
+    )
+
+
+def git_output(root: Path, *arguments: str) -> str:
+    try:
+        return run(root, "git", *arguments, capture=True).stdout.strip()
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr.strip() if error.stderr else "git command failed"
+        fail(detail)
+
+
+def parse_semver(
+    value: str,
+) -> tuple[tuple[int, int, int], Optional[tuple[tuple[int, object], ...]]]:
+    match = SEMVER.fullmatch(value)
+    if not match:
+        fail(f"{value!r} is not a supported SemVer version")
+    core = tuple(int(match.group(index)) for index in range(1, 4))
+    prerelease = match.group(4)
+    build = match.group(5)
+    if build is not None and any(not identifier for identifier in build.split(".")):
+        fail(f"{value!r} contains an empty build identifier")
+    if prerelease is None:
+        return core, None
+    identifiers: list[tuple[int, object]] = []
+    for identifier in prerelease.split("."):
+        if not identifier:
+            fail(f"{value!r} contains an empty prerelease identifier")
+        if identifier.isdigit():
+            if len(identifier) > 1 and identifier.startswith("0"):
+                fail(f"{value!r} contains a numeric prerelease identifier with a leading zero")
+            identifiers.append((0, int(identifier)))
+        else:
+            identifiers.append((1, identifier))
+    return core, tuple(identifiers)
+
+
+def compare_semver(left: str, right: str) -> int:
+    left_core, left_pre = parse_semver(left)
+    right_core, right_pre = parse_semver(right)
+    if left_core != right_core:
+        return (left_core > right_core) - (left_core < right_core)
+    if left_pre is None or right_pre is None:
+        if left_pre is right_pre:
+            return 0
+        return 1 if left_pre is None else -1
+    for left_id, right_id in zip(left_pre, right_pre):
+        if left_id == right_id:
+            continue
+        if left_id[0] != right_id[0]:
+            return -1 if left_id[0] == 0 else 1
+        return (left_id[1] > right_id[1]) - (left_id[1] < right_id[1])
+    return (len(left_pre) > len(right_pre)) - (len(left_pre) < len(right_pre))
+
+
+def replace_once(text: str, old: str, new: str, path: Path) -> str:
+    count = text.count(old)
+    if count != 1:
+        fail(f"expected exactly one {old!r} marker in {path}, found {count}")
+    return text.replace(old, new, 1)
+
+
+def atomic_write(path: Path, content: str) -> None:
+    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as output:
+            output.write(content)
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def changelog_update(text: str, version: str, release_date: str) -> tuple[str, str]:
+    match = re.search(r"(?m)^## Unreleased[ \t]*\n(?P<body>.*?)(?=^## |\Z)", text, re.DOTALL)
+    if not match:
+        fail("CHANGELOG.md must contain an '## Unreleased' section before released versions")
+    body = match.group("body").strip()
+    if not body:
+        fail("CHANGELOG.md '## Unreleased' is empty; summarize the release there first")
+    replacement = f"## Unreleased\n\n## {version} — {release_date}\n\n{body}\n\n"
+    return text[: match.start()] + replacement + text[match.end() :], body
+
+
+def release_notes(version: str, changelog_body: str) -> str:
+    prerelease_note = ""
+    if parse_semver(version)[1] is not None:
+        prerelease_note = (
+            "This is a prerelease. APIs and persisted formats may still evolve before the "
+            "stable line. "
+        )
+    return f"""# Magrathea {version}
+
+This release contains the changes summarized below.
+
+## Changes
+
+{changelog_body}
+
+## Distribution
+
+The 16 logical SDK modules and their Kotlin Multiplatform variants are published under
+`saien.magrathea` in GitHub Packages. Consumer configuration is documented in
+[Publishing](../publishing.md#consume).
+
+The release assets include the signed Maven-layout bundle, checksum, coordinate inventory,
+CycloneDX SBOM, third-party license report, and immutable release-candidate receipt.
+
+## Notes
+
+{prerelease_note}Review the [known issues](../known-issues.md) before adopting this release.
+"""
+
+
+def read_version_files(root: Path) -> list[Path]:
+    manifest = root / "scripts" / "release-version-files.txt"
+    if not manifest.is_file():
+        fail(f"missing version-reference manifest at {manifest}")
+    paths = [
+        root / line.strip()
+        for line in manifest.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    missing = [str(path.relative_to(root)) for path in paths if not path.is_file()]
+    if missing:
+        fail(f"version-reference manifest contains missing files: {', '.join(missing)}")
+    return paths
+
+
+def prepare_changes(root: Path, version: str, release_date: str) -> dict[Path, str]:
+    properties_path = root / "gradle.properties"
+    properties = properties_path.read_text(encoding="utf-8")
+    version_match = re.search(r"(?m)^magrathea\.version=(.+)$", properties)
+    if not version_match:
+        fail("gradle.properties is missing magrathea.version")
+    current = version_match.group(1).strip()
+    parse_semver(current)
+    if compare_semver(version, current) <= 0:
+        fail(f"new version {version} must have higher SemVer precedence than {current}")
+
+    tag = f"v{version}"
+    if git_output(root, "tag", "--list", tag):
+        fail(f"tag {tag} already exists; published versions are immutable")
+
+    notes_path = root / "docs" / "releases" / f"{tag}.md"
+    if notes_path.exists():
+        fail(f"release notes already exist at {notes_path.relative_to(root)}")
+
+    changelog_path = root / "CHANGELOG.md"
+    changelog, changelog_body = changelog_update(
+        changelog_path.read_text(encoding="utf-8"), version, release_date
+    )
+
+    changes: dict[Path, str] = {
+        properties_path: replace_once(
+            properties,
+            f"magrathea.version={current}",
+            f"magrathea.version={version}",
+            properties_path.relative_to(root),
+        ),
+        changelog_path: changelog,
+        notes_path: release_notes(version, changelog_body),
+    }
+
+    for path in read_version_files(root):
+        text = path.read_text(encoding="utf-8")
+        occurrences = text.count(current)
+        if occurrences == 0:
+            fail(f"expected current version {current} in {path.relative_to(root)}")
+        changes[path] = text.replace(current, version)
+
+    return changes
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Prepare version metadata, changelog, release notes, and the quick release gate."
+        )
+    )
+    parser.add_argument("version", help="new SemVer version without the leading v")
+    parser.add_argument(
+        "--date", default=dt.date.today().isoformat(), help="release date (YYYY-MM-DD)"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="validate and list changes without writing"
+    )
+    parser.add_argument(
+        "--skip-verify",
+        action="store_true",
+        help="prepare files without coordinate preview or verifySdkQuick",
+    )
+    arguments = parser.parse_args()
+
+    parse_semver(arguments.version)
+    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", arguments.date):
+        fail(f"{arguments.date!r} is not a valid YYYY-MM-DD date")
+    try:
+        dt.date.fromisoformat(arguments.date)
+    except ValueError:
+        fail(f"{arguments.date!r} is not a valid YYYY-MM-DD date")
+
+    root = Path(__file__).resolve().parent.parent
+    if git_output(root, "status", "--porcelain"):
+        fail("git worktree is not clean; commit or stash existing changes first")
+
+    changes = prepare_changes(root, arguments.version, arguments.date)
+    relative_paths = sorted(str(path.relative_to(root)) for path in changes)
+    if arguments.dry_run:
+        print(f"[prepare-release] would prepare {arguments.version} ({arguments.date})")
+        for path in relative_paths:
+            print(f"[prepare-release] would update {path}")
+        return
+
+    for path, content in changes.items():
+        atomic_write(path, content)
+
+    print(f"[prepare-release] prepared {arguments.version} ({arguments.date})")
+    for path in relative_paths:
+        print(f"[prepare-release] updated {path}")
+
+    if not arguments.skip_verify:
+        print("[prepare-release] previewing publication coordinates")
+        run(root, str(root / "scripts" / "publish-sdk"), "--print")
+        print("[prepare-release] running verifySdkQuick")
+        run(root, str(root / "gradlew"), "verifySdkQuick")
+
+    print(
+        f"""
+[prepare-release] review the generated notes and docs/known-issues.md, then commit
+the release preparation:
+  git diff --check
+  git diff
+  git add -A
+  git commit -m "Prepare Magrathea {arguments.version}"
+
+Push or merge that exact commit to main. After its Verify Magrathea SDK run succeeds:
+  gh workflow run release.yml --ref main -f version={arguments.version}
+
+That workflow builds and verifies the candidate, creates the annotated tag, publishes the exact
+signed bytes, verifies a remote consumer, and creates the GitHub Release.
+""".strip()
+    )
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except subprocess.CalledProcessError as error:
+        command = " ".join(str(part) for part in error.cmd)
+        fail(f"command failed ({error.returncode}): {command}")

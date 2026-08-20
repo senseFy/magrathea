@@ -95,8 +95,8 @@ scripts/publish-sdk --target github
 ```
 
 Direct remote Gradle publish tasks fail closed. `scripts/publish-sdk` creates the signed release
-candidate; the tag workflow publishes the candidate's manifest-bound files without rebuilding
-them.
+candidate; the authorized release workflow publishes the candidate's manifest-bound files without
+rebuilding them.
 
 ### Consume
 
@@ -159,14 +159,21 @@ Repository and signing credentials are environment-only. The publisher rejects n
 repositories, dirty worktrees, skipped release tests, unsigned publications, and coordinates that
 already exist. The repository itself must also enforce immutable release versions.
 
-Maintainers publish through two reviewed workflows:
+Maintainers publish through one manually authorized `Release Magrathea SDK` workflow. It requires
+successful CI for the exact `main` commit, builds and verifies the signed Candidate once, creates
+the annotated tag, publishes four exact-byte Maven shards, validates all remote coordinates,
+resolves an isolated JVM/Android consumer, and creates the GitHub Release.
 
-1. `Build Magrathea Release Candidate` requires successful CI for the exact `main` commit, builds
-   the signed candidate once, and attests the candidate and its release bundle.
-2. An annotated `v*` tag starts
-   [`publish-release.yml`](../.github/workflows/publish-release.yml). It verifies and promotes that
-   candidate, publishes four Maven shards, validates all remote coordinates, resolves an isolated
-   JVM/Android consumer, and creates the GitHub Release.
+Prepare the reviewed version metadata and local quick gate through the single maintainer entry
+point:
+
+```bash
+scripts/prepare-release 0.1.0-alpha.4
+```
+
+It performs no commit, push, tag, or remote publication. After committing and pushing the prepared
+files, wait for exact-SHA CI and dispatch the release workflow with the explicit version. The
+command prints that handoff; [Release Process](release-process.md) is the full runbook.
 
 With signing material in the environment, prepare a candidate without remote side effects:
 
@@ -174,9 +181,9 @@ With signing material in the environment, prepare a candidate without remote sid
 scripts/publish-sdk --target github --prepare-only
 ```
 
-If the tag workflow is interrupted, rerun it. Existing bytes must match the candidate manifest;
-only absent files are uploaded, and each POM is uploaded last. No rerun rebuilds or re-signs the
-release.
+If publication is interrupted, choose **Re-run failed jobs** on the same workflow run. Existing
+bytes must match the Candidate manifest; only absent files are uploaded, and each POM is uploaded
+last. Do not start another dispatch after the tag or package bytes exist.
 
 Inspect a remote Gradle task graph without publishing:
 

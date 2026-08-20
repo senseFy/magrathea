@@ -75,8 +75,8 @@ dependencies {
 | Browser JS | Gateway-backed client |
 | Browser Wasm | 实验性的 Gateway-backed preview |
 
-Desktop 支持通过 JVM embedding 提供。详细证据与限制维护在
-[验证状态](docs/verification-status.md)和[已知问题](docs/known-issues.md)中。
+Desktop 支持通过 JVM embedding 提供。平台限制与外部验证缺口维护在
+[已知问题](docs/known-issues.md)中。
 
 ## 文档
 

@@ -78,8 +78,8 @@ and the [samples](samples). Release artifacts and supply-chain evidence:
 | Browser JS | Gateway-backed client |
 | Browser Wasm | Experimental Gateway-backed preview |
 
-Desktop support is delivered through JVM embedding. Detailed evidence and limitations are tracked
-in [Verification Status](docs/verification-status.md) and [Known Issues](docs/known-issues.md).
+Desktop support is delivered through JVM embedding. Platform limitations and external validation
+gaps are tracked in [Known Issues](docs/known-issues.md).
 
 ## Documentation
 

@@ -21,16 +21,18 @@
   paths.
 - Remote Maven publication requires in-memory PGP signing and an immediate immutable-coordinate
   preflight. Repository credentials and signing material are environment-only.
-- The exact commit passes the complete CI gate before candidate preparation. Candidate preparation
-  builds and signs once; tag promotion verifies its provenance, receipt, signatures, coordinate
-  inventory, and file manifest without rebuilding.
+- The exact commit passes the complete CI gate before release authorization. One manually
+  dispatched workflow builds and signs the Candidate once, verifies its provenance, receipt,
+  signatures, coordinate inventory, and file manifest, then creates the annotated tag and promotes
+  those exact bytes without rebuilding.
 - Maven promotion uses disjoint logical-module shards. New versions receive one global absence
   preflight; reruns compare every existing file with the candidate and upload only absent bytes.
   POMs are uploaded last so a partial coordinate is not advertised as complete.
 - Versions are immutable. Rollback means pinning a consumer to a previous verified version or
   publishing a forward fix, never overwriting an existing coordinate.
-- CI may build, test, package, upload a candidate, and attest provenance. Publication, tagging,
-  promotion, and Gateway deployment require explicit release authorization.
+- CI may build, test, package, upload a Candidate, and attest provenance. One explicit manual
+  dispatch authorizes Candidate preparation, tagging, and promotion for a named version; Gateway
+  deployment remains separately authorized.
 
 ## Evidence boundary
 

@@ -5,6 +5,17 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+### Added
+
+- Provider failures now distinguish accepted credentials with denied resource access from
+  authentication failures across HTTP transport, reference adapters, Runtime failure codes, and
+  the Chatbot facade.
+
+### Fixed
+
+- Interrupted OpenAI Responses and Anthropic recovery replays now omit non-portable reasoning
+  blocks while preserving replayable answer text and Tool calls instead of rejecting the request.
+
 ## 0.1.0-alpha.3 — 2026-08-09
 
 ### Added

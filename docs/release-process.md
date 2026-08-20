@@ -8,10 +8,19 @@ is in [Publishing](publishing.md).
 The release version is `magrathea.version` in `gradle.properties`.
 
 ```bash
-scripts/publish-sdk --print --version 0.1.0-alpha.3
+scripts/prepare-release 0.1.0-alpha.4
 ```
 
-The release tag is `v<magrathea.version>`. Its matching changelog entry must have a date and
+This is the maintainer's single preparation entry point. Start with reviewed release-facing changes
+under `CHANGELOG.md`'s `Unreleased` section, then run the command from a clean worktree. It validates
+that the new SemVer advances the current version, promotes `Unreleased` under the supplied date,
+generates release notes, updates controlled current-version references, previews every Maven
+coordinate, and runs `verifySdkQuick`. Use `--date YYYY-MM-DD` to override today's date or
+`--dry-run` to inspect its file plan without changing the worktree.
+
+The command deliberately does not commit, push, create a tag, or publish. Review the generated
+release notes and known-issue wording before committing. The release tag remains
+`v<magrathea.version>`; its matching changelog entry must have a date and
 `docs/releases/v<tag>.md` must exist.
 
 ## Verification gates
@@ -68,8 +77,11 @@ The release candidate contains:
 - the coordinate inventory and SHA-256 file manifest;
 - the SBOM, license report, and verification receipt.
 
-The receipt binds the candidate to its source commit, successful CI run, candidate run, version,
-repository, module inventory, release key, coordinates, manifest, and bundle digest.
+The receipt binds the candidate to its source commit, successful CI run, version, repository,
+module inventory, release key, coordinates, manifest, and bundle digest.
+
+The exact-SHA workflow run, candidate receipt, Candidate attestation, and GitHub Release assets are
+the per-release verification record; no parallel manual run log is maintained.
 
 ## Remote publication rules
 
@@ -81,11 +93,11 @@ All remote Maven releases must be:
 - byte-checked against the candidate manifest before and after upload;
 - written to a repository that enforces immutable versions.
 
-Candidate preparation owns signing and the verification receipt. The tag workflow never receives
-the signing key. Before upload, the candidate is checked against the tagged source and every PGP
-signature is verified with the committed public key. The tag workflow publishes four disjoint
-logical-module shards on Linux, uploads each POM last, and resolves an isolated JVM/Android consumer
-before creating the GitHub Release.
+The `release-candidate` job owns signing and the verification receipt; later jobs never receive the
+signing key. The candidate is checked against the authorized source and every PGP signature is
+verified with the committed public key before the workflow creates its annotated tag. The workflow
+then publishes four disjoint logical-module shards on Linux, uploads each POM last, and resolves an
+isolated JVM/Android consumer before creating the GitHub Release.
 
 For a wholly new version, one global POM-absence preflight allows the shards to avoid hundreds of
 initial read requests. A rerun probes every staged file, accepts only byte-identical remote content,
@@ -101,39 +113,38 @@ Repository secrets:
 - `MAGRATHEA_SIGNING_KEY`: ASCII-armored private release key
 - `MAGRATHEA_SIGNING_PASSWORD`: release-key passphrase
 
-`GITHUB_TOKEN` supplies repository-scoped package and release access. The workflow grants only
-`packages: write`, `contents: write`, and the permissions required for provenance attestation.
+`GITHUB_TOKEN` supplies repository-scoped package and release access. Each job receives only the
+permissions it needs for artifacts, provenance, tagging, package publication, or release creation.
 
 Release sequence:
 
-1. Update the version, changelog date, release notes, verification status, known issues, and
-   supported-version wording.
-2. Inspect `scripts/publish-sdk --print`, run `./gradlew verifySdkQuick`, and push the exact release
-   commit to `main`.
-3. Require the `Verify Magrathea SDK` workflow to pass.
-4. Run `Build Magrathea Release Candidate` for the exact commit. Inspect the candidate, bundle,
-   receipt, and attestations.
-5. Create and push one annotated tag:
+1. Summarize the release under `CHANGELOG.md`'s `Unreleased` section, then run
+   `scripts/prepare-release <version>`. Review its generated release notes and known-issue wording.
+2. Commit the prepared files and push the exact release commit to `main`. The preparation command
+   has already inspected `scripts/publish-sdk --print` and run `./gradlew verifySdkQuick`.
+3. Wait for the `Verify Magrathea SDK` workflow to pass for that exact commit.
+4. Authorize that version once:
 
    ```bash
-   git tag -a v0.1.0-alpha.3 -m "Magrathea 0.1.0-alpha.3"
-   git push origin v0.1.0-alpha.3
+   gh workflow run release.yml --ref main -f version=0.1.0-alpha.4
    ```
 
-6. Require `Publish Magrathea Release` to pass. It promotes the oldest successful candidate for the
-   tag commit, verifies both attestations, publishes the exact signed Maven bytes, reads back every
-   coordinate, and resolves an isolated JVM/Android consumer.
-7. Confirm the GitHub Release contains the bundle, checksum, coordinate inventory, Maven manifest,
+   `Release Magrathea SDK` checks exact-SHA CI, builds and verifies one Candidate, attests it,
+   creates the annotated tag, publishes its exact signed Maven bytes, reads back every coordinate,
+   verifies an isolated JVM/Android consumer, and creates the GitHub Release.
+5. Confirm the GitHub Release contains the bundle, checksum, coordinate inventory, Maven manifest,
    SBOM, license report, and receipt.
 
-If publication is interrupted, rerun the same `Publish Magrathea Release` workflow. The rerun
-revalidates the candidate and remote files, then uploads only missing bytes. A digest mismatch,
-invalid signature, failed gate, or missing provenance requires a new version.
+If the run is interrupted after Candidate preparation, use GitHub's **Re-run failed jobs** on that
+same workflow run. Successful jobs are retained, so publication reuses the same Candidate and
+uploads only missing bytes after comparing existing remote files. Do not start a new dispatch or
+choose **Re-run all jobs** after a tag or any package bytes exist. A digest mismatch, invalid
+signature, failed gate, or missing provenance requires a new version.
 
-The tag workflow rejects a lightweight tag, a tag outside `origin/main`, a version mismatch, an
-undated changelog, missing release notes, missing or mismatched candidate evidence, conflicting
-remote bytes, or a coordinate that cannot be read back. It marks SemVer prereleases as GitHub
-Pre-releases.
+The workflow rejects a version outside `origin/main`, a version mismatch, an undated changelog,
+missing release notes, mismatched Candidate evidence, conflicting remote bytes, or a coordinate that
+cannot be read back. Existing tags must be annotated and point to the exact authorized commit.
+SemVer prereleases become GitHub Pre-releases.
 
 Tags and published coordinates are immutable. Fix a failed release under a new version; do not move
 or force-push a published tag.

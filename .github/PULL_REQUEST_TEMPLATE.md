@@ -21,7 +21,8 @@ List exact commands and results. Explain any evidence that could not be produced
 - [ ] Public API changes include an intentionally reviewed ABI diff.
 - [ ] Serialization or protocol changes include a version/fixture decision and fail-closed tests.
 - [ ] Credentials, private content, endpoints, and raw Provider failures remain outside persisted and diagnostic state.
-- [ ] User-facing behavior, samples, Known Issues, and release notes are updated where applicable.
+- [ ] User-visible behavior or contract changes update `CHANGELOG.md` under `Unreleased`, or this is marked not applicable with an explanation.
+- [ ] Samples, Known Issues, and other owned documentation are updated where applicable.
 - [ ] The change does not introduce generated build output, credentials, or unrelated formatting.
 
 Delete no checklist item merely because it does not apply; mark it as not applicable and explain why.
