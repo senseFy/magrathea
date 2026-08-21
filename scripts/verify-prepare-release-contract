@@ -73,7 +73,13 @@ git -C "$FIXTURE" commit -q -m fixture
 "$FIXTURE/scripts/prepare-release" 0.1.0-alpha.2 --date 2026-08-19 --dry-run >/dev/null
 [[ -z "$(git -C "$FIXTURE" status --porcelain)" ]] || fail "dry-run changed the fixture"
 
-"$FIXTURE/scripts/prepare-release" 0.1.0-alpha.2 --date 2026-08-19 >/dev/null
+prepare_output="$(
+  "$FIXTURE/scripts/prepare-release" 0.1.0-alpha.2 --date 2026-08-19
+)"
+[[ "$prepare_output" == *"scripts/release 0.1.0-alpha.2"* ]] ||
+  fail "preparation did not hand off to the release orchestrator"
+[[ "$prepare_output" != *"gh workflow run release.yml"* ]] ||
+  fail "preparation still exposes the low-level workflow dispatch"
 [[ -f "$FIXTURE/.git/prepare-release-publish-preview-called" ]] ||
   fail "publication coordinates were not previewed"
 [[ -f "$FIXTURE/.git/prepare-release-quick-gate-called" ]] ||

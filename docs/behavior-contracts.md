@@ -81,7 +81,7 @@ substitute for the public API or the tests themselves.
 | D-005 | Remote Maven publication requires in-memory PGP signing, publication-isolated signature outputs, and immutable coordinates | Publisher and rollback contracts |
 | D-006 | The production SBOM has the exact internal-module set, recognized licenses, and no test dependencies | Supply-chain mutation gate |
 | D-007 | The release bundle contains Maven, Web, release notes/key, SBOM/license, and SHA-256 artifacts | Release-bundle verifier |
-| D-008 | One version-bound manual release authorization creates a dated, version-matched annotated tag and promotes an attested Candidate for the exact successful CI commit | Tag, Candidate, and workflow contracts |
+| D-008 | One version-and-commit-bound manual release authorization creates a dated, version-matched annotated tag and promotes an attested Candidate for the exact successful CI commit; duplicate authorizations stop before release side effects | Tag, Candidate, and workflow contracts |
 | D-009 | Remote publication uses the candidate's signed, manifest-bound bytes; reruns reject mismatches and fill only absent files | Exact-publication contract |
 | D-010 | Every remote coordinate and an isolated JVM/Android consumer are verified before the GitHub Release | Remote-resolution contract |
 

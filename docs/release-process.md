@@ -19,9 +19,36 @@ coordinate, and runs `verifySdkQuick`. Use `--date YYYY-MM-DD` to override today
 `--dry-run` to inspect its file plan without changing the worktree.
 
 The command deliberately does not commit, push, create a tag, or publish. Review the generated
-release notes and known-issue wording before committing. The release tag remains
+release notes and known-issue wording before committing. Its final output prints the exact files to
+stage and the next command. The release tag remains
 `v<magrathea.version>`; its matching changelog entry must have a date and
 `docs/releases/v<tag>.md` must exist.
+
+## Release command
+
+After the reviewed preparation commit is on local `main`, finish the release through one command:
+
+```bash
+scripts/release 0.1.0-alpha.4
+```
+
+The command shows one plan and asks for one `[y/N]` confirmation. It fast-forwards `origin/main` to
+the exact local commit, waits for that commit's push-triggered `Verify Magrathea SDK` run, dispatches
+the version-and-commit-bound `Release Magrathea SDK` workflow, and waits for the GitHub Release. It
+requires a clean worktree, local `main`, an authenticated GitHub CLI, matching prepared version
+metadata, dated changelog notes, and generated release notes. If `origin/main` advances while CI is
+running, the command stops before dispatch; the workflow independently rejects any dispatch whose
+checkout does not match the explicitly authorized commit.
+
+Use `--dry-run` to validate and inspect the plan without pushing, dispatching, or waiting. Use
+`--yes` for an explicitly authorized non-interactive invocation; without it, non-interactive input
+is rejected. There is no CI or release-gate bypass.
+
+The command is safe to repeat. It reuses successful or running exact-SHA Verify and
+version-and-commit-bound Release runs. A concurrently submitted duplicate authorization is rejected
+by the workflow before Candidate construction or any publication side effect. If the Release run
+failed, the command stops and points to that run's **Re-run failed jobs** action; the maintainer
+reruns the command afterward to resume watching it.
 
 ## Verification gates
 
@@ -120,26 +147,27 @@ Release sequence:
 
 1. Summarize the release under `CHANGELOG.md`'s `Unreleased` section, then run
    `scripts/prepare-release <version>`. Review its generated release notes and known-issue wording.
-2. Commit the prepared files and push the exact release commit to `main`. The preparation command
-   has already inspected `scripts/publish-sdk --print` and run `./gradlew verifySdkQuick`.
-3. Wait for the `Verify Magrathea SDK` workflow to pass for that exact commit.
-4. Authorize that version once:
+2. Commit or merge the prepared files onto local `main`. The preparation command has already
+   inspected `scripts/publish-sdk --print` and run `./gradlew verifySdkQuick`.
+3. Authorize and follow the remaining release once:
 
    ```bash
-   gh workflow run release.yml --ref main -f version=0.1.0-alpha.4
+   scripts/release 0.1.0-alpha.4
    ```
 
-   `Release Magrathea SDK` checks exact-SHA CI, builds and verifies one Candidate, attests it,
-   creates the annotated tag, publishes its exact signed Maven bytes, reads back every coordinate,
-   verifies an isolated JVM/Android consumer, and creates the GitHub Release.
-5. Confirm the GitHub Release contains the bundle, checksum, coordinate inventory, Maven manifest,
-   SBOM, license report, and receipt.
+   The command pushes the exact commit, waits for exact-SHA CI, and follows `Release Magrathea SDK`
+   while it builds and verifies one Candidate, attests it, creates the annotated tag, publishes its
+   exact signed Maven bytes, reads back every coordinate, verifies an isolated JVM/Android consumer,
+   and creates the GitHub Release.
+4. Confirm the GitHub Release contains the bundle, checksum, coordinate inventory, Maven manifest,
+   SBOM, license report, and receipt. The command prints its URL when the workflow completes.
 
-If the run is interrupted after Candidate preparation, use GitHub's **Re-run failed jobs** on that
-same workflow run. Successful jobs are retained, so publication reuses the same Candidate and
-uploads only missing bytes after comparing existing remote files. Do not start a new dispatch or
-choose **Re-run all jobs** after a tag or any package bytes exist. A digest mismatch, invalid
-signature, failed gate, or missing provenance requires a new version.
+If the run is interrupted after Candidate preparation, `scripts/release` identifies the existing
+failed run and directs the maintainer to GitHub's **Re-run failed jobs** on that same run. Successful
+jobs are retained, so publication reuses the same Candidate and uploads only missing bytes after
+comparing existing remote files. Do not start a new dispatch or choose **Re-run all jobs** after a
+tag or any package bytes exist. A digest mismatch, invalid signature, failed gate, or missing
+provenance requires a new version.
 
 The workflow rejects a version outside `origin/main`, a version mismatch, an undated changelog,
 missing release notes, mismatched Candidate evidence, conflicting remote bytes, or a coordinate that
