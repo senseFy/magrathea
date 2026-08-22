@@ -11,6 +11,11 @@ Notable changes to Magrathea are documented here. The project follows
   commit, waits for its CI result, and starts or resumes the version-and-commit-bound release
   workflow.
 
+### Changed
+
+- Ordinary pull-request merges no longer repeat the full cross-platform CI matrix on `main`, while
+  version-changing release commits retain exact-SHA verification before publication.
+
 ## 0.1.0-alpha.4 — 2026-08-19
 
 ### Added
