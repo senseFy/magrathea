@@ -128,8 +128,15 @@ verify_path, verify = load_workflow(root, "verify.yml")
 nightly_path, nightly = load_workflow(root, "nightly.yml")
 release_path, release = load_workflow(root, "release.yml")
 
-fail_contract("verify.yml must trigger on PR and main push") unless
-  triggers(verify).key?("pull_request") && triggers(verify).key?("push")
+verify_triggers = triggers(verify)
+verify_push = verify_triggers["push"]
+fail_contract("verify.yml must trigger on every PR") unless
+  verify_triggers.key?("pull_request")
+fail_contract("verify.yml must limit main pushes to release version changes") unless
+  verify_push.is_a?(Hash) &&
+    verify_push.keys.sort == %w[branches paths] &&
+    Array(verify_push["branches"]) == ["main"] &&
+    Array(verify_push["paths"]) == ["gradle.properties"]
 %w[linux-gate apple-gate web-gate dependency-review].each do |job|
   fail_contract("verify.yml missing #{job}") unless verify.fetch("jobs", {}).key?(job)
 end

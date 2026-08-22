@@ -62,7 +62,10 @@ reruns the command afterward to resume watching it.
 
 The full CI gate validates the publication graph and isolated consumers. Candidate preparation
 does not repeat platform tests; it assembles the signed artifacts for that exact successful commit.
-Remote publication adds registry resolution and provenance evidence.
+The workflow runs the full matrix for every pull request. On `main`, its push trigger is limited to
+`gradle.properties`, so ordinary PR merges do not repeat the matrix while every prepared release
+version still receives an exact-SHA gate. Remote publication adds registry resolution and
+provenance evidence.
 
 ### Intentional API changes
 
