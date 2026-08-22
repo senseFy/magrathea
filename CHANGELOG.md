@@ -5,6 +5,12 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+### Added
+
+- Maintainers can finish a prepared release through one guarded command that pushes the exact
+  commit, waits for its CI result, and starts or resumes the version-and-commit-bound release
+  workflow.
+
 ## 0.1.0-alpha.4 — 2026-08-19
 
 ### Added

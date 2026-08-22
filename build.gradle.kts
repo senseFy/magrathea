@@ -496,6 +496,17 @@ val verifyPrepareReleaseContract = tasks.register<Exec>("verifyPrepareReleaseCon
     )
 }
 
+val verifyReleaseCommandContract = tasks.register<Exec>("verifyReleaseCommandContract") {
+    group = "verification"
+    description = "Mutation-test the guarded one-command release orchestrator."
+    inputs.file("scripts/release")
+    inputs.file("scripts/verify-release-command-contract")
+    commandLine(
+        file("scripts/verify-release-command-contract").absolutePath,
+        rootDir.absolutePath,
+    )
+}
+
 val normalizedSdkSbom = layout.buildDirectory.file("reports/supply-chain/magrathea-sbom.cdx.json")
 val sdkLicenseReport = layout.buildDirectory.file("reports/supply-chain/third-party-licenses.tsv")
 val webRuntimeLicenseLedger = layout.projectDirectory.file("third-party/web-runtime-licenses.json")
@@ -569,6 +580,7 @@ val verifySdkQuick = tasks.register("verifySdkQuick") {
         verifySdkRollbackContract,
         verifyCiContract,
         verifyPrepareReleaseContract,
+        verifyReleaseCommandContract,
         verifyReleaseTagContract,
         verifySdkPublicationArtifactIsolation,
     )

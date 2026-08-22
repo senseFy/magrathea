@@ -8,6 +8,7 @@ import datetime as dt
 import os
 from pathlib import Path
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -264,19 +265,21 @@ def main() -> None:
         print("[prepare-release] running verifySdkQuick")
         run(root, str(root / "gradlew"), "verifySdkQuick")
 
+    staged_paths = " ".join(shlex.quote(path) for path in relative_paths)
     print(
         f"""
 [prepare-release] review the generated notes and docs/known-issues.md, then commit
 the release preparation:
   git diff --check
   git diff
-  git add -A
+  git add -- {staged_paths}
   git commit -m "Prepare Magrathea {arguments.version}"
 
-Push or merge that exact commit to main. After its Verify Magrathea SDK run succeeds:
-  gh workflow run release.yml --ref main -f version={arguments.version}
+Commit or merge that exact preparation onto local main, then finish the release with:
+  scripts/release {arguments.version}
 
-That workflow builds and verifies the candidate, creates the annotated tag, publishes the exact
+The release command pushes the commit, waits for exact-SHA CI, and starts or resumes the guarded
+workflow that builds and verifies the candidate, creates the annotated tag, publishes the exact
 signed bytes, verifies a remote consumer, and creates the GitHub Release.
 """.strip()
     )

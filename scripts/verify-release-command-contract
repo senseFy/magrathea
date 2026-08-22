@@ -1,0 +1,276 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+FIXTURE_ROOT="$(mktemp -d)"
+REAL_GIT="$(command -v git)"
+
+cleanup() {
+  rm -rf "$FIXTURE_ROOT"
+}
+trap cleanup EXIT
+
+fail() {
+  printf 'release-command contract failed: %s\n' "$*" >&2
+  exit 1
+}
+
+expect_rejected() {
+  local expected="$1"
+  shift
+  local output
+  if output="$("$@" 2>&1)"; then
+    fail "unsafe invocation unexpectedly passed: $*"
+  fi
+  [[ "$output" == *"$expected"* ]] || fail "unexpected rejection: $output"
+}
+
+write_fake_commands() {
+  local fixture="$1"
+  mkdir -p "$fixture/fake-bin" "$fixture/fake-gh"
+
+  cat > "$fixture/fake-bin/git" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "remote" && "${2:-}" == "get-url" && "${3:-}" == "origin" ]]; then
+  printf 'https://github.com/senseFy/magrathea.git\n'
+  exit 0
+fi
+exec "$REAL_GIT" "$@"
+EOF
+
+  cat > "$fixture/fake-bin/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+workflow=""
+commit=""
+expected_commit=""
+version="$FAKE_VERSION"
+arguments=("$@")
+for ((index = 0; index < ${#arguments[@]}; index++)); do
+  case "${arguments[$index]}" in
+    --workflow)
+      workflow="${arguments[$((index + 1))]}"
+      ;;
+    --commit)
+      commit="${arguments[$((index + 1))]}"
+      ;;
+    commit=*)
+      expected_commit="${arguments[$index]#commit=}"
+      ;;
+    version=*)
+      version="${arguments[$index]#version=}"
+      ;;
+  esac
+done
+
+case "${1:-} ${2:-}" in
+  "auth status")
+    exit 0
+    ;;
+  "run list")
+    remote_sha="$("$REAL_GIT" ls-remote --heads origin refs/heads/main | awk 'NR == 1 { print $1 }')"
+    if [[ "$workflow" == "verify.yml" ]]; then
+      if [[ -f "$FAKE_GH_DIR/advance-main-on-verify" ]]; then
+        tree="$("$REAL_GIT" rev-parse "$commit^{tree}")"
+        next_commit="$("$REAL_GIT" commit-tree "$tree" -p "$commit" -m "concurrent main commit")"
+        "$REAL_GIT" push origin "$next_commit:refs/heads/main" >/dev/null 2>&1
+        rm "$FAKE_GH_DIR/advance-main-on-verify"
+        conclusion="success"
+        printf '[{"databaseId":101,"status":"completed","conclusion":"%s","headSha":"%s","url":"https://example.invalid/verify/101","createdAt":"2026-08-20T00:00:00Z","displayTitle":"Verify"}]\n' "$conclusion" "$commit"
+      elif [[ "$commit" == "$remote_sha" ]]; then
+        conclusion="success"
+        [[ ! -f "$FAKE_GH_DIR/verify-state" ]] || conclusion="$(<"$FAKE_GH_DIR/verify-state")"
+        printf '[{"databaseId":101,"status":"completed","conclusion":"%s","headSha":"%s","url":"https://example.invalid/verify/101","createdAt":"2026-08-20T00:00:00Z","displayTitle":"Verify"}]\n' "$conclusion" "$commit"
+      else
+        printf '[]\n'
+      fi
+      exit 0
+    fi
+    if [[ "$workflow" == "release.yml" && -f "$FAKE_GH_DIR/release-state" ]]; then
+      release_sha="$remote_sha"
+      [[ ! -f "$FAKE_GH_DIR/release-head-sha" ]] || release_sha="$(<"$FAKE_GH_DIR/release-head-sha")"
+      state="$(<"$FAKE_GH_DIR/release-state")"
+      status="completed"
+      conclusion="$state"
+      if [[ "$state" == "active" ]]; then
+        status="in_progress"
+        conclusion=""
+      elif [[ "$state" != "failure" ]]; then
+        conclusion="success"
+      fi
+      printf '[{"databaseId":202,"status":"%s","conclusion":"%s","headSha":"%s","url":"https://example.invalid/release/202","createdAt":"2026-08-20T00:01:00Z","displayTitle":"Release Magrathea SDK %s"}]\n' "$status" "$conclusion" "$release_sha" "$FAKE_VERSION"
+    else
+      printf '[]\n'
+    fi
+    ;;
+  "workflow run")
+    [[ "$expected_commit" =~ ^[0-9a-f]{40}$ ]] || {
+      printf 'missing exact commit input\n' >&2
+      exit 92
+    }
+    count=0
+    [[ ! -f "$FAKE_GH_DIR/dispatch-count" ]] || count="$(<"$FAKE_GH_DIR/dispatch-count")"
+    printf '%s\n' "$((count + 1))" > "$FAKE_GH_DIR/dispatch-count"
+    printf '%s\n' "$expected_commit" > "$FAKE_GH_DIR/release-head-sha"
+    printf 'success\n' > "$FAKE_GH_DIR/release-state"
+    if ! "$REAL_GIT" rev-parse "refs/tags/v$version" >/dev/null 2>&1; then
+      "$REAL_GIT" tag -a "v$version" "$expected_commit" -m "Magrathea $version"
+    fi
+    "$REAL_GIT" push origin "refs/tags/v$version" >/dev/null
+    ;;
+  "run watch")
+    if [[ -f "$FAKE_GH_DIR/release-state" && \
+          "$(<"$FAKE_GH_DIR/release-state")" == "active" ]]; then
+      printf 'success\n' > "$FAKE_GH_DIR/release-state"
+      if ! "$REAL_GIT" rev-parse "refs/tags/v$FAKE_VERSION" >/dev/null 2>&1; then
+        "$REAL_GIT" tag -a "v$FAKE_VERSION" -m "Magrathea $FAKE_VERSION"
+      fi
+      "$REAL_GIT" push origin "refs/tags/v$FAKE_VERSION" >/dev/null
+    fi
+    exit 0
+    ;;
+  "release view")
+    [[ -f "$FAKE_GH_DIR/release-state" ]] || exit 1
+    [[ "$(<"$FAKE_GH_DIR/release-state")" == "success" ]] || exit 1
+    printf '{"tagName":"v%s","url":"https://example.invalid/releases/v%s","isPrerelease":true}\n' "$FAKE_VERSION" "$FAKE_VERSION"
+    ;;
+  *)
+    printf 'unexpected fake gh invocation: %s\n' "$*" >&2
+    exit 91
+    ;;
+esac
+EOF
+  chmod +x "$fixture/fake-bin/git" "$fixture/fake-bin/gh"
+}
+
+init_fixture() {
+  local fixture="$1"
+  local remote_state="$2"
+  mkdir -p "$fixture/repo/scripts" "$fixture/repo/docs/releases"
+  cp "$ROOT_DIR/scripts/release" "$fixture/repo/scripts/release"
+  chmod +x "$fixture/repo/scripts/release"
+  printf 'magrathea.version=0.1.0-alpha.2\n' > "$fixture/repo/gradle.properties"
+  cat > "$fixture/repo/CHANGELOG.md" <<'EOF'
+# Changelog
+
+## Unreleased
+
+## 0.1.0-alpha.2 — 2026-08-20
+
+### Added
+
+- A guarded release command.
+EOF
+  printf '# Magrathea 0.1.0-alpha.2\n' > \
+    "$fixture/repo/docs/releases/v0.1.0-alpha.2.md"
+
+  "$REAL_GIT" -C "$fixture/repo" init -q -b main
+  "$REAL_GIT" -C "$fixture/repo" config user.name "Magrathea Contract"
+  "$REAL_GIT" -C "$fixture/repo" config user.email "contract@example.invalid"
+  "$REAL_GIT" -C "$fixture/repo" add .
+  "$REAL_GIT" -C "$fixture/repo" commit -q -m "prepared release"
+  "$REAL_GIT" init -q --bare "$fixture/origin.git"
+  "$REAL_GIT" -C "$fixture/repo" remote add origin "$fixture/origin.git"
+  if [[ "$remote_state" == "current" ]]; then
+    "$REAL_GIT" -C "$fixture/repo" push -q -u origin main
+  else
+    first_commit="$($REAL_GIT -C "$fixture/repo" rev-parse HEAD)"
+    "$REAL_GIT" -C "$fixture/repo" commit -q --allow-empty -m "local release commit"
+    "$REAL_GIT" -C "$fixture/repo" push -q origin "$first_commit:refs/heads/main"
+  fi
+  write_fake_commands "$fixture"
+}
+
+export REAL_GIT
+export FAKE_VERSION="0.1.0-alpha.2"
+
+HAPPY="$FIXTURE_ROOT/happy"
+init_fixture "$HAPPY" behind
+export FAKE_GH_DIR="$HAPPY/fake-gh"
+export PATH="$HAPPY/fake-bin:$PATH"
+
+head_before="$($REAL_GIT --git-dir="$HAPPY/origin.git" rev-parse refs/heads/main)"
+dry_output="$(cd "$HAPPY/repo" && scripts/release "$FAKE_VERSION" --dry-run)"
+[[ "$dry_output" == *"will fast-forward"* ]] || fail "dry-run did not show the push plan"
+[[ "$dry_output" == *"no remote changes were made"* ]] || fail "dry-run did not report safety"
+[[ "$($REAL_GIT --git-dir="$HAPPY/origin.git" rev-parse refs/heads/main)" == "$head_before" ]] ||
+  fail "dry-run pushed origin/main"
+[[ ! -f "$FAKE_GH_DIR/dispatch-count" ]] || fail "dry-run dispatched the release workflow"
+
+expect_rejected "confirmation requires an interactive terminal" \
+  bash -c "cd '$HAPPY/repo' && scripts/release '$FAKE_VERSION'"
+[[ "$($REAL_GIT --git-dir="$HAPPY/origin.git" rev-parse refs/heads/main)" == "$head_before" ]] ||
+  fail "non-interactive rejection pushed origin/main"
+
+happy_output="$(cd "$HAPPY/repo" && scripts/release "$FAKE_VERSION" --yes)"
+[[ "$happy_output" == *"exact-SHA Verify passed"* ]] || fail "exact-SHA Verify was not reused"
+[[ "$happy_output" == *"released $FAKE_VERSION"* ]] || fail "release success was not reported"
+[[ "$(<"$FAKE_GH_DIR/dispatch-count")" == "1" ]] || fail "release was not dispatched exactly once"
+[[ "$($REAL_GIT --git-dir="$HAPPY/origin.git" rev-parse refs/heads/main)" == \
+   "$($REAL_GIT -C "$HAPPY/repo" rev-parse HEAD)" ]] || fail "prepared commit was not pushed"
+[[ "$(<"$FAKE_GH_DIR/release-head-sha")" == \
+   "$($REAL_GIT -C "$HAPPY/repo" rev-parse HEAD)" ]] || fail "dispatch was not bound to HEAD"
+
+repeat_output="$(cd "$HAPPY/repo" && scripts/release "$FAKE_VERSION" --yes)"
+[[ "$repeat_output" == *"released $FAKE_VERSION"* ]] || fail "completed release was not reused"
+[[ "$(<"$FAKE_GH_DIR/dispatch-count")" == "1" ]] || fail "repeat invocation dispatched twice"
+
+ACTIVE="$FIXTURE_ROOT/active"
+init_fixture "$ACTIVE" current
+export FAKE_GH_DIR="$ACTIVE/fake-gh"
+export PATH="$ACTIVE/fake-bin:$PATH"
+printf 'active\n' > "$FAKE_GH_DIR/release-state"
+active_output="$(cd "$ACTIVE/repo" && scripts/release "$FAKE_VERSION" --yes)"
+[[ "$active_output" == *"waiting for Release run 202"* ]] || fail "active release was not reused"
+[[ "$active_output" == *"released $FAKE_VERSION"* ]] || fail "active release did not complete"
+[[ ! -f "$FAKE_GH_DIR/dispatch-count" ]] || fail "active release caused a duplicate dispatch"
+
+ADVANCE="$FIXTURE_ROOT/advance"
+init_fixture "$ADVANCE" behind
+export FAKE_GH_DIR="$ADVANCE/fake-gh"
+export PATH="$ADVANCE/fake-bin:$PATH"
+touch "$FAKE_GH_DIR/advance-main-on-verify"
+expect_rejected "origin/main advanced" \
+  bash -c "cd '$ADVANCE/repo' && scripts/release '$FAKE_VERSION' --yes"
+[[ ! -f "$FAKE_GH_DIR/dispatch-count" ]] || fail "moving main caused a release dispatch"
+
+FAILED_VERIFY="$FIXTURE_ROOT/failed-verify"
+init_fixture "$FAILED_VERIFY" current
+export FAKE_GH_DIR="$FAILED_VERIFY/fake-gh"
+export PATH="$FAILED_VERIFY/fake-bin:$PATH"
+printf 'failure\n' > "$FAKE_GH_DIR/verify-state"
+expect_rejected "Verify run 101 ended as failure" \
+  bash -c "cd '$FAILED_VERIFY/repo' && scripts/release '$FAKE_VERSION' --yes"
+[[ ! -f "$FAKE_GH_DIR/dispatch-count" ]] || fail "failed Verify caused a release dispatch"
+
+FAILED="$FIXTURE_ROOT/failed"
+init_fixture "$FAILED" current
+export FAKE_GH_DIR="$FAILED/fake-gh"
+export PATH="$FAILED/fake-bin:$PATH"
+printf 'failure\n' > "$FAKE_GH_DIR/release-state"
+expect_rejected "Re-run failed jobs" \
+  bash -c "cd '$FAILED/repo' && scripts/release '$FAKE_VERSION' --yes"
+[[ ! -f "$FAKE_GH_DIR/dispatch-count" ]] || fail "failed release caused a duplicate dispatch"
+
+help_output="$("$ROOT_DIR/scripts/release" --help)"
+[[ "$help_output" != *"--skip-ci"* && "$help_output" != *"--force"* ]] ||
+  fail "release command exposes a verification bypass"
+
+prepare_make_output="$(
+  make -n -C "$ROOT_DIR" prepare-release \
+    RELEASE_VERSION="$FAKE_VERSION" RELEASE_ARGS=--dry-run
+)"
+[[ "$prepare_make_output" == *"scripts/prepare-release \"$FAKE_VERSION\" --dry-run"* ]] ||
+  fail "Make prepare-release no longer forwards RELEASE_ARGS"
+release_make_output="$(
+  make -n -C "$ROOT_DIR" release \
+    RELEASE_VERSION="$FAKE_VERSION" RELEASE_ARGS=--dry-run
+)"
+[[ "$release_make_output" == *"scripts/release \"$FAKE_VERSION\" --dry-run"* ]] ||
+  fail "Make release does not forward RELEASE_ARGS"
+
+printf '%s%s\n' \
+  'MAGRATHEA_RELEASE_COMMAND_CONTRACT_PASS push=exact-sha verify=reused dispatch=commit-bound' \
+  ' confirmation=required dry_run=side-effect-free active=reused failures=same-run make=compatible'

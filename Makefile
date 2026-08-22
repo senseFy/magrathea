@@ -13,7 +13,7 @@ HOST_OS := $(shell uname -s)
 	help tasks build test verify verify-linux verify-apple verify-web \
 	verify-release verify-android-device api-check api-dump \
 	verify-persistence-schemas verify-mcp-conformance publish-coordinates publish-local \
-	prepare-release clean require-macos
+	prepare-release release clean require-macos
 
 help: ## Show the available commands.
 	@printf 'Magrathea development commands:\n\n'
@@ -21,8 +21,8 @@ help: ## Show the available commands.
 	@printf '\nVariables:\n'
 	@printf '  GRADLE_ARGS             Extra arguments appended to Gradle commands\n'
 	@printf '  PUBLISH_ARGS            Extra arguments passed to scripts/publish-sdk\n'
-	@printf '  RELEASE_VERSION         SemVer passed to scripts/prepare-release\n'
-	@printf '  RELEASE_ARGS            Extra arguments passed to scripts/prepare-release\n'
+	@printf '  RELEASE_VERSION         SemVer passed to the release commands\n'
+	@printf '  RELEASE_ARGS            Extra arguments passed to the selected release command\n'
 
 tasks: ## List the canonical Gradle verification tasks.
 	$(GRADLE) $(GRADLE_ARGS) tasks --group verification
@@ -72,6 +72,10 @@ publish-local: ## Verify and publish the SDK to the local Maven repository.
 prepare-release: ## Prepare version metadata, notes, and the quick release gate.
 	@test -n "$(RELEASE_VERSION)" || { echo "Set RELEASE_VERSION, for example: make prepare-release RELEASE_VERSION=0.1.0-alpha.4" >&2; exit 2; }
 	./scripts/prepare-release "$(RELEASE_VERSION)" $(RELEASE_ARGS)
+
+release: ## Push, verify, and publish one prepared release.
+	@test -n "$(RELEASE_VERSION)" || { echo "Set RELEASE_VERSION, for example: make release RELEASE_VERSION=0.1.0-alpha.4" >&2; exit 2; }
+	./scripts/release "$(RELEASE_VERSION)" $(RELEASE_ARGS)
 
 clean: ## Remove Gradle build outputs.
 	$(GRADLE) $(GRADLE_ARGS) clean

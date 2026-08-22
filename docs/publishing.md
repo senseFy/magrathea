@@ -159,10 +159,11 @@ Repository and signing credentials are environment-only. The publisher rejects n
 repositories, dirty worktrees, skipped release tests, unsigned publications, and coordinates that
 already exist. The repository itself must also enforce immutable release versions.
 
-Maintainers publish through one manually authorized `Release Magrathea SDK` workflow. It requires
-successful CI for the exact `main` commit, builds and verifies the signed Candidate once, creates
-the annotated tag, publishes four exact-byte Maven shards, validates all remote coordinates,
-resolves an isolated JVM/Android consumer, and creates the GitHub Release.
+Maintainers publish through one guarded local command backed by the manually authorized
+`Release Magrathea SDK` workflow. The workflow requires successful CI for the exact `main` commit,
+builds and verifies the signed Candidate once, creates the annotated tag, publishes four exact-byte
+Maven shards, validates all remote coordinates, resolves an isolated JVM/Android consumer, and
+creates the GitHub Release.
 
 Prepare the reviewed version metadata and local quick gate through the single maintainer entry
 point:
@@ -171,9 +172,18 @@ point:
 scripts/prepare-release 0.1.0-alpha.4
 ```
 
-It performs no commit, push, tag, or remote publication. After committing and pushing the prepared
-files, wait for exact-SHA CI and dispatch the release workflow with the explicit version. The
-command prints that handoff; [Release Process](release-process.md) is the full runbook.
+It performs no commit, push, tag, or remote publication. Review and commit the prepared files onto
+local `main`, then run:
+
+```bash
+scripts/release 0.1.0-alpha.4
+```
+
+That command presents one confirmation, pushes the exact commit, waits for exact-SHA CI, and starts
+or resumes the version-and-commit-bound release workflow. It stops before dispatch if `main` moves,
+and the workflow rejects a mismatched commit or a second authorization for the same version before
+publication side effects. `--dry-run` only validates and prints the plan; `--yes` is required for
+non-interactive use. [Release Process](release-process.md) is the full runbook.
 
 With signing material in the environment, prepare a candidate without remote side effects:
 
@@ -181,9 +191,10 @@ With signing material in the environment, prepare a candidate without remote sid
 scripts/publish-sdk --target github --prepare-only
 ```
 
-If publication is interrupted, choose **Re-run failed jobs** on the same workflow run. Existing
-bytes must match the Candidate manifest; only absent files are uploaded, and each POM is uploaded
-last. Do not start another dispatch after the tag or package bytes exist.
+If publication is interrupted, rerun `scripts/release <version>`. It refuses a duplicate dispatch
+and points to **Re-run failed jobs** on the same workflow run. Existing bytes must match the
+Candidate manifest; only absent files are uploaded, and each POM is uploaded last. Do not start
+another dispatch after the tag or package bytes exist.
 
 Inspect a remote Gradle task graph without publishing:
 

@@ -175,14 +175,33 @@ fail_contract("nightly.yml must retain the OSV report") unless
 
 release_triggers = triggers(release).keys
 fail_contract("release.yml must be manual-only") unless release_triggers == ["workflow_dispatch"]
-version_input = triggers(release).dig("workflow_dispatch", "inputs", "version")
-fail_contract("release.yml must require one explicit version input") unless
-  version_input.is_a?(Hash) && version_input["required"] == true && version_input["type"] == "string"
+fail_contract("release.yml must expose a version-bound run name for safe orchestration") unless
+  release["run-name"] == 'Release Magrathea SDK ${{ inputs.version }}'
+release_inputs = triggers(release).dig("workflow_dispatch", "inputs") || {}
+version_input = release_inputs["version"]
+commit_input = release_inputs["commit"]
+fail_contract("release.yml must require explicit version and commit inputs") unless
+  release_inputs.keys.sort == %w[commit version] &&
+    version_input.is_a?(Hash) &&
+    version_input["required"] == true &&
+    version_input["type"] == "string" &&
+    commit_input.is_a?(Hash) &&
+    commit_input["required"] == true &&
+    commit_input["type"] == "string"
 %w[release-candidate prepare-publish publish-maven github-release].each do |job|
   fail_contract("release.yml missing #{job}") unless release.fetch("jobs", {}).key?(job)
 end
 
 release_runs = run_commands(release)
+duplicate_authorization_guard = all_steps(release).find do |step|
+  step["name"] == "Reject a duplicate version authorization"
+end
+fail_contract("release.yml must reject a second workflow run for the same version") unless
+  duplicate_authorization_guard &&
+    duplicate_authorization_guard["run"].include?("actions/workflows/release.yml/runs") &&
+    duplicate_authorization_guard["run"].include?(".id < $GITHUB_RUN_ID") &&
+    duplicate_authorization_guard["run"].include?("display_title") &&
+    duplicate_authorization_guard["run"].include?("Re-run failed jobs")
 release_preparation = all_steps(release).find do |step|
   step["run"]&.include?("scripts/publish-sdk") &&
     step["run"]&.include?("--prepare-only") &&
@@ -208,6 +227,9 @@ fail_contract("release.yml must bind the requested version to source metadata") 
   release_runs.include?("REQUESTED_VERSION") &&
     release_runs.include?("magrathea.version") &&
     release_runs.include?("docs/releases/v$REQUESTED_VERSION.md")
+fail_contract("release.yml must bind workflow_dispatch to the explicitly authorized commit") unless
+  release_runs.include?("EXPECTED_COMMIT") &&
+    release_runs.include?('$RELEASE_COMMIT" != "$EXPECTED_COMMIT')
 
 local_candidate_verification = all_steps(release).find do |step|
   step["run"]&.include?("scripts/verify-release-candidate")
@@ -227,8 +249,13 @@ fail_contract("release.yml must attest the outer candidate exactly once") unless
   }
 fail_contract("release.yml must not boot a simulator after exact-SHA CI") if
   release_runs.include?("simctl")
+non_guard_release_runs = all_steps(release)
+  .reject { |step| step == duplicate_authorization_guard }
+  .map { |step| step["run"] }
+  .compact
+  .join("\n")
 fail_contract("release.yml must not query or promote a candidate from another workflow run") if
-  release_runs.include?("actions/workflows/release.yml/runs") ||
+  non_guard_release_runs.include?("actions/workflows/release.yml/runs") ||
     release_runs.include?("CANDIDATE_RUN_ID") ||
     release.to_s.include?("promoted-candidate")
 

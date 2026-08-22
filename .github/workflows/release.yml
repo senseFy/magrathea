@@ -1,10 +1,15 @@
 name: Release Magrathea SDK
+run-name: Release Magrathea SDK ${{ inputs.version }}
 
 on:
   workflow_dispatch:
     inputs:
       version:
         description: SemVer version to release, without the leading v
+        required: true
+        type: string
+      commit:
+        description: Exact verified 40-character commit SHA to release
         required: true
         type: string
 
@@ -30,6 +35,36 @@ jobs:
       commit: ${{ steps.release.outputs.commit }}
       ci_run_id: ${{ steps.release.outputs.ci_run_id }}
     steps:
+      - name: Reject a duplicate version authorization
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$REQUESTED_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "$REQUESTED_VERSION is not a supported SemVer version." >&2
+            exit 1
+          fi
+          PRIOR_RELEASE_RUN_ID="$(
+            gh api \
+              --method GET \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/runs" \
+              -f event=workflow_dispatch \
+              -f per_page=100 \
+              --jq \
+              "[.workflow_runs[] |
+                select(.id < $GITHUB_RUN_ID and
+                  .display_title == \"Release Magrathea SDK $REQUESTED_VERSION\")] |
+               sort_by(.id) |
+               last |
+               .id // empty"
+          )"
+          if [[ -n "$PRIOR_RELEASE_RUN_ID" ]]; then
+            echo "Release $REQUESTED_VERSION already has workflow run $PRIOR_RELEASE_RUN_ID." >&2
+            echo "Reuse it or choose Re-run failed jobs; do not dispatch the version again." >&2
+            echo "https://github.com/$GITHUB_REPOSITORY/actions/runs/$PRIOR_RELEASE_RUN_ID" >&2
+            exit 1
+          fi
+
       - name: Check out source
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -52,6 +87,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REQUESTED_VERSION: ${{ inputs.version }}
+          EXPECTED_COMMIT: ${{ inputs.commit }}
         run: |
           if [[ ! "$REQUESTED_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
             echo "$REQUESTED_VERSION is not a supported SemVer version." >&2
@@ -82,6 +118,14 @@ jobs:
           test -s "docs/releases/v$REQUESTED_VERSION.md"
 
           RELEASE_COMMIT="$(git rev-parse HEAD)"
+          if [[ ! "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "$EXPECTED_COMMIT is not a full lowercase commit SHA." >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_COMMIT" != "$EXPECTED_COMMIT" ]]; then
+            echo "Dispatched commit $RELEASE_COMMIT does not match authorized commit $EXPECTED_COMMIT." >&2
+            exit 1
+          fi
           git fetch --no-tags origin main
           git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main
           CI_RUN_ID="$(
