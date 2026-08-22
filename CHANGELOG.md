@@ -5,6 +5,8 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## 0.1.0-alpha.5 — 2026-08-22
+
 ### Added
 
 - Maintainers can finish a prepared release through one guarded command that pushes the exact

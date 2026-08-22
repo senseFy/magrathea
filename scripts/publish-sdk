@@ -336,9 +336,9 @@ Environment fallback:
 Examples:
   scripts/publish-sdk --print
   scripts/publish-sdk
-  scripts/publish-sdk --version 0.1.0-alpha.4
-  scripts/publish-sdk --version 0.1.0-alpha.4 --commit-version
-  scripts/publish-sdk --target github --version 0.1.0-alpha.4
+  scripts/publish-sdk --version 0.1.0-alpha.5
+  scripts/publish-sdk --version 0.1.0-alpha.5 --commit-version
+  scripts/publish-sdk --target github --version 0.1.0-alpha.5
   MAGRATHEA_PUBLISH_USERNAME=... MAGRATHEA_PUBLISH_PASSWORD=... \
     scripts/publish-sdk --target custom --repo-url https://repo.example/releases
   scripts/publish-sdk --module :magrathea-core
