@@ -46,6 +46,7 @@ set -euo pipefail
 workflow=""
 commit=""
 expected_commit=""
+watch_interval=""
 version="$FAKE_VERSION"
 arguments=("$@")
 for ((index = 0; index < ${#arguments[@]}; index++)); do
@@ -55,6 +56,9 @@ for ((index = 0; index < ${#arguments[@]}; index++)); do
       ;;
     --commit)
       commit="${arguments[$((index + 1))]}"
+      ;;
+    --interval)
+      watch_interval="${arguments[$((index + 1))]}"
       ;;
     commit=*)
       expected_commit="${arguments[$index]#commit=}"
@@ -121,6 +125,10 @@ case "${1:-} ${2:-}" in
     "$REAL_GIT" push origin "refs/tags/v$version" >/dev/null
     ;;
   "run watch")
+    [[ "$watch_interval" == "10" ]] || {
+      printf 'release watcher must refresh every 10 seconds\n' >&2
+      exit 93
+    }
     if [[ -f "$FAKE_GH_DIR/release-state" && \
           "$(<"$FAKE_GH_DIR/release-state")" == "active" ]]; then
       printf 'success\n' > "$FAKE_GH_DIR/release-state"
@@ -273,4 +281,4 @@ release_make_output="$(
 
 printf '%s%s\n' \
   'MAGRATHEA_RELEASE_COMMAND_CONTRACT_PASS push=exact-sha verify=reused dispatch=commit-bound' \
-  ' confirmation=required dry_run=side-effect-free active=reused failures=same-run make=compatible'
+  ' confirmation=required dry_run=side-effect-free active=reused failures=same-run make=compatible watch=10s'

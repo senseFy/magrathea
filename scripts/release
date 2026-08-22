@@ -22,6 +22,7 @@ SEMVER = re.compile(
 ACTIVE_STATUSES = {"queued", "in_progress", "waiting", "requested", "pending"}
 DISCOVERY_TIMEOUT_SECONDS = 120
 DISCOVERY_POLL_SECONDS = 3
+WATCH_REFRESH_SECONDS = 10
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,24 @@ def output(root: Path, *command: str) -> str:
     except subprocess.CalledProcessError as error:
         detail = error.stderr.strip() if error.stderr else "command failed"
         fail(f"{' '.join(command)}: {detail}")
+
+
+def watch_run(root: Path, repository: str, run_id: int) -> subprocess.CompletedProcess[str]:
+    return run(
+        root,
+        (
+            "gh",
+            "run",
+            "watch",
+            str(run_id),
+            "--repo",
+            repository,
+            "--interval",
+            str(WATCH_REFRESH_SECONDS),
+            "--exit-status",
+        ),
+        check=False,
+    )
 
 
 def validate_semver(value: str) -> None:
@@ -336,11 +355,7 @@ def wait_for_verify(root: Path, repository: str, sha: str, version: str) -> Work
         )
     if item.active:
         print(f"[release] waiting for exact-SHA Verify run {item.database_id}: {item.url}")
-        watched = run(
-            root,
-            ("gh", "run", "watch", str(item.database_id), "--repo", repository, "--exit-status"),
-            check=False,
-        )
+        watched = watch_run(root, repository, item.database_id)
         item = verify_run(root, repository, sha) or item
         if watched.returncode != 0 and item.active:
             fail(
@@ -412,11 +427,7 @@ def wait_for_release(
     if item.active:
         print(f"[release] waiting for Release run {item.database_id}: {item.url}")
         watched_run_id = item.database_id
-        watched = run(
-            root,
-            ("gh", "run", "watch", str(item.database_id), "--repo", repository, "--exit-status"),
-            check=False,
-        )
+        watched = watch_run(root, repository, item.database_id)
         item, _, _ = release_runs(root, repository, sha, version)
         if item is None:
             fail(f"Release run {watched_run_id} disappeared from GitHub")
