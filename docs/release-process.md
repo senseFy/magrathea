@@ -42,7 +42,8 @@ checkout does not match the explicitly authorized commit.
 
 Use `--dry-run` to validate and inspect the plan without pushing, dispatching, or waiting. Use
 `--yes` for an explicitly authorized non-interactive invocation; without it, non-interactive input
-is rejected. There is no CI or release-gate bypass.
+is rejected. Active Verify and Release status displays refresh every ten seconds to limit
+authenticated GitHub API traffic. There is no CI or release-gate bypass.
 
 The command is safe to repeat. It reuses successful or running exact-SHA Verify and
 version-and-commit-bound Release runs. A concurrently submitted duplicate authorization is rejected

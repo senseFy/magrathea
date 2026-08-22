@@ -5,6 +5,11 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+### Changed
+
+- Release status watching now refreshes every ten seconds to reduce authenticated GitHub API
+  traffic without changing the guarded release sequence.
+
 ## 0.1.0-alpha.5 — 2026-08-22
 
 ### Added
