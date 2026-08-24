@@ -9,7 +9,7 @@ It provides the agent loop, Provider contracts, tools, persistence, and lifecycl
 bring their own UI and choose only the integrations they need.
 
 > [!NOTE]
-> `0.1.0-alpha.5` is the latest published Alpha. `main` may contain unreleased changes; APIs and
+> `0.1.0-alpha.6` is the latest published Alpha. `main` may contain unreleased changes; APIs and
 > persisted formats may evolve before the stable line.
 
 ## Modules
@@ -58,15 +58,15 @@ the modules your application needs:
 
 ```kotlin
 dependencies {
-    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.5")
-    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.5")
-    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.5")
+    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.6")
+    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.6")
+    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.6")
 }
 ```
 
 See the [Provider-neutral composition guide](docs/architecture.md#provider-neutral-runtime-and-chatbot-facade)
 and the [samples](samples). Release artifacts and supply-chain evidence:
-[`v0.1.0-alpha.5`](https://github.com/senseFy/magrathea/releases/tag/v0.1.0-alpha.5).
+[`v0.1.0-alpha.6`](https://github.com/senseFy/magrathea/releases/tag/v0.1.0-alpha.6).
 
 ## Platforms
 

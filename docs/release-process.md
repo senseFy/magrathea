@@ -8,7 +8,7 @@ is in [Publishing](publishing.md).
 The release version is `magrathea.version` in `gradle.properties`.
 
 ```bash
-scripts/prepare-release 0.1.0-alpha.5
+scripts/prepare-release 0.1.0-alpha.6
 ```
 
 This is the maintainer's single preparation entry point. Start with reviewed release-facing changes
@@ -29,7 +29,7 @@ stage and the next command. The release tag remains
 After the reviewed preparation commit is on local `main`, finish the release through one command:
 
 ```bash
-scripts/release 0.1.0-alpha.5
+scripts/release 0.1.0-alpha.6
 ```
 
 The command shows one plan and asks for one `[y/N]` confirmation. It fast-forwards `origin/main` to
@@ -156,7 +156,7 @@ Release sequence:
 3. Authorize and follow the remaining release once:
 
    ```bash
-   scripts/release 0.1.0-alpha.5
+   scripts/release 0.1.0-alpha.6
    ```
 
    The command pushes the exact commit, waits for exact-SHA CI, and follows `Release Magrathea SDK`

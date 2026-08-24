@@ -5,6 +5,8 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## 0.1.0-alpha.6 — 2026-08-24
+
 ### Added
 
 - Hosts can share request-aware execution permits across Tools and Web Search backends to cap
