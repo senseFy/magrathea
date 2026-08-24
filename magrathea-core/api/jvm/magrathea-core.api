@@ -2089,6 +2089,13 @@ public final class saien/magrathea/core/RuntimeConfig$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class saien/magrathea/core/SharedToolExecutionPermit : saien/magrathea/core/ToolExecutionPermit {
+	public fun <init> (I)V
+	public fun acquire (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getMaxConcurrentExecutions ()I
+	public fun release ()V
+}
+
 public abstract interface class saien/magrathea/core/SteeringMessageProvider {
 	public abstract fun nextMessages (Lsaien/magrathea/core/AgentRuntimeContext;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
@@ -2653,6 +2660,11 @@ public final class saien/magrathea/core/ToolExecutionMode$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public abstract interface class saien/magrathea/core/ToolExecutionPermit {
+	public abstract fun acquire (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun release ()V
+}
+
 public final class saien/magrathea/core/ToolExecutionRecord {
 	public static final field Companion Lsaien/magrathea/core/ToolExecutionRecord$Companion;
 	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILsaien/magrathea/core/ToolExecutionState;Lsaien/magrathea/core/ToolExecutionResult;)V
@@ -2788,11 +2800,13 @@ public final class saien/magrathea/core/ToolExecutionState$Companion {
 
 public abstract interface class saien/magrathea/core/ToolExecutor {
 	public abstract fun execute (Lsaien/magrathea/core/ToolExecutionRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun executionPermit (Lsaien/magrathea/core/ToolExecutionRequest;)Lsaien/magrathea/core/ToolExecutionPermit;
 	public abstract fun getDefinition ()Lsaien/magrathea/core/ToolDefinition;
 	public fun getRecoveryPolicy ()Lsaien/magrathea/core/ToolRecoveryPolicy;
 }
 
 public final class saien/magrathea/core/ToolExecutor$DefaultImpls {
+	public static fun executionPermit (Lsaien/magrathea/core/ToolExecutor;Lsaien/magrathea/core/ToolExecutionRequest;)Lsaien/magrathea/core/ToolExecutionPermit;
 	public static fun getRecoveryPolicy (Lsaien/magrathea/core/ToolExecutor;)Lsaien/magrathea/core/ToolRecoveryPolicy;
 }
 
@@ -3100,7 +3114,14 @@ public abstract class saien/magrathea/core/TypedTool : saien/magrathea/core/Tool
 	public static synthetic fun encodeResult$default (Lsaien/magrathea/core/TypedTool;Ljava/lang/Object;Lkotlinx/serialization/SerializationStrategy;ILjava/lang/Object;)Lkotlinx/serialization/json/JsonElement;
 	public final fun execute (Lsaien/magrathea/core/ToolExecutionRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	protected abstract fun executeTyped (Lsaien/magrathea/core/ToolExecutionRequest;Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun executionPermit (Lsaien/magrathea/core/ToolExecutionRequest;)Lsaien/magrathea/core/ToolExecutionPermit;
 	protected final fun getJson ()Lkotlinx/serialization/json/Json;
 	public fun getRecoveryPolicy ()Lsaien/magrathea/core/ToolRecoveryPolicy;
+}
+
+public final class saien/magrathea/core/UnlimitedToolExecutionPermit : saien/magrathea/core/ToolExecutionPermit {
+	public static final field INSTANCE Lsaien/magrathea/core/UnlimitedToolExecutionPermit;
+	public fun acquire (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun release ()V
 }
 

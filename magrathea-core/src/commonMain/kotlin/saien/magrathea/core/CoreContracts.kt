@@ -3,6 +3,7 @@
 package saien.magrathea.core
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
@@ -200,6 +201,53 @@ interface ToolPermissionGateway {
     suspend fun ensurePermission(permission: String): Boolean
 }
 
+/**
+ * Coordinates admission to a [ToolExecutor]'s side-effecting execution boundary.
+ *
+ * A single instance may be shared by multiple executors. The Runtime acquires admission before
+ * starting the executor timeout and releases it after execution finishes for any reason. Custom
+ * implementations must be safe for concurrent use, and calls intended to share one limit must
+ * reuse the same permit instance.
+ */
+interface ToolExecutionPermit {
+    /** Waits until one execution is admitted. A cancelled or failed acquisition is not released. */
+    suspend fun acquire()
+
+    /** Returns one admission after a successful [acquire]. */
+    fun release()
+}
+
+/** The default Tool execution permit, which never limits concurrent executions. */
+object UnlimitedToolExecutionPermit : ToolExecutionPermit {
+    override suspend fun acquire() = Unit
+    override fun release() = Unit
+}
+
+/**
+ * A Kotlin Multiplatform concurrency gate that may be shared by multiple [ToolExecutor]s.
+ *
+ * At most [maxConcurrentExecutions] successful acquisitions may remain unreleased at once.
+ */
+class SharedToolExecutionPermit(
+    val maxConcurrentExecutions: Int,
+) : ToolExecutionPermit {
+    init {
+        require(maxConcurrentExecutions > 0) {
+            "maxConcurrentExecutions must be greater than zero"
+        }
+    }
+
+    private val semaphore = Semaphore(maxConcurrentExecutions)
+
+    override suspend fun acquire() {
+        semaphore.acquire()
+    }
+
+    override fun release() {
+        semaphore.release()
+    }
+}
+
 /** Resolves a credential reference at call time without placing the credential in Agent state. */
 fun interface CredentialProvider {
     suspend fun resolve(ref: CredentialRef): ProviderCredential
@@ -210,6 +258,15 @@ interface ToolExecutor {
     val definition: ToolDefinition
     val recoveryPolicy: ToolRecoveryPolicy
         get() = ToolRecoveryPolicy.FAIL_CLOSED
+
+    /**
+     * Selects the admission boundary for this concrete execution request.
+     *
+     * Runtime brackets [execute] with this permit. Direct callers own the same acquire/release
+     * boundary, and [execute] implementations must not acquire the selected permit again.
+     */
+    fun executionPermit(request: ToolExecutionRequest): ToolExecutionPermit =
+        UnlimitedToolExecutionPermit
 
     suspend fun execute(request: ToolExecutionRequest): ToolExecutionResult
 }

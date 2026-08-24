@@ -1765,8 +1765,7 @@ class DefaultAgentRunner(
                     throw AgentRuntimeFailure(AgentFailureCode.INVALID_STATE)
                 }
             }
-            val started = entry.record.copy(state = ToolExecutionState.STARTED)
-            persistRecord(started)
+            var executionStarted = false
             val result = executeMeasuredToolCall(
                 request = request,
                 runId = runId,
@@ -1776,9 +1775,14 @@ class DefaultAgentRunner(
                 callOrdinal = entry.indexed.ordinal,
                 previousRunCalls = previousRunCalls[entry.indexed.toolCall.toolName] ?: 0,
                 turn = turn,
+                onExecutionStarted = {
+                    check(!executionStarted) { "Tool execution cannot start more than once" }
+                    persistRecord(entry.record.copy(state = ToolExecutionState.STARTED))
+                    executionStarted = true
+                },
             )
             persistRecord(
-                started.copy(
+                entry.record.copy(
                     state = ToolExecutionState.COMPLETED,
                     result = result,
                 ),
@@ -1817,6 +1821,7 @@ class DefaultAgentRunner(
         callOrdinal: Int,
         previousRunCalls: Int,
         turn: Int,
+        onExecutionStarted: suspend () -> Unit,
     ): ToolExecutionResult {
         val startedAt = monotonicClock.nowMillis()
         return try {
@@ -1828,6 +1833,7 @@ class DefaultAgentRunner(
                 toolCall,
                 callOrdinal,
                 previousRunCalls,
+                onExecutionStarted,
             )
             recordTelemetry(
                 TelemetryEvent.ToolExecutionFinished(
@@ -1872,6 +1878,7 @@ class DefaultAgentRunner(
         toolCall: ToolCallPart,
         callOrdinal: Int,
         previousRunCalls: Int,
+        onExecutionStarted: suspend () -> Unit,
     ): ToolExecutionResult {
         if (toolCall.partial) {
             return rejectToolCall(toolCall, "Tool call is not finalized")
@@ -1916,6 +1923,7 @@ class DefaultAgentRunner(
         } else if (definition.requiresApproval) {
             return rejectToolCall(toolCall, "Approval gateway unavailable")
         }
+        var startPersistenceInProgress = false
         return try {
             var context = ToolRuntimeContext(request, assistantMessage, toolCall)
             interceptors.forEach { context = it.beforeToolCall(context) }
@@ -1939,7 +1947,17 @@ class DefaultAgentRunner(
                 toolCall = context.toolCall,
             )
             val timeoutMs = definition.timeoutMs ?: request.engine.runtime.defaultToolTimeoutMillis
-            var result = withTimeoutOrNull(timeoutMs) { executor.execute(executionRequest) }
+            val executionPermit = executor.executionPermit(executionRequest)
+            executionPermit.acquire()
+            val executionResult = try {
+                startPersistenceInProgress = true
+                onExecutionStarted()
+                startPersistenceInProgress = false
+                withTimeoutOrNull(timeoutMs) { executor.execute(executionRequest) }
+            } finally {
+                executionPermit.release()
+            }
+            var result = executionResult
                 ?.withRuntimeMediaReferences(executionId)
                 ?: return rejectToolCall(toolCall, "Tool execution timed out")
             interceptors.forEach { result = it.afterToolCall(context, result) }
@@ -1955,7 +1973,9 @@ class DefaultAgentRunner(
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: Throwable) {
+        } catch (failure: Throwable) {
+            // A journal write is a Runtime boundary failure, not a Tool failure result.
+            if (startPersistenceInProgress) throw failure
             rejectToolCall(toolCall, "Tool execution failed")
         }
     }

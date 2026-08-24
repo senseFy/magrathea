@@ -9,10 +9,12 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import saien.magrathea.core.ToolDefinition
+import saien.magrathea.core.ToolExecutionPermit
 import saien.magrathea.core.ToolExecutionRequest
 import saien.magrathea.core.ToolExecutionResult
 import saien.magrathea.core.ToolExecutor
 import saien.magrathea.core.ToolRecoveryPolicy
+import saien.magrathea.core.UnlimitedToolExecutionPermit
 
 enum class WebSearchDepth {
     QUICK,
@@ -105,6 +107,17 @@ data class WebSearchBackendResponse(
  * throw [WebSearchBackendException] with [WebSearchFailureCode.UNSUPPORTED_POLICY].
  */
 fun interface WebSearchBackend {
+    /**
+     * Shared admission boundary for calls to this backend.
+     *
+     * [WebSearchTool] exposes this permit to its execution caller, which acquires and releases it
+     * outside [search]. A caller invoking [search] directly owns the same acquire/release boundary.
+     * Implementations of [search] must not acquire this permit again: a permit with capacity one
+     * would deadlock itself.
+     */
+    val executionPermit: ToolExecutionPermit
+        get() = UnlimitedToolExecutionPermit
+
     suspend fun search(request: WebSearchBackendRequest): WebSearchBackendResponse
 }
 
@@ -147,6 +160,9 @@ class WebSearchTool(
         maxCallsPerTurn = policy.maxSearchCallsPerRun,
         maxCallsPerRun = policy.maxSearchCallsPerRun,
     )
+
+    override fun executionPermit(request: ToolExecutionRequest): ToolExecutionPermit =
+        backend.executionPermit
 
     override suspend fun execute(request: ToolExecutionRequest): ToolExecutionResult {
         val arguments = request.toolCall.arguments as? JsonObject

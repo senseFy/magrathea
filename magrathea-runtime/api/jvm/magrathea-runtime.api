@@ -168,6 +168,7 @@ public final class saien/magrathea/runtime/search/ImageSearchTool : saien/magrat
 	public fun <init> (Lsaien/magrathea/runtime/search/ImageSearchBackend;Lsaien/magrathea/runtime/search/ImageSearchPolicy;Ljava/lang/String;ZLsaien/magrathea/core/ToolRecoveryPolicy;)V
 	public synthetic fun <init> (Lsaien/magrathea/runtime/search/ImageSearchBackend;Lsaien/magrathea/runtime/search/ImageSearchPolicy;Ljava/lang/String;ZLsaien/magrathea/core/ToolRecoveryPolicy;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun execute (Lsaien/magrathea/core/ToolExecutionRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun executionPermit (Lsaien/magrathea/core/ToolExecutionRequest;)Lsaien/magrathea/core/ToolExecutionPermit;
 	public fun getDefinition ()Lsaien/magrathea/core/ToolDefinition;
 	public final fun getPolicy ()Lsaien/magrathea/runtime/search/ImageSearchPolicy;
 	public fun getRecoveryPolicy ()Lsaien/magrathea/core/ToolRecoveryPolicy;
@@ -231,7 +232,12 @@ public final class saien/magrathea/runtime/search/SearchSafeSearch : java/lang/E
 }
 
 public abstract interface class saien/magrathea/runtime/search/WebSearchBackend {
+	public fun getExecutionPermit ()Lsaien/magrathea/core/ToolExecutionPermit;
 	public abstract fun search (Lsaien/magrathea/runtime/search/WebSearchBackendRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/runtime/search/WebSearchBackend$DefaultImpls {
+	public static fun getExecutionPermit (Lsaien/magrathea/runtime/search/WebSearchBackend;)Lsaien/magrathea/core/ToolExecutionPermit;
 }
 
 public final class saien/magrathea/runtime/search/WebSearchBackendException : java/lang/Exception {
@@ -363,6 +369,7 @@ public final class saien/magrathea/runtime/search/WebSearchTool : saien/magrathe
 	public fun <init> (Lsaien/magrathea/runtime/search/WebSearchBackend;Lsaien/magrathea/runtime/search/WebSearchPolicy;Ljava/lang/String;ZLsaien/magrathea/core/ToolRecoveryPolicy;)V
 	public synthetic fun <init> (Lsaien/magrathea/runtime/search/WebSearchBackend;Lsaien/magrathea/runtime/search/WebSearchPolicy;Ljava/lang/String;ZLsaien/magrathea/core/ToolRecoveryPolicy;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun execute (Lsaien/magrathea/core/ToolExecutionRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun executionPermit (Lsaien/magrathea/core/ToolExecutionRequest;)Lsaien/magrathea/core/ToolExecutionPermit;
 	public fun getDefinition ()Lsaien/magrathea/core/ToolDefinition;
 	public final fun getPolicy ()Lsaien/magrathea/runtime/search/WebSearchPolicy;
 	public fun getRecoveryPolicy ()Lsaien/magrathea/core/ToolRecoveryPolicy;
@@ -472,6 +479,7 @@ public final class saien/magrathea/runtime/search/XSearchTool : saien/magrathea/
 	public fun <init> (Lsaien/magrathea/runtime/search/XSearchBackend;Lsaien/magrathea/runtime/search/XSearchPolicy;Ljava/lang/String;ZLsaien/magrathea/core/ToolRecoveryPolicy;)V
 	public synthetic fun <init> (Lsaien/magrathea/runtime/search/XSearchBackend;Lsaien/magrathea/runtime/search/XSearchPolicy;Ljava/lang/String;ZLsaien/magrathea/core/ToolRecoveryPolicy;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun execute (Lsaien/magrathea/core/ToolExecutionRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun executionPermit (Lsaien/magrathea/core/ToolExecutionRequest;)Lsaien/magrathea/core/ToolExecutionPermit;
 	public fun getDefinition ()Lsaien/magrathea/core/ToolDefinition;
 	public final fun getPolicy ()Lsaien/magrathea/runtime/search/XSearchPolicy;
 	public fun getRecoveryPolicy ()Lsaien/magrathea/core/ToolRecoveryPolicy;
