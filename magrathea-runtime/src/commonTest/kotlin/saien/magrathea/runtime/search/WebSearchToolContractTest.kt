@@ -12,17 +12,35 @@ import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.MessageRole
+import saien.magrathea.core.SharedToolExecutionPermit
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolExecutionRequest
 import saien.magrathea.core.ToolRecoveryPolicy
+import saien.magrathea.core.UnlimitedToolExecutionPermit
 import saien.magrathea.core.citations
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class WebSearchToolContractTest {
+    @Test
+    fun toolDelegatesRequestAdmissionToItsBackend() {
+        val permit = SharedToolExecutionPermit(maxConcurrentExecutions = 1)
+        val backend = object : WebSearchBackend {
+            override val executionPermit = permit
+
+            override suspend fun search(request: WebSearchBackendRequest) =
+                WebSearchBackendResponse(emptyList())
+        }
+        val defaultBackend = WebSearchBackend { WebSearchBackendResponse(emptyList()) }
+
+        assertSame(permit, WebSearchTool(backend).executionPermit(executionRequest("query")))
+        assertSame(UnlimitedToolExecutionPermit, defaultBackend.executionPermit)
+    }
+
     @Test
     fun policyRejectsAmbiguousOrUnboundedConfiguration() {
         assertFailsWith<IllegalArgumentException> { WebSearchPolicy(maxSearchCallsPerRun = 0) }

@@ -5,6 +5,11 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+### Added
+
+- Hosts can share request-aware execution permits across Tools and Web Search backends to cap
+  concurrent calls while keeping admission queue time outside each Tool's execution timeout.
+
 ### Changed
 
 - Release status watching now refreshes every ten seconds to reduce authenticated GitHub API
