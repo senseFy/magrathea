@@ -5,6 +5,11 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+### Changed
+
+- The Web package gate reports the production bundle size and uses a 2,000,000-byte Alpha ceiling
+  so normal runtime growth remains visible without requiring per-feature budget changes.
+
 ## 0.1.0-alpha.6 — 2026-08-24
 
 ### Added

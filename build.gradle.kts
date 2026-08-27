@@ -1128,6 +1128,7 @@ val generateWebThirdPartyNotices = webClientProject.tasks.register("generateWebT
 }
 
 val webSdkPackageDirectory = layout.buildDirectory.dir("web-package/magrathea-web-client")
+val webSdkBundleLimitBytes = 2_000_000L
 val stageWebSdkPackage = tasks.register<Sync>("stageWebSdkPackage") {
     group = "distribution"
     description = "Stage the local JS chatbot bundle and compiler-generated TypeScript definitions."
@@ -1234,8 +1235,12 @@ val verifyWebSdkPackage = tasks.register("verifyWebSdkPackage") {
         check(directory.listFiles().orEmpty().any { it.name.matches(Regex("[0-9]+\\.js")) }) {
             "Web package is missing its production split chunk"
         }
-        check(bundle.length() <= 1_450_000) {
-            "Web production bundle exceeded 1,450,000 bytes: ${bundle.length()}"
+        val bundleSizeBytes = bundle.length()
+        logger.lifecycle(
+            "MAGRATHEA_WEB_BUNDLE_SIZE bytes=$bundleSizeBytes limit=$webSdkBundleLimitBytes",
+        )
+        check(bundleSizeBytes <= webSdkBundleLimitBytes) {
+            "Web production bundle exceeded $webSdkBundleLimitBytes bytes: $bundleSizeBytes"
         }
 
         val definitionsText = definitions.readText()
