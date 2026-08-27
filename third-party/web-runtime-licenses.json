@@ -7,17 +7,17 @@
       "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
       "source": "https://www.apache.org/licenses/LICENSE-2.0.txt"
     },
-    "MIT-ws-8.20.1": {
+    "MIT-ws-8.21.0": {
       "spdx": "MIT",
-      "file": "third-party/licenses/ws-8.20.1-MIT.txt",
+      "file": "third-party/licenses/ws-8.21.0-MIT.txt",
       "sha256": "2b29dcfe0d6471f7e8c92c5fb38c9f93edee10330937055440192f1832b1ecef",
-      "source": "https://github.com/websockets/ws/blob/8.20.1/LICENSE"
+      "source": "https://github.com/websockets/ws/blob/8.21.0/LICENSE"
     },
-    "MIT-webpack-5.101.3": {
+    "MIT-webpack-5.104.1": {
       "spdx": "MIT",
-      "file": "third-party/licenses/webpack-5.101.3-MIT.txt",
+      "file": "third-party/licenses/webpack-5.104.1-MIT.txt",
       "sha256": "9068a8782d2fb4c6e432cfa25334efa56f722822180570802bf86e71b6003b1e",
-      "source": "https://github.com/webpack/webpack/blob/v5.101.3/LICENSE"
+      "source": "https://github.com/webpack/webpack/blob/v5.104.1/LICENSE"
     }
   },
   "components": [
@@ -113,17 +113,17 @@
   "npmComponents": [
     {
       "name": "ws",
-      "version": "8.20.1",
+      "version": "8.21.0",
       "role": "runtimeDependency",
       "repository": "https://github.com/websockets/ws",
-      "license": "MIT-ws-8.20.1"
+      "license": "MIT-ws-8.21.0"
     },
     {
       "name": "webpack",
-      "version": "5.101.3",
+      "version": "5.104.1",
       "role": "bundleGenerator",
       "repository": "https://github.com/webpack/webpack",
-      "license": "MIT-webpack-5.101.3"
+      "license": "MIT-webpack-5.104.1"
     }
   ]
 }

@@ -179,6 +179,10 @@ fail_contract("nightly.yml must scan the production SBOM with checksum-pinned OS
     run_commands(nightly).include?("magrathea-sbom.cdx.json")
 fail_contract("nightly.yml must retain the OSV report") unless
   action_uses(nightly).any? { |action| action.start_with?("actions/upload-artifact@") && pinned_action(action) }
+fail_contract("nightly.yml must surface OSV findings in logs and the job summary") unless
+  run_commands(nightly).include?("OSV_FINDING") &&
+    run_commands(nightly).include?("GITHUB_STEP_SUMMARY") &&
+    run_commands(nightly).include?("https://osv.dev/vulnerability/")
 
 release_triggers = triggers(release).keys
 fail_contract("release.yml must be manual-only") unless release_triggers == ["workflow_dispatch"]
