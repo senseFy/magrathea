@@ -206,7 +206,7 @@ class ProviderLiveHarnessConfigTest {
     }
 
     @Test
-    fun eventFormattingDoesNotExposeDebugMessageMetadataOrFailurePayloads() {
+    fun eventFormattingDoesNotExposeMessageMetadataOrFailurePayloads() {
         val canary = "harness-sensitive-canary"
         val sessionId = AgentSessionId("harness-test")
         val message = AgentMessage(
@@ -215,13 +215,11 @@ class ProviderLiveHarnessConfigTest {
             metadata = buildJsonObject { put("provider-payload", canary) },
         )
         val output = listOf(
-            AgentEvent.Debug(sessionId, "probe", canary),
             AgentEvent.MessageEmitted(sessionId, message),
             AgentEvent.Failed(sessionId, AgentFailureCode.INTERNAL),
         ).flatMap(::formatProviderLiveEvent).joinToString("\n")
 
         assertFalse(output.contains(canary))
-        assertTrue(output.contains("payloadChars="))
         assertTrue(output.contains("textChars="))
         assertTrue(output.contains("metadata-keys="))
         assertTrue(output.contains("failed code=INTERNAL"))

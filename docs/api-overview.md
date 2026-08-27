@@ -13,7 +13,7 @@ Chatbot, Provider, Tool, persistence, and browser layers they need.
 | Execution | `AgentRunner`, `ToolRegistry`, approval and permission gateways |
 | State | `AgentPersistence`, strict snapshot and checkpoint codecs |
 | Credentials | `CredentialRef`, `CredentialProvider`, transient `ProviderCredential` |
-| Infrastructure | Injectable IDs, epoch and monotonic clocks, telemetry |
+| Infrastructure | Injectable IDs and clocks, tracing primitives, context propagation, debug recorder |
 
 The application composition root selects the Provider, network engine, database, credential store,
 and UI.
@@ -45,7 +45,7 @@ See [Providers](providers.md) for endpoint and authentication configuration, and
 - retry, explicit cancellation, recoverable interruption, checkpoints, and resume;
 - semantic context compaction and context-limit recovery;
 - Provider, Tool, and whole-run deadlines;
-- hard limits and telemetry.
+- hard limits, tracing, and bounded debug recording.
 
 Its constructor accepts Core ports explicitly. `InMemoryAgentPersistence` and
 `InMemoryToolRegistry` are suitable for tests, previews, and intentionally ephemeral hosts;

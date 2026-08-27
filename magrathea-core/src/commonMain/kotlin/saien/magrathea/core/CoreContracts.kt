@@ -497,10 +497,6 @@ sealed interface AgentEvent {
     data class ContextTransformed(val sessionId: AgentSessionId, val turn: Int, val messageCount: Int) : AgentEvent
 
     @Serializable
-    @SerialName("debug")
-    data class Debug(val sessionId: AgentSessionId, val label: String, val payload: String) : AgentEvent
-
-    @Serializable
     @SerialName("message_emitted")
     data class MessageEmitted(val sessionId: AgentSessionId, val message: AgentMessage) : AgentEvent
 

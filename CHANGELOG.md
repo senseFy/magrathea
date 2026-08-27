@@ -5,10 +5,21 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+### Added
+
+- Core tracing primitives, coroutine context propagation, and Runtime spans for executions, turns,
+  context preparation, Provider requests, Tools, and persistence.
+- A default-disabled `MagratheaDebugRecorder` port for bounded, content-free Runtime diagnostics
+  with session, run, turn, Provider-attempt, and optional trace correlation.
+
 ### Changed
 
 - The Web package gate reports the production bundle size and uses a 2,000,000-byte Alpha ceiling
   so normal runtime growth remains visible without requiring per-feature budget changes.
+- The Alpha telemetry API and `DefaultAgentRunner.telemetry` parameter are replaced by one
+  content-free `MagratheaTracer` integration; no compatibility or dual-write layer is retained.
+- Debug diagnostics are removed from `AgentEvent`; hosts receive them only through the dedicated
+  recorder port.
 
 ## 0.1.0-alpha.6 — 2026-08-24
 

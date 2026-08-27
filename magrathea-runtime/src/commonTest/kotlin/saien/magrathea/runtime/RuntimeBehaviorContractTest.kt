@@ -479,11 +479,11 @@ class RuntimeBehaviorContractTest {
             ),
         )
 
-        val debug = runner(listOf(provider), tools = listOf(tool))
+        val recorder = RecordingDebugRecorder()
+        runner(listOf(provider), tools = listOf(tool), debugRecorder = recorder)
             .run(request)
             .toList()
-            .filterIsInstance<AgentEvent.Debug>()
-            .joinToString("|") { it.payload }
+        val debug = recorder.records.joinToString("|") { it.attributes.toString() }
 
         assertFalse(debug.contains(userCanary))
         assertFalse(debug.contains(endpointCanary))
@@ -531,6 +531,8 @@ class RuntimeBehaviorContractTest {
         interceptors: List<AgentInterceptor> = emptyList(),
         approvalGateway: ToolApprovalGateway? = null,
         followUpMessageProvider: FollowUpMessageProvider = FollowUpMessageProvider { emptyList() },
+        debugRecorder: saien.magrathea.core.MagratheaDebugRecorder =
+            saien.magrathea.core.NoopMagratheaDebugRecorder,
     ) = DefaultAgentRunner(
         providerRegistry = InMemoryProviderRegistry(providers),
         toolRegistry = InMemoryToolRegistry(tools),
@@ -538,6 +540,7 @@ class RuntimeBehaviorContractTest {
         interceptors = interceptors,
         approvalGateway = approvalGateway,
         followUpMessageProvider = followUpMessageProvider,
+        debugRecorder = debugRecorder,
     )
 
     private fun request(

@@ -23,14 +23,12 @@ import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentCheckpoint
 import saien.magrathea.core.AgentStatus
-import saien.magrathea.core.MagratheaTelemetry
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ProviderInterruptionPhase
 import saien.magrathea.core.RetryPolicy
 import saien.magrathea.core.TextPart
-import saien.magrathea.core.TelemetryEvent
-import saien.magrathea.core.TelemetryOutcome
+import saien.magrathea.core.TraceStatus
 import saien.magrathea.provider.api.InMemoryProviderRegistry
 import saien.magrathea.provider.api.ProviderAdapter
 import saien.magrathea.provider.api.ProviderAuthException
@@ -264,13 +262,13 @@ class RuntimeFailureContractTest {
             "interruption-storage-failure",
             ProviderNetworkException("offline"),
         )
-        val telemetry = mutableListOf<TelemetryEvent>()
+        val traceSink = RecordingTraceSink()
         val persistence = RejectInterruptedPersistence()
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(),
             persistence = persistence,
-            telemetry = MagratheaTelemetry(telemetry::add),
+            tracer = traceSink.tracer(),
             dispatcher = Dispatchers.Unconfined,
         )
 
@@ -281,9 +279,12 @@ class RuntimeFailureContractTest {
             events.filterIsInstance<AgentEvent.Failed>().single().code,
         )
         assertTrue(events.none { it is AgentEvent.Interrupted })
-        val finished = telemetry.filterIsInstance<TelemetryEvent.SessionFinished>().single()
-        assertEquals(TelemetryOutcome.FAILURE, finished.outcome)
-        assertEquals(AgentFailureCode.STORAGE, finished.failureCode)
+        val execution = traceSink.spans.single { it.name == RuntimeTraceNames.AGENT_EXECUTION }
+        assertEquals(TraceStatus.ERROR, execution.status)
+        assertEquals(
+            AgentFailureCode.STORAGE.name,
+            execution.stringAttribute("magrathea.error.code"),
+        )
     }
 
     @Test

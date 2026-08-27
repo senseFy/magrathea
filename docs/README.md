@@ -17,6 +17,8 @@
 | [Context management](context-management.md) | Token budgets, semantic compaction, and overflow recovery |
 | [Timeouts](timeouts.md) | Provider, Tool, and whole-run deadlines |
 | [Interruption and recovery](recovery.md) | Backgrounding, process loss, resume, and Tool replay safety |
+| [Tracing contract](adr/ADR-015-runtime-tracing-contract.md) | Chain tracing, host integration, privacy, and telemetry replacement |
+| [Debug recording contract](adr/ADR-016-debug-recording-contract.md) | Typed, default-disabled host diagnostics outside business events |
 | [MCP](mcp.md) | Tool discovery, transports, policy, security, and lifecycle |
 | [Web Search](web-search.md) | Portable search Tool contract and citation boundary |
 | [Image Search](image-search.md) | Portable image discovery, typed media results, and chatbot projection |

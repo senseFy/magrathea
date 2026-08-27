@@ -683,7 +683,7 @@ class GatewayStreamCoordinator(
             auditSink.record(event)
         } catch (_: Throwable) {
             // The stream already has a terminal result. Deployments should surface sink failures
-            // through their own mandatory telemetry rather than leaking them to the Web client.
+            // through their own operational monitoring rather than leaking them to the Web client.
         }
     }
 

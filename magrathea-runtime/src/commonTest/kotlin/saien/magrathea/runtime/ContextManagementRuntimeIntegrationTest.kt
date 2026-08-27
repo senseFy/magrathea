@@ -20,18 +20,19 @@ import saien.magrathea.core.ContextManagementState
 import saien.magrathea.core.ContextPreparationAction
 import saien.magrathea.core.ContextPreparationResult
 import saien.magrathea.core.ContextUsageObservation
+import saien.magrathea.core.MagratheaDebugRecorder
+import saien.magrathea.core.MagratheaTracer
 import saien.magrathea.core.MessageRole
-import saien.magrathea.core.MagratheaTelemetry
 import saien.magrathea.core.ModelDescriptor
-import saien.magrathea.core.NoopMagratheaTelemetry
+import saien.magrathea.core.NoopMagratheaDebugRecorder
+import saien.magrathea.core.NoopMagratheaTracer
 import saien.magrathea.core.ProviderConfig
 import saien.magrathea.core.ProviderRequestPurpose
 import saien.magrathea.core.RetryPolicy
 import saien.magrathea.core.RuntimeConfig
-import saien.magrathea.core.TelemetryEvent
-import saien.magrathea.core.TelemetryOutcome
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.TokenUsage
+import saien.magrathea.core.TraceStatus
 import saien.magrathea.provider.api.InMemoryProviderRegistry
 import saien.magrathea.provider.api.OpenAiTransportConfig
 import saien.magrathea.provider.api.OpenAiXSearchToolConfig
@@ -115,13 +116,15 @@ class ContextManagementRuntimeIntegrationTest {
     }
 
     @Test
-    fun successfulSummaryTelemetryKeepsRequestUsageSeparateFromSessionCumulativeUsage() = runTest {
-        val telemetry = RecordingTelemetry()
+    fun successfulSummaryTracingKeepsRequestUsageSeparateFromSessionCumulativeUsage() = runTest {
+        val traceSink = RecordingTraceSink()
+        val debugRecorder = RecordingDebugRecorder()
         val provider = SummaryAwareProvider()
         val events = runner(
             provider = provider,
             persistence = InMemoryAgentPersistence(),
-            telemetry = telemetry,
+            tracer = traceSink.tracer(),
+            debugRecorder = debugRecorder,
         ).run(
             request(
                 sessionId = AgentSessionId("summary-success-accounting"),
@@ -130,42 +133,44 @@ class ContextManagementRuntimeIntegrationTest {
             ),
         ).toList()
 
-        val requestFinished = telemetry.events
-            .filterIsInstance<TelemetryEvent.ProviderRequestFinished>()
+        val requestFinished = traceSink.spans
+            .filter { it.name == RuntimeTraceNames.PROVIDER_REQUEST }
         assertEquals(
-            listOf(
-                TokenUsage(inputTokens = 100, outputTokens = 12),
-                TokenUsage(inputTokens = 50, outputTokens = 5),
-            ),
-            requestFinished.map(TelemetryEvent.ProviderRequestFinished::usage),
+            listOf(100L to 12L, 50L to 5L),
+            requestFinished.map {
+                it.longAttribute("magrathea.usage.input_tokens") to
+                    it.longAttribute("magrathea.usage.output_tokens")
+            },
         )
-        assertTrue(requestFinished.all { it.outcome == TelemetryOutcome.SUCCESS })
+        assertTrue(requestFinished.all { it.status == TraceStatus.OK })
         assertEquals(
-            listOf(ProviderRequestPurpose.CONTEXT_SUMMARY, ProviderRequestPurpose.MODEL),
-            requestFinished.map(TelemetryEvent.ProviderRequestFinished::purpose),
-        )
-        assertEquals(
-            listOf(ProviderRequestPurpose.CONTEXT_SUMMARY, ProviderRequestPurpose.MODEL),
-            telemetry.events.filterIsInstance<TelemetryEvent.ProviderRequestStarted>()
-                .map(TelemetryEvent.ProviderRequestStarted::purpose),
+            listOf("context_summary", "model"),
+            requestFinished.map { it.stringAttribute("magrathea.provider.purpose") },
         )
         assertEquals(
-            listOf(ProviderRequestPurpose.CONTEXT_SUMMARY, ProviderRequestPurpose.MODEL),
-            telemetry.events.filterIsInstance<TelemetryEvent.ProviderFirstChunk>()
-                .map(TelemetryEvent.ProviderFirstChunk::purpose),
+            listOf("context_summary", "model"),
+            requestFinished.filter {
+                it.events.any { event -> event.name == RuntimeTraceEvents.PROVIDER_FIRST_EVENT }
+            }.map { it.stringAttribute("magrathea.provider.purpose") },
         )
         val completed = events.filterIsInstance<AgentEvent.Completed>().single().state
         assertEquals(TokenUsage(inputTokens = 150, outputTokens = 17), completed.usage)
         assertEquals(TokenUsage(inputTokens = 50, outputTokens = 5), completed.latestRequestUsage)
+        val execution = traceSink.spans
+            .single { it.name == RuntimeTraceNames.AGENT_EXECUTION }
+        assertEquals(150L, execution.longAttribute("magrathea.usage.input_tokens"))
+        assertEquals(17L, execution.longAttribute("magrathea.usage.output_tokens"))
         assertEquals(
-            completed.usage,
-            telemetry.events.filterIsInstance<TelemetryEvent.SessionFinished>().single().usage,
+            listOf("context_summary", "model"),
+            debugRecorder.records
+                .filter { it.event == "provider.request.messages" }
+                .mapNotNull { it.stringAttribute("provider_purpose") },
         )
     }
 
     @Test
     fun failedSummaryStillAccountsObservedUsageBeforeFailingOpen() = runTest {
-        val telemetry = RecordingTelemetry()
+        val traceSink = RecordingTraceSink()
         val persistence = InMemoryAgentPersistence()
         val provider = SummaryUsageThenFailureProvider()
         val request = request(
@@ -177,22 +182,25 @@ class ContextManagementRuntimeIntegrationTest {
         val events = runner(
             provider = provider,
             persistence = persistence,
-            telemetry = telemetry,
+            tracer = traceSink.tracer(),
         ).run(request).toList()
 
-        val requestFinished = telemetry.events
-            .filterIsInstance<TelemetryEvent.ProviderRequestFinished>()
+        val requestFinished = traceSink.spans
+            .filter { it.name == RuntimeTraceNames.PROVIDER_REQUEST }
         assertEquals(
-            listOf(TelemetryOutcome.FAILURE, TelemetryOutcome.SUCCESS),
-            requestFinished.map(TelemetryEvent.ProviderRequestFinished::outcome),
+            listOf(TraceStatus.ERROR, TraceStatus.OK),
+            requestFinished.map { it.status },
         )
         assertEquals(
-            listOf(ProviderRequestPurpose.CONTEXT_SUMMARY, ProviderRequestPurpose.MODEL),
-            requestFinished.map(TelemetryEvent.ProviderRequestFinished::purpose),
+            listOf("context_summary", "model"),
+            requestFinished.map { it.stringAttribute("magrathea.provider.purpose") },
         )
         assertEquals(
-            listOf(SUMMARY_USAGE, MODEL_USAGE),
-            requestFinished.map(TelemetryEvent.ProviderRequestFinished::usage),
+            listOf(SUMMARY_USAGE, MODEL_USAGE).map { it.inputTokens to it.outputTokens },
+            requestFinished.map {
+                it.longAttribute("magrathea.usage.input_tokens") to
+                    it.longAttribute("magrathea.usage.output_tokens")
+            },
         )
         val completed = events.filterIsInstance<AgentEvent.Completed>().single().state
         assertEquals(CUMULATIVE_USAGE, completed.usage)
@@ -202,18 +210,14 @@ class ContextManagementRuntimeIntegrationTest {
             assertNotNull(persistence.load(request.sessionId)).snapshot.state.usage,
         )
         assertNull(completed.contextManagement.compaction)
-        assertEquals(
-            CUMULATIVE_USAGE,
-            telemetry.events.filterIsInstance<TelemetryEvent.SessionFinished>().single().usage,
-        )
     }
 
     @Test
     fun hostInterruptionPreservesObservedSummaryUsageAcrossCheckpointRecovery() = runTest {
-        val telemetry = RecordingTelemetry()
+        val traceSink = RecordingTraceSink()
         val persistence = InMemoryAgentPersistence()
         val provider = InterruptibleSummaryProvider()
-        val runner = runner(provider, persistence, telemetry = telemetry)
+        val runner = runner(provider, persistence, tracer = traceSink.tracer())
         val sessionId = AgentSessionId("summary-host-interruption-accounting")
         val request = request(
             sessionId = sessionId,
@@ -237,17 +241,18 @@ class ContextManagementRuntimeIntegrationTest {
         assertEquals(SUMMARY_USAGE, persisted.snapshot.state.usage)
         assertEquals(TokenUsage(), assertNotNull(persisted.checkpoint).state.usage)
         assertEquals(TokenUsage(), persisted.snapshot.state.latestRequestUsage)
-        val firstRequest = telemetry.events
-            .filterIsInstance<TelemetryEvent.ProviderRequestFinished>()
+        val firstRequest = traceSink.spans
+            .filter { it.name == RuntimeTraceNames.PROVIDER_REQUEST }
             .single()
-        assertEquals(TelemetryOutcome.CANCELLED, firstRequest.outcome)
-        assertEquals(ProviderRequestPurpose.CONTEXT_SUMMARY, firstRequest.purpose)
-        assertEquals(SUMMARY_USAGE, firstRequest.usage)
-        val interruptedSession = telemetry.events
-            .filterIsInstance<TelemetryEvent.SessionFinished>()
+        assertEquals(TraceStatus.UNSET, firstRequest.status)
+        assertEquals("cancelled", firstRequest.stringAttribute("magrathea.outcome"))
+        assertEquals("context_summary", firstRequest.stringAttribute("magrathea.provider.purpose"))
+        assertEquals(SUMMARY_USAGE.inputTokens, firstRequest.longAttribute("magrathea.usage.input_tokens"))
+        assertEquals(SUMMARY_USAGE.outputTokens, firstRequest.longAttribute("magrathea.usage.output_tokens"))
+        val interruptedExecution = traceSink.spans
+            .filter { it.name == RuntimeTraceNames.AGENT_EXECUTION }
             .single()
-        assertEquals(TelemetryOutcome.INTERRUPTED, interruptedSession.outcome)
-        assertEquals(SUMMARY_USAGE, interruptedSession.usage)
+        assertEquals("interrupted", interruptedExecution.stringAttribute("magrathea.outcome"))
 
         val resumed = runner.resume(sessionId).toList()
             .filterIsInstance<AgentEvent.Completed>()
@@ -495,13 +500,18 @@ class ContextManagementRuntimeIntegrationTest {
     fun contextLimitBeforeAnyOutput_forcesOneSemanticCompactionAndRetriesOnce() = runTest {
         val provider = OverflowThenCompleteProvider()
         val persistence = InMemoryAgentPersistence()
+        val debugRecorder = RecordingDebugRecorder()
         val request = request(
             sessionId = AgentSessionId("overflow-recovery-session"),
             messages = longHistory(),
             contextWindowTokens = null,
         )
 
-        val events = runner(provider, persistence).run(request).toList()
+        val events = runner(
+            provider = provider,
+            persistence = persistence,
+            debugRecorder = debugRecorder,
+        ).run(request).toList()
 
         assertTrue(events.any { it is AgentEvent.Completed })
         assertTrue(events.none { it is AgentEvent.Failed })
@@ -510,18 +520,52 @@ class ContextManagementRuntimeIntegrationTest {
             provider.requests.map { if (it.isContextSummary()) "summary" else "model" },
         )
         assertNotNull(persistence.load(request.sessionId)?.snapshot?.state?.contextManagement?.compaction)
+        val failure = debugRecorder.records.single { it.event == "provider.failed" }
+        assertEquals(saien.magrathea.core.MagratheaDebugLevel.WARN, failure.level)
+        assertEquals("context_limit", failure.stringAttribute("failure_type"))
+    }
+
+    @Test
+    fun contextLimitWithoutRecoveryIsATerminalDebugFailure() = runTest {
+        val provider = OverflowThenCompleteProvider()
+        val debugRecorder = RecordingDebugRecorder()
+        val request = request(
+            sessionId = AgentSessionId("terminal-overflow-session"),
+            messages = longHistory(),
+            contextWindowTokens = null,
+            overflowRetryLimit = 0,
+        )
+
+        val events = runner(
+            provider = provider,
+            persistence = InMemoryAgentPersistence(),
+            debugRecorder = debugRecorder,
+        ).run(request).toList()
+
+        assertEquals(
+            saien.magrathea.core.AgentFailureCode.CONTEXT_LIMIT,
+            events.filterIsInstance<AgentEvent.Failed>().single().code,
+        )
+        val failure = debugRecorder.records.single { it.event == "provider.failed" }
+        assertEquals(saien.magrathea.core.MagratheaDebugLevel.ERROR, failure.level)
+        assertEquals("context_limit", failure.stringAttribute("failure_type"))
     }
 
     @Test
     fun contextLimitAfterOutput_doesNotRetryOrDuplicatePartialAnswer() = runTest {
         val provider = PartialThenOverflowProvider()
+        val debugRecorder = RecordingDebugRecorder()
         val request = request(
             sessionId = AgentSessionId("post-output-overflow-session"),
             messages = longHistory(),
             contextWindowTokens = null,
         )
 
-        val events = runner(provider, InMemoryAgentPersistence()).run(request).toList()
+        val events = runner(
+            provider = provider,
+            persistence = InMemoryAgentPersistence(),
+            debugRecorder = debugRecorder,
+        ).run(request).toList()
 
         assertEquals(1, provider.requests.size)
         assertTrue(provider.requests.none(ProviderRequest::isContextSummary))
@@ -536,21 +580,27 @@ class ContextManagementRuntimeIntegrationTest {
                 .distinctBy(AgentMessage::id)
                 .size,
         )
+        val failure = debugRecorder.records.single { it.event == "provider.failed" }
+        assertEquals(saien.magrathea.core.MagratheaDebugLevel.ERROR, failure.level)
+        assertEquals("protocol", failure.stringAttribute("failure_type"))
+        assertEquals(true, failure.booleanAttribute("protocol_error"))
     }
 
     private fun runner(
         provider: ProviderAdapter,
         persistence: InMemoryAgentPersistence,
         contextManager: saien.magrathea.core.ContextManager? = null,
-        telemetry: MagratheaTelemetry = NoopMagratheaTelemetry,
+        tracer: MagratheaTracer = NoopMagratheaTracer,
         retryPolicy: RetryPolicy = saien.magrathea.core.NoopRetryPolicy,
+        debugRecorder: MagratheaDebugRecorder = NoopMagratheaDebugRecorder,
     ) = DefaultAgentRunner(
         providerRegistry = InMemoryProviderRegistry(listOf(provider)),
         toolRegistry = InMemoryToolRegistry(),
         persistence = persistence,
         contextManager = contextManager,
-        telemetry = telemetry,
+        tracer = tracer,
         retryPolicy = retryPolicy,
+        debugRecorder = debugRecorder,
     )
 
     private fun request(
@@ -559,6 +609,7 @@ class ContextManagementRuntimeIntegrationTest {
         contextWindowTokens: Long? = null,
         providerConfig: ProviderConfig = ProviderConfig(maxTokens = 20),
         maxProviderRetries: Int = 2,
+        overflowRetryLimit: Int = 1,
     ) = AgentRequest(
         sessionId = sessionId,
         messages = messages,
@@ -576,6 +627,7 @@ class ContextManagementRuntimeIntegrationTest {
                     keepRecentTokens = 60,
                     summaryMaxTokens = 32,
                     charsPerTokenEstimate = 4,
+                    overflowRetryLimit = overflowRetryLimit,
                 ),
             ),
         ),
@@ -836,14 +888,6 @@ class ContextManagementRuntimeIntegrationTest {
         override suspend fun shouldRetry(attempt: Int, error: Throwable): Boolean = attempt == 1
 
         override suspend fun backoffDelayMs(attempt: Int, error: Throwable): Long = 0
-    }
-
-    private class RecordingTelemetry : MagratheaTelemetry {
-        val events = mutableListOf<TelemetryEvent>()
-
-        override fun record(event: TelemetryEvent) {
-            events += event
-        }
     }
 
     private class RecordingContextManager(

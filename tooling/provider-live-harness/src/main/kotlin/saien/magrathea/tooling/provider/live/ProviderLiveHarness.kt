@@ -346,7 +346,6 @@ internal fun formatProviderLiveEvent(event: AgentEvent): List<String> = when (ev
     )
     is AgentEvent.TurnStarted -> listOf("[event] turn=${event.turn}")
     is AgentEvent.ContextTransformed -> listOf("[event] context messages=${event.messageCount}")
-    is AgentEvent.Debug -> listOf("[event] debug label=${event.label} payloadChars=${event.payload.length}")
     is AgentEvent.MessageEmitted -> buildList {
             val text = event.message.parts.filterIsInstance<TextPart>().joinToString(" | ") { it.text }
             val reasoning = event.message.parts.filterIsInstance<saien.magrathea.core.ReasoningPart>().joinToString(" | ") { it.text }

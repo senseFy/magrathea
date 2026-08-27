@@ -11,7 +11,7 @@ applications. Its primary public boundary is Provider-neutral Core and Runtime A
 The repository uses these layers:
 
 1. Kernel contracts: Core models, stores, credentials, Provider events, and transport ports.
-2. Runtime: turns, tools, retry, cancellation, checkpoints, resume, limits, and telemetry.
+2. Runtime: turns, tools, retry, cancellation, checkpoints, resume, limits, and tracing.
 3. Optional capabilities: reference Provider adapters, the MCP Tool adapter, and reusable Policy
    behavior.
 4. Platform adapters: Room, IndexedDB, Keystore, and Keychain integrations.

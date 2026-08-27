@@ -502,7 +502,6 @@ private fun AgentEvent.sessionId(): AgentSessionId = when (this) {
     is AgentEvent.Started -> sessionId
     is AgentEvent.TurnStarted -> sessionId
     is AgentEvent.ContextTransformed -> sessionId
-    is AgentEvent.Debug -> sessionId
     is AgentEvent.MessageEmitted -> sessionId
     is AgentEvent.ToolRequested -> sessionId
     is AgentEvent.ToolCompleted -> sessionId

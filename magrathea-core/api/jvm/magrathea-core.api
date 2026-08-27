@@ -197,37 +197,6 @@ public final class saien/magrathea/core/AgentEvent$ContextTransformed$Companion 
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
-public final class saien/magrathea/core/AgentEvent$Debug : saien/magrathea/core/AgentEvent {
-	public static final field Companion Lsaien/magrathea/core/AgentEvent$Debug$Companion;
-	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Ljava/lang/String;)V
-	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun component2 ()Ljava/lang/String;
-	public final fun component3 ()Ljava/lang/String;
-	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/core/AgentEvent$Debug;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/AgentEvent$Debug;Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/core/AgentEvent$Debug;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getLabel ()Ljava/lang/String;
-	public final fun getPayload ()Ljava/lang/String;
-	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final synthetic class saien/magrathea/core/AgentEvent$Debug$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
-	public static final field INSTANCE Lsaien/magrathea/core/AgentEvent$Debug$$serializer;
-	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
-	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
-	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lsaien/magrathea/core/AgentEvent$Debug;
-	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
-	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
-	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lsaien/magrathea/core/AgentEvent$Debug;)V
-	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
-}
-
-public final class saien/magrathea/core/AgentEvent$Debug$Companion {
-	public final fun serializer ()Lkotlinx/serialization/KSerializer;
-}
-
 public final class saien/magrathea/core/AgentEvent$Failed : saien/magrathea/core/AgentEvent {
 	public static final field Companion Lsaien/magrathea/core/AgentEvent$Failed$Companion;
 	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentFailureCode;)V
@@ -1468,6 +1437,12 @@ public final class saien/magrathea/core/CredentialRef$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class saien/magrathea/core/DefaultMagratheaTracer : saien/magrathea/core/MagratheaTracer {
+	public fun <init> (Lsaien/magrathea/core/MagratheaTraceSink;Lsaien/magrathea/core/EpochClock;Lsaien/magrathea/core/MonotonicClock;Lsaien/magrathea/core/IdGenerator;)V
+	public synthetic fun <init> (Lsaien/magrathea/core/MagratheaTraceSink;Lsaien/magrathea/core/EpochClock;Lsaien/magrathea/core/MonotonicClock;Lsaien/magrathea/core/IdGenerator;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun startSpan (Ljava/lang/String;Lsaien/magrathea/core/TraceContext;Ljava/util/Map;)Lsaien/magrathea/core/MagratheaTraceSpan;
+}
+
 public abstract interface class saien/magrathea/core/EpochClock {
 	public abstract fun nowEpochMs ()J
 }
@@ -1537,8 +1512,119 @@ public final class saien/magrathea/core/JsonPart$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
-public abstract interface class saien/magrathea/core/MagratheaTelemetry {
-	public abstract fun record (Lsaien/magrathea/core/TelemetryEvent;)V
+public final class saien/magrathea/core/MagratheaDebugLevel : java/lang/Enum {
+	public static final field DEBUG Lsaien/magrathea/core/MagratheaDebugLevel;
+	public static final field ERROR Lsaien/magrathea/core/MagratheaDebugLevel;
+	public static final field INFO Lsaien/magrathea/core/MagratheaDebugLevel;
+	public static final field WARN Lsaien/magrathea/core/MagratheaDebugLevel;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/core/MagratheaDebugLevel;
+	public static fun values ()[Lsaien/magrathea/core/MagratheaDebugLevel;
+}
+
+public final class saien/magrathea/core/MagratheaDebugRecord {
+	public fun <init> (Lsaien/magrathea/core/MagratheaDebugLevel;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/core/TraceContext;Ljava/util/Map;)V
+	public synthetic fun <init> (Lsaien/magrathea/core/MagratheaDebugLevel;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/core/TraceContext;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lsaien/magrathea/core/MagratheaDebugLevel;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Lsaien/magrathea/core/TraceContext;
+	public final fun component6 ()Ljava/util/Map;
+	public final fun copy (Lsaien/magrathea/core/MagratheaDebugLevel;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/core/TraceContext;Ljava/util/Map;)Lsaien/magrathea/core/MagratheaDebugRecord;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/MagratheaDebugRecord;Lsaien/magrathea/core/MagratheaDebugLevel;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/core/TraceContext;Ljava/util/Map;ILjava/lang/Object;)Lsaien/magrathea/core/MagratheaDebugRecord;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttributes ()Ljava/util/Map;
+	public final fun getComponent ()Ljava/lang/String;
+	public final fun getEvent ()Ljava/lang/String;
+	public final fun getLevel ()Lsaien/magrathea/core/MagratheaDebugLevel;
+	public final fun getSessionId ()Ljava/lang/String;
+	public final fun getTraceContext ()Lsaien/magrathea/core/TraceContext;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class saien/magrathea/core/MagratheaDebugRecorder {
+	public abstract fun getEnabled ()Z
+	public abstract fun record (Lsaien/magrathea/core/MagratheaDebugRecord;)V
+}
+
+public abstract interface class saien/magrathea/core/MagratheaDebugValue {
+}
+
+public final class saien/magrathea/core/MagratheaDebugValue$BooleanValue : saien/magrathea/core/MagratheaDebugValue {
+	public fun <init> (Z)V
+	public final fun component1 ()Z
+	public final fun copy (Z)Lsaien/magrathea/core/MagratheaDebugValue$BooleanValue;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/MagratheaDebugValue$BooleanValue;ZILjava/lang/Object;)Lsaien/magrathea/core/MagratheaDebugValue$BooleanValue;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/core/MagratheaDebugValue$DoubleValue : saien/magrathea/core/MagratheaDebugValue {
+	public fun <init> (D)V
+	public final fun component1 ()D
+	public final fun copy (D)Lsaien/magrathea/core/MagratheaDebugValue$DoubleValue;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/MagratheaDebugValue$DoubleValue;DILjava/lang/Object;)Lsaien/magrathea/core/MagratheaDebugValue$DoubleValue;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()D
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/core/MagratheaDebugValue$LongValue : saien/magrathea/core/MagratheaDebugValue {
+	public fun <init> (J)V
+	public final fun component1 ()J
+	public final fun copy (J)Lsaien/magrathea/core/MagratheaDebugValue$LongValue;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/MagratheaDebugValue$LongValue;JILjava/lang/Object;)Lsaien/magrathea/core/MagratheaDebugValue$LongValue;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/core/MagratheaDebugValue$StringValue : saien/magrathea/core/MagratheaDebugValue {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lsaien/magrathea/core/MagratheaDebugValue$StringValue;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/MagratheaDebugValue$StringValue;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/core/MagratheaDebugValue$StringValue;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/core/MagratheaSdk {
+	public static final field INSTANCE Lsaien/magrathea/core/MagratheaSdk;
+	public final fun getVersion ()Ljava/lang/String;
+}
+
+public abstract interface class saien/magrathea/core/MagratheaTraceSink {
+	public abstract fun export (Lsaien/magrathea/core/TraceSpanData;)V
+}
+
+public abstract interface class saien/magrathea/core/MagratheaTraceSpan {
+	public abstract fun addEvent (Ljava/lang/String;Ljava/util/Map;)V
+	public static synthetic fun addEvent$default (Lsaien/magrathea/core/MagratheaTraceSpan;Ljava/lang/String;Ljava/util/Map;ILjava/lang/Object;)V
+	public abstract fun end (Lsaien/magrathea/core/TraceStatus;Ljava/util/Map;)V
+	public static synthetic fun end$default (Lsaien/magrathea/core/MagratheaTraceSpan;Lsaien/magrathea/core/TraceStatus;Ljava/util/Map;ILjava/lang/Object;)V
+	public abstract fun getContext ()Lsaien/magrathea/core/TraceContext;
+}
+
+public final class saien/magrathea/core/MagratheaTraceSpan$DefaultImpls {
+	public static synthetic fun addEvent$default (Lsaien/magrathea/core/MagratheaTraceSpan;Ljava/lang/String;Ljava/util/Map;ILjava/lang/Object;)V
+	public static synthetic fun end$default (Lsaien/magrathea/core/MagratheaTraceSpan;Lsaien/magrathea/core/TraceStatus;Ljava/util/Map;ILjava/lang/Object;)V
+}
+
+public abstract interface class saien/magrathea/core/MagratheaTracer {
+	public abstract fun startSpan (Ljava/lang/String;Lsaien/magrathea/core/TraceContext;Ljava/util/Map;)Lsaien/magrathea/core/MagratheaTraceSpan;
+	public static synthetic fun startSpan$default (Lsaien/magrathea/core/MagratheaTracer;Ljava/lang/String;Lsaien/magrathea/core/TraceContext;Ljava/util/Map;ILjava/lang/Object;)Lsaien/magrathea/core/MagratheaTraceSpan;
+}
+
+public final class saien/magrathea/core/MagratheaTracer$DefaultImpls {
+	public static synthetic fun startSpan$default (Lsaien/magrathea/core/MagratheaTracer;Ljava/lang/String;Lsaien/magrathea/core/TraceContext;Ljava/util/Map;ILjava/lang/Object;)Lsaien/magrathea/core/MagratheaTraceSpan;
 }
 
 public final class saien/magrathea/core/MediaReference {
@@ -1671,9 +1757,22 @@ public abstract interface class saien/magrathea/core/MonotonicClock {
 	public abstract fun nowMillis ()J
 }
 
-public final class saien/magrathea/core/NoopMagratheaTelemetry : saien/magrathea/core/MagratheaTelemetry {
-	public static final field INSTANCE Lsaien/magrathea/core/NoopMagratheaTelemetry;
-	public fun record (Lsaien/magrathea/core/TelemetryEvent;)V
+public final class saien/magrathea/core/NoopMagratheaDebugRecorder : saien/magrathea/core/MagratheaDebugRecorder {
+	public static final field INSTANCE Lsaien/magrathea/core/NoopMagratheaDebugRecorder;
+	public fun getEnabled ()Z
+	public fun record (Lsaien/magrathea/core/MagratheaDebugRecord;)V
+}
+
+public final class saien/magrathea/core/NoopMagratheaTraceSpan : saien/magrathea/core/MagratheaTraceSpan {
+	public static final field INSTANCE Lsaien/magrathea/core/NoopMagratheaTraceSpan;
+	public fun addEvent (Ljava/lang/String;Ljava/util/Map;)V
+	public fun end (Lsaien/magrathea/core/TraceStatus;Ljava/util/Map;)V
+	public fun getContext ()Lsaien/magrathea/core/TraceContext;
+}
+
+public final class saien/magrathea/core/NoopMagratheaTracer : saien/magrathea/core/MagratheaTracer {
+	public static final field INSTANCE Lsaien/magrathea/core/NoopMagratheaTracer;
+	public fun startSpan (Ljava/lang/String;Lsaien/magrathea/core/TraceContext;Ljava/util/Map;)Lsaien/magrathea/core/MagratheaTraceSpan;
 }
 
 public final class saien/magrathea/core/NoopRetryPolicy : saien/magrathea/core/RetryPolicy {
@@ -2216,191 +2315,6 @@ public final class saien/magrathea/core/SystemIdGenerator : saien/magrathea/core
 public final class saien/magrathea/core/SystemMonotonicClock : saien/magrathea/core/MonotonicClock {
 	public static final field INSTANCE Lsaien/magrathea/core/SystemMonotonicClock;
 	public fun nowMillis ()J
-}
-
-public abstract interface class saien/magrathea/core/TelemetryEvent {
-}
-
-public final class saien/magrathea/core/TelemetryEvent$ProviderFirstChunk : saien/magrathea/core/TelemetryEvent {
-	public fun <init> (Lsaien/magrathea/core/AgentSessionId;IIJLsaien/magrathea/core/ProviderRequestPurpose;)V
-	public synthetic fun <init> (Lsaien/magrathea/core/AgentSessionId;IIJLsaien/magrathea/core/ProviderRequestPurpose;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun component2 ()I
-	public final fun component3 ()I
-	public final fun component4 ()J
-	public final fun component5 ()Lsaien/magrathea/core/ProviderRequestPurpose;
-	public final fun copy (Lsaien/magrathea/core/AgentSessionId;IIJLsaien/magrathea/core/ProviderRequestPurpose;)Lsaien/magrathea/core/TelemetryEvent$ProviderFirstChunk;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/TelemetryEvent$ProviderFirstChunk;Lsaien/magrathea/core/AgentSessionId;IIJLsaien/magrathea/core/ProviderRequestPurpose;ILjava/lang/Object;)Lsaien/magrathea/core/TelemetryEvent$ProviderFirstChunk;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getAttempt ()I
-	public final fun getLatencyMillis ()J
-	public final fun getPurpose ()Lsaien/magrathea/core/ProviderRequestPurpose;
-	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun getTurn ()I
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class saien/magrathea/core/TelemetryEvent$ProviderRequestFinished : saien/magrathea/core/TelemetryEvent {
-	public fun <init> (Lsaien/magrathea/core/AgentSessionId;IIJLsaien/magrathea/core/TelemetryOutcome;Lsaien/magrathea/core/AgentFailureCode;ZLsaien/magrathea/core/TokenUsage;Lsaien/magrathea/core/ProviderRequestPurpose;)V
-	public synthetic fun <init> (Lsaien/magrathea/core/AgentSessionId;IIJLsaien/magrathea/core/TelemetryOutcome;Lsaien/magrathea/core/AgentFailureCode;ZLsaien/magrathea/core/TokenUsage;Lsaien/magrathea/core/ProviderRequestPurpose;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun component2 ()I
-	public final fun component3 ()I
-	public final fun component4 ()J
-	public final fun component5 ()Lsaien/magrathea/core/TelemetryOutcome;
-	public final fun component6 ()Lsaien/magrathea/core/AgentFailureCode;
-	public final fun component7 ()Z
-	public final fun component8 ()Lsaien/magrathea/core/TokenUsage;
-	public final fun component9 ()Lsaien/magrathea/core/ProviderRequestPurpose;
-	public final fun copy (Lsaien/magrathea/core/AgentSessionId;IIJLsaien/magrathea/core/TelemetryOutcome;Lsaien/magrathea/core/AgentFailureCode;ZLsaien/magrathea/core/TokenUsage;Lsaien/magrathea/core/ProviderRequestPurpose;)Lsaien/magrathea/core/TelemetryEvent$ProviderRequestFinished;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/TelemetryEvent$ProviderRequestFinished;Lsaien/magrathea/core/AgentSessionId;IIJLsaien/magrathea/core/TelemetryOutcome;Lsaien/magrathea/core/AgentFailureCode;ZLsaien/magrathea/core/TokenUsage;Lsaien/magrathea/core/ProviderRequestPurpose;ILjava/lang/Object;)Lsaien/magrathea/core/TelemetryEvent$ProviderRequestFinished;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getAttempt ()I
-	public final fun getDurationMillis ()J
-	public final fun getFailureCode ()Lsaien/magrathea/core/AgentFailureCode;
-	public final fun getOutcome ()Lsaien/magrathea/core/TelemetryOutcome;
-	public final fun getProviderEventObserved ()Z
-	public final fun getPurpose ()Lsaien/magrathea/core/ProviderRequestPurpose;
-	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun getTurn ()I
-	public final fun getUsage ()Lsaien/magrathea/core/TokenUsage;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class saien/magrathea/core/TelemetryEvent$ProviderRequestStarted : saien/magrathea/core/TelemetryEvent {
-	public fun <init> (Lsaien/magrathea/core/AgentSessionId;IILsaien/magrathea/core/ProviderRequestPurpose;)V
-	public synthetic fun <init> (Lsaien/magrathea/core/AgentSessionId;IILsaien/magrathea/core/ProviderRequestPurpose;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun component2 ()I
-	public final fun component3 ()I
-	public final fun component4 ()Lsaien/magrathea/core/ProviderRequestPurpose;
-	public final fun copy (Lsaien/magrathea/core/AgentSessionId;IILsaien/magrathea/core/ProviderRequestPurpose;)Lsaien/magrathea/core/TelemetryEvent$ProviderRequestStarted;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/TelemetryEvent$ProviderRequestStarted;Lsaien/magrathea/core/AgentSessionId;IILsaien/magrathea/core/ProviderRequestPurpose;ILjava/lang/Object;)Lsaien/magrathea/core/TelemetryEvent$ProviderRequestStarted;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getAttempt ()I
-	public final fun getPurpose ()Lsaien/magrathea/core/ProviderRequestPurpose;
-	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun getTurn ()I
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class saien/magrathea/core/TelemetryEvent$RetryScheduled : saien/magrathea/core/TelemetryEvent {
-	public fun <init> (Lsaien/magrathea/core/AgentSessionId;IILsaien/magrathea/core/AgentFailureCode;)V
-	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun component2 ()I
-	public final fun component3 ()I
-	public final fun component4 ()Lsaien/magrathea/core/AgentFailureCode;
-	public final fun copy (Lsaien/magrathea/core/AgentSessionId;IILsaien/magrathea/core/AgentFailureCode;)Lsaien/magrathea/core/TelemetryEvent$RetryScheduled;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/TelemetryEvent$RetryScheduled;Lsaien/magrathea/core/AgentSessionId;IILsaien/magrathea/core/AgentFailureCode;ILjava/lang/Object;)Lsaien/magrathea/core/TelemetryEvent$RetryScheduled;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getAttempt ()I
-	public final fun getFailureCode ()Lsaien/magrathea/core/AgentFailureCode;
-	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun getTurn ()I
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class saien/magrathea/core/TelemetryEvent$SessionFinished : saien/magrathea/core/TelemetryEvent {
-	public fun <init> (Lsaien/magrathea/core/AgentSessionId;ILsaien/magrathea/core/TelemetryOutcome;Lsaien/magrathea/core/AgentFailureCode;Lsaien/magrathea/core/TokenUsage;)V
-	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun component2 ()I
-	public final fun component3 ()Lsaien/magrathea/core/TelemetryOutcome;
-	public final fun component4 ()Lsaien/magrathea/core/AgentFailureCode;
-	public final fun component5 ()Lsaien/magrathea/core/TokenUsage;
-	public final fun copy (Lsaien/magrathea/core/AgentSessionId;ILsaien/magrathea/core/TelemetryOutcome;Lsaien/magrathea/core/AgentFailureCode;Lsaien/magrathea/core/TokenUsage;)Lsaien/magrathea/core/TelemetryEvent$SessionFinished;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/TelemetryEvent$SessionFinished;Lsaien/magrathea/core/AgentSessionId;ILsaien/magrathea/core/TelemetryOutcome;Lsaien/magrathea/core/AgentFailureCode;Lsaien/magrathea/core/TokenUsage;ILjava/lang/Object;)Lsaien/magrathea/core/TelemetryEvent$SessionFinished;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getFailureCode ()Lsaien/magrathea/core/AgentFailureCode;
-	public final fun getOutcome ()Lsaien/magrathea/core/TelemetryOutcome;
-	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun getTurn ()I
-	public final fun getUsage ()Lsaien/magrathea/core/TokenUsage;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class saien/magrathea/core/TelemetryEvent$SessionStarted : saien/magrathea/core/TelemetryEvent {
-	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Z)V
-	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun component2 ()Z
-	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Z)Lsaien/magrathea/core/TelemetryEvent$SessionStarted;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/TelemetryEvent$SessionStarted;Lsaien/magrathea/core/AgentSessionId;ZILjava/lang/Object;)Lsaien/magrathea/core/TelemetryEvent$SessionStarted;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getResumed ()Z
-	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class saien/magrathea/core/TelemetryEvent$StoreOperationFinished : saien/magrathea/core/TelemetryEvent {
-	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/TelemetryStoreOperation;JLsaien/magrathea/core/TelemetryOutcome;)V
-	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun component2 ()Lsaien/magrathea/core/TelemetryStoreOperation;
-	public final fun component3 ()J
-	public final fun component4 ()Lsaien/magrathea/core/TelemetryOutcome;
-	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/TelemetryStoreOperation;JLsaien/magrathea/core/TelemetryOutcome;)Lsaien/magrathea/core/TelemetryEvent$StoreOperationFinished;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/TelemetryEvent$StoreOperationFinished;Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/TelemetryStoreOperation;JLsaien/magrathea/core/TelemetryOutcome;ILjava/lang/Object;)Lsaien/magrathea/core/TelemetryEvent$StoreOperationFinished;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getDurationMillis ()J
-	public final fun getOperation ()Lsaien/magrathea/core/TelemetryStoreOperation;
-	public final fun getOutcome ()Lsaien/magrathea/core/TelemetryOutcome;
-	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class saien/magrathea/core/TelemetryEvent$ToolExecutionFinished : saien/magrathea/core/TelemetryEvent {
-	public fun <init> (Lsaien/magrathea/core/AgentSessionId;IJLsaien/magrathea/core/TelemetryOutcome;Z)V
-	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun component2 ()I
-	public final fun component3 ()J
-	public final fun component4 ()Lsaien/magrathea/core/TelemetryOutcome;
-	public final fun component5 ()Z
-	public final fun copy (Lsaien/magrathea/core/AgentSessionId;IJLsaien/magrathea/core/TelemetryOutcome;Z)Lsaien/magrathea/core/TelemetryEvent$ToolExecutionFinished;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/TelemetryEvent$ToolExecutionFinished;Lsaien/magrathea/core/AgentSessionId;IJLsaien/magrathea/core/TelemetryOutcome;ZILjava/lang/Object;)Lsaien/magrathea/core/TelemetryEvent$ToolExecutionFinished;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getDurationMillis ()J
-	public final fun getOutcome ()Lsaien/magrathea/core/TelemetryOutcome;
-	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun getTurn ()I
-	public fun hashCode ()I
-	public final fun isError ()Z
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class saien/magrathea/core/TelemetryEvent$TurnStarted : saien/magrathea/core/TelemetryEvent {
-	public fun <init> (Lsaien/magrathea/core/AgentSessionId;I)V
-	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun component2 ()I
-	public final fun copy (Lsaien/magrathea/core/AgentSessionId;I)Lsaien/magrathea/core/TelemetryEvent$TurnStarted;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/TelemetryEvent$TurnStarted;Lsaien/magrathea/core/AgentSessionId;IILjava/lang/Object;)Lsaien/magrathea/core/TelemetryEvent$TurnStarted;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
-	public final fun getTurn ()I
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class saien/magrathea/core/TelemetryOutcome : java/lang/Enum {
-	public static final field CANCELLED Lsaien/magrathea/core/TelemetryOutcome;
-	public static final field FAILURE Lsaien/magrathea/core/TelemetryOutcome;
-	public static final field INTERRUPTED Lsaien/magrathea/core/TelemetryOutcome;
-	public static final field SUCCESS Lsaien/magrathea/core/TelemetryOutcome;
-	public static fun getEntries ()Lkotlin/enums/EnumEntries;
-	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/core/TelemetryOutcome;
-	public static fun values ()[Lsaien/magrathea/core/TelemetryOutcome;
-}
-
-public final class saien/magrathea/core/TelemetryStoreOperation : java/lang/Enum {
-	public static final field COMMIT_STATE Lsaien/magrathea/core/TelemetryStoreOperation;
-	public static final field LOAD_STATE Lsaien/magrathea/core/TelemetryStoreOperation;
-	public static fun getEntries ()Lkotlin/enums/EnumEntries;
-	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/core/TelemetryStoreOperation;
-	public static fun values ()[Lsaien/magrathea/core/TelemetryStoreOperation;
 }
 
 public final class saien/magrathea/core/TextPart : saien/magrathea/core/MessagePart {
@@ -3105,6 +3019,122 @@ public final synthetic class saien/magrathea/core/ToolRuntimeContext$$serializer
 
 public final class saien/magrathea/core/ToolRuntimeContext$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class saien/magrathea/core/TraceContext {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/core/TraceContext;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/TraceContext;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/core/TraceContext;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSpanId ()Ljava/lang/String;
+	public final fun getTraceId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/core/TraceEvent {
+	public fun <init> (Ljava/lang/String;JLjava/util/Map;)V
+	public synthetic fun <init> (Ljava/lang/String;JLjava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun component3 ()Ljava/util/Map;
+	public final fun copy (Ljava/lang/String;JLjava/util/Map;)Lsaien/magrathea/core/TraceEvent;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/TraceEvent;Ljava/lang/String;JLjava/util/Map;ILjava/lang/Object;)Lsaien/magrathea/core/TraceEvent;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttributes ()Ljava/util/Map;
+	public final fun getName ()Ljava/lang/String;
+	public final fun getOffsetMillis ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/core/TraceSpanData {
+	public fun <init> (Ljava/lang/String;Lsaien/magrathea/core/TraceContext;Ljava/lang/String;JJLsaien/magrathea/core/TraceStatus;Ljava/util/Map;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;Lsaien/magrathea/core/TraceContext;Ljava/lang/String;JJLsaien/magrathea/core/TraceStatus;Ljava/util/Map;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Lsaien/magrathea/core/TraceContext;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()J
+	public final fun component5 ()J
+	public final fun component6 ()Lsaien/magrathea/core/TraceStatus;
+	public final fun component7 ()Ljava/util/Map;
+	public final fun component8 ()Ljava/util/List;
+	public final fun copy (Ljava/lang/String;Lsaien/magrathea/core/TraceContext;Ljava/lang/String;JJLsaien/magrathea/core/TraceStatus;Ljava/util/Map;Ljava/util/List;)Lsaien/magrathea/core/TraceSpanData;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/TraceSpanData;Ljava/lang/String;Lsaien/magrathea/core/TraceContext;Ljava/lang/String;JJLsaien/magrathea/core/TraceStatus;Ljava/util/Map;Ljava/util/List;ILjava/lang/Object;)Lsaien/magrathea/core/TraceSpanData;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttributes ()Ljava/util/Map;
+	public final fun getContext ()Lsaien/magrathea/core/TraceContext;
+	public final fun getDurationMillis ()J
+	public final fun getEvents ()Ljava/util/List;
+	public final fun getName ()Ljava/lang/String;
+	public final fun getParentSpanId ()Ljava/lang/String;
+	public final fun getStartedAtEpochMillis ()J
+	public final fun getStatus ()Lsaien/magrathea/core/TraceStatus;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/core/TraceStatus : java/lang/Enum {
+	public static final field ERROR Lsaien/magrathea/core/TraceStatus;
+	public static final field OK Lsaien/magrathea/core/TraceStatus;
+	public static final field UNSET Lsaien/magrathea/core/TraceStatus;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/core/TraceStatus;
+	public static fun values ()[Lsaien/magrathea/core/TraceStatus;
+}
+
+public abstract interface class saien/magrathea/core/TraceValue {
+}
+
+public final class saien/magrathea/core/TraceValue$BooleanValue : saien/magrathea/core/TraceValue {
+	public fun <init> (Z)V
+	public final fun component1 ()Z
+	public final fun copy (Z)Lsaien/magrathea/core/TraceValue$BooleanValue;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/TraceValue$BooleanValue;ZILjava/lang/Object;)Lsaien/magrathea/core/TraceValue$BooleanValue;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/core/TraceValue$DoubleValue : saien/magrathea/core/TraceValue {
+	public fun <init> (D)V
+	public final fun component1 ()D
+	public final fun copy (D)Lsaien/magrathea/core/TraceValue$DoubleValue;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/TraceValue$DoubleValue;DILjava/lang/Object;)Lsaien/magrathea/core/TraceValue$DoubleValue;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()D
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/core/TraceValue$LongValue : saien/magrathea/core/TraceValue {
+	public fun <init> (J)V
+	public final fun component1 ()J
+	public final fun copy (J)Lsaien/magrathea/core/TraceValue$LongValue;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/TraceValue$LongValue;JILjava/lang/Object;)Lsaien/magrathea/core/TraceValue$LongValue;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/core/TraceValue$StringValue : saien/magrathea/core/TraceValue {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lsaien/magrathea/core/TraceValue$StringValue;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/TraceValue$StringValue;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/core/TraceValue$StringValue;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/core/TracingKt {
+	public static final fun currentMagratheaTraceContext (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static final fun withMagratheaTraceContext (Lsaien/magrathea/core/TraceContext;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public abstract class saien/magrathea/core/TypedTool : saien/magrathea/core/ToolExecutor {
