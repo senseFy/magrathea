@@ -405,6 +405,11 @@ data class AgentProviderInvocationCursor(
     }
 }
 
+enum class ProviderRequestPurpose {
+    MODEL,
+    CONTEXT_SUMMARY,
+}
+
 /** Durable identity for one claimed Provider invocation. */
 @Serializable
 data class AgentPendingProviderInvocation(

@@ -38,14 +38,12 @@ import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.AgentStatus
 import saien.magrathea.core.AttachmentPart
-import saien.magrathea.core.MagratheaTelemetry
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.RetryPolicy
 import saien.magrathea.core.RuntimeConfig
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
-import saien.magrathea.core.TelemetryEvent
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolDefinition
 import saien.magrathea.core.ToolExecutionRequest
@@ -318,13 +316,13 @@ class RuntimeStateMachineContractTest {
         val provider = RetryBeforeEachTurnProvider()
         val retryPolicy = OrdinalRecordingRetryPolicy()
         val tool = CountingTool()
-        val telemetryEvents = mutableListOf<TelemetryEvent>()
+        val traceSink = RecordingTraceSink()
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(listOf(tool)),
             persistence = InMemoryAgentPersistence(),
             retryPolicy = retryPolicy,
-            telemetry = MagratheaTelemetry(telemetryEvents::add),
+            tracer = traceSink.tracer(),
         )
 
         val events = runner.run(
@@ -345,13 +343,9 @@ class RuntimeStateMachineContractTest {
         assertEquals(2, events.filterIsInstance<AgentEvent.Completed>().single().state.retryCount)
         assertEquals(
             listOf(0, 1, 0, 1),
-            telemetryEvents.filterIsInstance<TelemetryEvent.ProviderRequestStarted>()
-                .map { it.attempt },
-        )
-        assertEquals(
-            listOf(0, 1, 0, 1),
-            telemetryEvents.filterIsInstance<TelemetryEvent.ProviderRequestFinished>()
-                .map { it.attempt },
+            traceSink.spans
+                .filter { it.name == RuntimeTraceNames.PROVIDER_REQUEST }
+                .map { it.longAttribute("magrathea.provider.attempt")?.toInt() },
         )
     }
 

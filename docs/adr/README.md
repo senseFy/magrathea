@@ -21,6 +21,8 @@ dependency direction. Platform limitations and external validation gaps are trac
 | [012](ADR-012-project-positioning-and-layers.md) | Project positioning and layer model |
 | [013](ADR-013-mcp-tool-adapter.md) | Model Context Protocol Tool adapter boundary |
 | [014](ADR-014-token-aware-context-management.md) | Token-aware semantic context management |
+| [015](ADR-015-runtime-tracing-contract.md) | Runtime tracing, context propagation, semantic conventions, and telemetry replacement |
+| [016](ADR-016-debug-recording-contract.md) | Typed, host-owned debug recording outside the agent event stream |
 
 Changes to an accepted decision require an explicit update to the affected record, public docs,
 and executable contract tests. A new record is preferred when a decision introduces a distinct

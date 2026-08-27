@@ -11,7 +11,7 @@ The normative decision is [ADR-012](adr/ADR-012-project-positioning-and-layers.m
 | Layer | Modules | Responsibility |
 |---|---|---|
 | Kernel | `magrathea-core`, `magrathea-provider-api` | Agent models, stores, credentials, Provider events, transports, and serialization |
-| Runtime | `magrathea-runtime` | Turns, Tools, retry, cancellation, checkpoints, resume, context management, limits, and telemetry |
+| Runtime | `magrathea-runtime` | Turns, Tools, retry, cancellation, checkpoints, resume, context management, limits, and tracing |
 | Capabilities | Provider adapters, `magrathea-mcp`, `magrathea-policy` | Reference protocols, MCP Tools, and reusable approval policy |
 | Platform | `magrathea-storage-room`, `magrathea-storage-web`, `magrathea-credentials` | Persistence and protected mobile credentials |
 | Product | `magrathea-chatbot`, `magrathea-web-client` | UI-neutral chatbot lifecycle and browser composition |

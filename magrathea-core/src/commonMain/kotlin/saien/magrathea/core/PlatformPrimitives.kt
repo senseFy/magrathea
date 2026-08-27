@@ -3,6 +3,7 @@ package saien.magrathea.core
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlin.time.Clock
+import kotlin.time.TimeSource
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
@@ -14,6 +15,10 @@ fun interface EpochClock {
     fun nowEpochMs(): Long
 }
 
+fun interface MonotonicClock {
+    fun nowMillis(): Long
+}
+
 @OptIn(ExperimentalUuidApi::class)
 object SystemIdGenerator : IdGenerator {
     override fun nextId(): String = Uuid.random().toString()
@@ -21,6 +26,12 @@ object SystemIdGenerator : IdGenerator {
 
 object SystemEpochClock : EpochClock {
     override fun nowEpochMs(): Long = Clock.System.now().toEpochMilliseconds()
+}
+
+object SystemMonotonicClock : MonotonicClock {
+    private val origin = TimeSource.Monotonic.markNow()
+
+    override fun nowMillis(): Long = origin.elapsedNow().inWholeMilliseconds
 }
 
 class AgentModelFactory(

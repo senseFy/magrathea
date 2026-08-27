@@ -5,8 +5,8 @@
 
 ## Decision
 
-- Agent requests, sessions, checkpoints, Provider options, telemetry, and diagnostics may contain a
-  `CredentialRef`, but never a credential value.
+- Agent requests, sessions, checkpoints, and Provider options may contain a `CredentialRef`, but
+  never a credential value. Traces and diagnostics contain neither.
 - `CredentialProvider` resolves the reference immediately before a model call.
 - Runtime passes the resolved credential transiently to the selected Provider adapter; reference
   adapters do not own a credential resolver or store.

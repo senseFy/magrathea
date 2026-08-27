@@ -63,7 +63,7 @@ Every visible reasoning block has an independent canonical start/delta/end lifec
 reasoning text; adapters preserve them as distinct blocks rather than guessing that one excludes
 the other. Empty or omitted visible reasoning is valid and never replaced with fabricated progress.
 Chatbot projections expose visible text, classification, redaction state, and lifecycle only. They
-never expose opaque continuation values. Telemetry, errors, and diagnostics accept neither form.
+never expose opaque continuation values. Traces, errors, and diagnostics accept neither form.
 
 Opaque state is retained only inside authoritative Provider history and is replayed unmodified only
 to the same Provider and model. The sequence is never reordered, flattened into text, parsed, or

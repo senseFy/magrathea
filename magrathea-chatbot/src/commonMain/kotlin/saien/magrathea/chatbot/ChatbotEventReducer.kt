@@ -12,7 +12,6 @@ internal class ChatbotEventReducer {
         )
         is AgentEvent.TurnStarted,
         is AgentEvent.ContextTransformed,
-        is AgentEvent.Debug,
         is AgentEvent.RetryScheduled -> state
         is AgentEvent.CheckpointSaved -> {
             val messages = event.checkpoint.state.messages.map { it.toChatbotMessageSnapshot() }

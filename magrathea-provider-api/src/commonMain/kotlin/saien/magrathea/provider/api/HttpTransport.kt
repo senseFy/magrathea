@@ -286,7 +286,7 @@ fun HttpResponseSpec.requireSuccessful(
  * Conservative cross-Provider classification for context-window failures.
  *
  * Error bodies are used only for classification and are never copied into public exceptions,
- * diagnostics, or telemetry because they may contain request fragments.
+ * diagnostics, or traces because they may contain request fragments.
  */
 fun isProviderContextLimitError(codeOrMessage: String?): Boolean {
     val value = codeOrMessage?.lowercase()?.takeIf(String::isNotBlank) ?: return false

@@ -49,6 +49,7 @@ import saien.magrathea.provider.api.OpenAiWireProtocol
 import saien.magrathea.provider.api.ProviderAdapter
 import saien.magrathea.provider.api.ProviderChunk
 import saien.magrathea.provider.api.ProviderEvent
+import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.toProviderOptions
 
 class DefaultAgentRunnerTest {
@@ -60,6 +61,16 @@ class DefaultAgentRunnerTest {
                 .filterIsInstance<TextPart>()
                 .joinToString("") { it.text }
             emit(providerChunk(text = text, completed = true))
+        }
+    }
+
+    class ProtocolFailingProvider : ProviderAdapter {
+        override val key: String = "protocol-fail"
+
+        override suspend fun generate(
+            request: saien.magrathea.provider.api.ProviderRequest,
+        ): Flow<ProviderChunk> = flow {
+            throw ProviderProtocolException("PRIVATE-PROVIDER-BODY")
         }
     }
 
@@ -430,24 +441,94 @@ class DefaultAgentRunnerTest {
     }
 
     @Test
-    fun debugEventsShouldStayWithinContractLabels() = runTest {
+    fun debugRecorderShouldStayWithinContractEvents() = runTest {
+        val recorder = RecordingDebugRecorder()
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(FakeEchoProvider())),
             toolRegistry = InMemoryToolRegistry(),
             persistence = InMemoryAgentPersistence(),
+            debugRecorder = recorder,
         )
 
-        val labels = runner.run(
+        runner.run(
             AgentRequest(
                 messages = listOf(AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("hello")))),
                 model = ModelDescriptor(provider = "fake", model = "fake-model"),
             )
-        ).toList().filterIsInstance<AgentEvent.Debug>().map { it.label }.toSet()
+        ).toList()
 
         assertEquals(
-            setOf("provider-request-messages", "provider-request-config", "provider-selected", "provider-chunk", "merged-assistant", "state-after-chunk"),
-            labels,
+            setOf(
+                "provider.request.messages",
+                "provider.request.config",
+                "provider.selected",
+                "provider.chunk",
+                "provider.message.merged",
+                "agent.state.after_chunk",
+            ),
+            recorder.records.map { it.event }.toSet(),
         )
+    }
+
+    @Test
+    fun debugRecorderClassifiesProviderFailureWithoutExceptionMessage() = runTest {
+        val recorder = RecordingDebugRecorder()
+        val runner = DefaultAgentRunner(
+            providerRegistry = InMemoryProviderRegistry(listOf(ProtocolFailingProvider())),
+            toolRegistry = InMemoryToolRegistry(),
+            persistence = InMemoryAgentPersistence(),
+            debugRecorder = recorder,
+        )
+
+        runner.run(
+            AgentRequest(
+                messages = listOf(
+                    AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("hello"))),
+                ),
+                model = ModelDescriptor(provider = "protocol-fail", model = "fake-model"),
+            ),
+        ).toList()
+
+        val failure = recorder.records.single { it.event == "provider.failed" }
+        assertEquals("protocol-fail", failure.attributes["provider"]?.let { value ->
+            (value as saien.magrathea.core.MagratheaDebugValue.StringValue).value
+        })
+        assertEquals("protocol", failure.stringAttribute("failure_type"))
+        assertTrue(failure.stringAttribute("run_id")?.isNotBlank() == true)
+        assertEquals(0L, failure.longAttribute("turn"))
+        assertTrue(failure.stringAttribute("provider_request_id")?.isNotBlank() == true)
+        assertEquals(0L, failure.longAttribute("provider_attempt"))
+        assertEquals("model", failure.stringAttribute("provider_purpose"))
+        assertNull(failure.traceContext)
+        assertFalse(recorder.records.toString().contains("PRIVATE-PROVIDER-BODY"))
+    }
+
+    @Test
+    fun throwingDebugRecorderCannotChangeAgentResult() = runTest {
+        val recorder = object : saien.magrathea.core.MagratheaDebugRecorder {
+            override val enabled: Boolean = true
+
+            override fun record(record: saien.magrathea.core.MagratheaDebugRecord) {
+                error("debug destination unavailable")
+            }
+        }
+        val runner = DefaultAgentRunner(
+            providerRegistry = InMemoryProviderRegistry(listOf(FakeEchoProvider())),
+            toolRegistry = InMemoryToolRegistry(),
+            persistence = InMemoryAgentPersistence(),
+            debugRecorder = recorder,
+        )
+
+        val events = runner.run(
+            AgentRequest(
+                messages = listOf(
+                    AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("hello"))),
+                ),
+                model = ModelDescriptor(provider = "fake", model = "fake-model"),
+            ),
+        ).toList()
+
+        assertTrue(events.last() is AgentEvent.Completed)
     }
 
     @Test
@@ -634,14 +715,16 @@ class DefaultAgentRunnerTest {
     }
 
     @Test
-    fun debugEventsShouldSummarizeAttachmentsWithoutDataUrls() = runTest {
+    fun debugRecorderShouldSummarizeAttachmentsWithoutDataUrls() = runTest {
+        val recorder = RecordingDebugRecorder()
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(FakeEchoProvider())),
             toolRegistry = InMemoryToolRegistry(),
             persistence = InMemoryAgentPersistence(),
+            debugRecorder = recorder,
         )
 
-        val events = runner.run(
+        runner.run(
             AgentRequest(
                 messages = listOf(
                     AgentMessage(
@@ -653,9 +736,9 @@ class DefaultAgentRunnerTest {
             )
         ).toList()
 
-        val debugPayload = events.filterIsInstance<AgentEvent.Debug>().joinToString("\n") { it.payload }
+        val debugPayload = recorder.records.joinToString("\n")
 
-        assertTrue(debugPayload.contains("attachments=1"))
+        assertTrue(debugPayload.contains("attachment_count=LongValue(value=1)"))
         assertFalse(debugPayload.contains("IMAGE_DATA"))
     }
 }

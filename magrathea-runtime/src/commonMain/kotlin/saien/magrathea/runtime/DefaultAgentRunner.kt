@@ -71,11 +71,15 @@ import saien.magrathea.core.CredentialProvider
 import saien.magrathea.core.FollowUpMessageProvider
 import saien.magrathea.core.IdGenerator
 import saien.magrathea.core.InlineToolImageSource
+import saien.magrathea.core.MagratheaDebugLevel
+import saien.magrathea.core.MagratheaDebugRecorder
+import saien.magrathea.core.MagratheaDebugValue
+import saien.magrathea.core.MagratheaSdk
+import saien.magrathea.core.MagratheaTracer
 import saien.magrathea.core.MediaReference
-import saien.magrathea.core.MagratheaTelemetry
 import saien.magrathea.core.MessageRole
-import saien.magrathea.core.MonotonicClock
-import saien.magrathea.core.NoopMagratheaTelemetry
+import saien.magrathea.core.NoopMagratheaDebugRecorder
+import saien.magrathea.core.NoopMagratheaTracer
 import saien.magrathea.core.NoopRetryPolicy
 import saien.magrathea.core.ProviderTimeoutConfig
 import saien.magrathea.core.ProviderInterruption
@@ -87,14 +91,11 @@ import saien.magrathea.core.RetryPolicy
 import saien.magrathea.core.RuntimeConfig
 import saien.magrathea.core.SteeringMessageProvider
 import saien.magrathea.core.StopReason
-import saien.magrathea.core.SystemIdGenerator
 import saien.magrathea.core.SystemEpochClock
-import saien.magrathea.core.SystemMonotonicClock
+import saien.magrathea.core.SystemIdGenerator
 import saien.magrathea.core.TextPart
-import saien.magrathea.core.TelemetryEvent
-import saien.magrathea.core.TelemetryOutcome
-import saien.magrathea.core.TelemetryStoreOperation
 import saien.magrathea.core.TokenUsage
+import saien.magrathea.core.TraceStatus
 import saien.magrathea.core.ToolApprovalDecision
 import saien.magrathea.core.ToolApprovalGateway
 import saien.magrathea.core.ToolCallPart
@@ -116,6 +117,7 @@ import saien.magrathea.core.ToolRuntimeContext
 import saien.magrathea.core.dataUrlPayload
 import saien.magrathea.core.plus
 import saien.magrathea.core.toMessagePart
+import saien.magrathea.core.withMagratheaTraceContext
 import saien.magrathea.provider.api.AnthropicTransportConfig
 import saien.magrathea.provider.api.DefaultReplayPolicy
 import saien.magrathea.provider.api.GeminiTransportConfig
@@ -153,7 +155,7 @@ import saien.magrathea.provider.api.validateSemantics
 
 /**
  * Default [AgentRunner] implementation for Provider calls, Tool execution, checkpoints, retry,
- * cancellation, resume, limits, and telemetry.
+ * cancellation, resume, limits, and tracing.
  *
  * The supplied persistence and registries define the authoritative state and capability boundaries.
  * This class does not own or close them.
@@ -173,8 +175,8 @@ class DefaultAgentRunner(
     private val steeringMessageProvider: SteeringMessageProvider = SteeringMessageProvider { emptyList() },
     private val retryPolicy: RetryPolicy = NoopRetryPolicy,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
-    private val telemetry: MagratheaTelemetry = NoopMagratheaTelemetry,
-    private val monotonicClock: MonotonicClock = SystemMonotonicClock,
+    tracer: MagratheaTracer = NoopMagratheaTracer,
+    debugRecorder: MagratheaDebugRecorder = NoopMagratheaDebugRecorder,
     private val idGenerator: IdGenerator = SystemIdGenerator,
 ) : AgentRunner {
     private val activeRuns = LinkedHashMap<String, ActiveRun>()
@@ -186,10 +188,23 @@ class DefaultAgentRunner(
     private val effectiveContextManager = contextManager ?: TokenAwareContextManager(
         ContextSummarizer(::summarizeContext),
     )
-    private val debugLabels = setOf("provider-request-messages", "provider-request-config", "provider-selected", "provider-chunk", "merged-assistant", "state-after-chunk")
+    private val tracing = RuntimeTracing(tracer)
+    private val debugging = RuntimeDebugging(debugRecorder)
 
-    override fun run(request: AgentRequest): Flow<AgentEvent> = flow {
+    override fun run(request: AgentRequest): Flow<AgentEvent> = traceExecutionFlow(
+        operation = "run",
+        sessionId = request.sessionId,
+        resumed = false,
+    ) { traceState ->
+        runUntraced(request, traceState)
+    }
+
+    private fun runUntraced(
+        request: AgentRequest,
+        traceState: ExecutionTraceState,
+    ): Flow<AgentEvent> = flow {
         val runId = AgentRunId.create(idGenerator)
+        traceState.started(runId, turn = 0)
         val stopController = RunStopController()
         val registrationToken = register(
             sessionId = request.sessionId,
@@ -200,7 +215,7 @@ class DefaultAgentRunner(
         var delegatedToRun = false
         try {
             val previousState = try {
-                measureStoreOperation(request.sessionId, TelemetryStoreOperation.LOAD_STATE) {
+                measureStoreOperation(request.sessionId, "load") {
                     persistence.load(request.sessionId)
                 }?.snapshot?.state
             } catch (cancelled: CancellationException) {
@@ -232,12 +247,13 @@ class DefaultAgentRunner(
                     request = request,
                     runId = runId,
                     initialCheckpoint = checkpoint,
-                    resumed = false,
                     stopController = stopController,
+                    traceState = traceState,
                 ),
             )
         } catch (cancelled: CancellationException) {
             if (!delegatedToRun) {
+                traceState.stopped(stopController.stopIntent)
                 persistPreflightRunStop(request, runId, stopController.stopIntent)
             }
             throw cancelled
@@ -248,7 +264,18 @@ class DefaultAgentRunner(
         }
     }
 
-    override suspend fun resume(sessionId: AgentSessionId): Flow<AgentEvent> = flow {
+    override suspend fun resume(sessionId: AgentSessionId): Flow<AgentEvent> = traceExecutionFlow(
+        operation = "resume",
+        sessionId = sessionId,
+        resumed = true,
+    ) { traceState ->
+        resumeUntraced(sessionId, traceState)
+    }
+
+    private fun resumeUntraced(
+        sessionId: AgentSessionId,
+        traceState: ExecutionTraceState,
+    ): Flow<AgentEvent> = flow {
         val stopController = RunStopController()
         val registrationToken = register(
             sessionId = sessionId,
@@ -259,7 +286,7 @@ class DefaultAgentRunner(
         var delegatedToRun = false
         try {
             val record = try {
-                measureStoreOperation(sessionId, TelemetryStoreOperation.LOAD_STATE) {
+                measureStoreOperation(sessionId, "load") {
                     persistence.load(sessionId)
                 }
             } catch (cancelled: CancellationException) {
@@ -272,13 +299,13 @@ class DefaultAgentRunner(
                 return@flow
             }
             val snapshot = record.snapshot
+            traceState.started(snapshot.runId, snapshot.state.turn)
             attachRunId(sessionId, registrationToken, snapshot.runId)
             validateResumeState(snapshot.request, snapshot.state)?.let {
                 emitAll(resumeFailureFlow(sessionId, it))
                 return@flow
             }
             terminalResumeFlow(sessionId, snapshot.state)?.let {
-                recordTerminalResume(sessionId, snapshot.state)
                 emitAll(it)
                 return@flow
             }
@@ -354,13 +381,14 @@ class DefaultAgentRunner(
                             checkpoint.toolExecutions
                         },
                     ),
-                    resumed = true,
                     recoveryAccountingState = snapshot.state.takeIf { reattachingProviderInvocation },
                     stopController = stopController,
+                    traceState = traceState,
                 ),
             )
         } catch (cancelled: CancellationException) {
             if (!delegatedToRun) {
+                traceState.stopped(stopController.stopIntent)
                 persistPreflightExistingStop(sessionId, stopController.stopIntent)
             }
             throw cancelled
@@ -370,6 +398,105 @@ class DefaultAgentRunner(
             }
         }
     }
+
+    private fun traceExecutionFlow(
+        operation: String,
+        sessionId: AgentSessionId,
+        resumed: Boolean,
+        upstream: (ExecutionTraceState) -> Flow<AgentEvent>,
+    ): Flow<AgentEvent> = channelFlow {
+        val traceState = ExecutionTraceState()
+        val span = tracing.startSpan(
+            RuntimeTraceNames.AGENT_EXECUTION,
+            traceAttributes(
+                "magrathea.trace.schema_version" to 1,
+                "magrathea.sdk.version" to MagratheaSdk.version,
+                "magrathea.agent.session_id" to sessionId.value,
+                "magrathea.agent.operation" to operation,
+                "magrathea.agent.resumed" to resumed,
+            ),
+        )
+        var terminal: AgentEvent? = null
+        var thrown: Throwable? = null
+        val collectUpstream: suspend () -> Unit = {
+            upstream(traceState).collect { event ->
+                when (event) {
+                    is AgentEvent.Started -> traceState.started(event.runId, turn = null)
+                    is AgentEvent.TurnStarted -> traceState.turnStarted(event.turn)
+                    is AgentEvent.CheckpointSaved -> {
+                        traceState.started(event.checkpoint.runId, event.checkpoint.turn)
+                    }
+                    is AgentEvent.Completed -> {
+                        traceState.turnStarted(event.state.turn)
+                        terminal = event
+                    }
+                    is AgentEvent.Failed,
+                    is AgentEvent.Cancelled,
+                    -> terminal = event
+                    is AgentEvent.Interrupted -> {
+                        traceState.started(event.runId, event.state.turn)
+                        terminal = event
+                    }
+                    is AgentEvent.RecoveryBlocked -> {
+                        traceState.started(event.runId, turn = null)
+                        terminal = event
+                    }
+                    else -> Unit
+                }
+                send(event)
+            }
+        }
+        try {
+            span.context?.let { context ->
+                withMagratheaTraceContext(context) { collectUpstream() }
+            } ?: collectUpstream()
+        } catch (failure: Throwable) {
+            thrown = failure
+            throw failure
+        } finally {
+            val finalAttributes = arrayOf<Pair<String, Any?>>(
+                "magrathea.agent.run_id" to traceState.runId?.value,
+                "magrathea.agent.turn" to traceState.turn,
+                "magrathea.usage.input_tokens" to traceState.usage?.inputTokens,
+                "magrathea.usage.output_tokens" to traceState.usage?.outputTokens,
+                "magrathea.usage.reasoning_tokens" to traceState.usage?.reasoningTokens,
+            )
+            when (val event = terminal) {
+                is AgentEvent.Completed,
+                is AgentEvent.RecoveryBlocked,
+                -> span.endSuccess(*finalAttributes)
+                is AgentEvent.Failed -> span.endFailure(
+                    failureCode = event.code,
+                    phase = "runtime",
+                    *finalAttributes,
+                )
+                is AgentEvent.Cancelled -> span.endCancelled(*finalAttributes)
+                is AgentEvent.Interrupted -> span.endInterrupted(
+                    failureCode = event.interruption.provider?.code,
+                    phase = if (event.interruption.provider == null) "runtime" else "provider",
+                    *finalAttributes,
+                )
+                else -> when (val failure = thrown) {
+                    is CancellationException -> when (traceState.stopIntent) {
+                        StopIntent.INTERRUPT -> span.endInterrupted(
+                            failureCode = null,
+                            phase = "runtime",
+                            *finalAttributes,
+                        )
+                        StopIntent.ACTIVE,
+                        StopIntent.CANCEL,
+                        -> span.endCancelled(*finalAttributes)
+                    }
+                    null -> span.endSuccess(*finalAttributes)
+                    else -> span.endFailure(
+                        failureCode = failure.toAgentFailureCode(),
+                        phase = "runtime",
+                        *finalAttributes,
+                    )
+                }
+            }
+        }
+    }.buffer(Channel.RENDEZVOUS)
 
     private fun terminalResumeFlow(
         sessionId: AgentSessionId,
@@ -383,50 +510,17 @@ class DefaultAgentRunner(
         }
     }
 
-    private fun recordTerminalResume(sessionId: AgentSessionId, state: AgentStateSnapshot) {
-        val outcome = when (state.status) {
-            AgentStatus.COMPLETED -> TelemetryOutcome.SUCCESS
-            AgentStatus.CANCELLED -> TelemetryOutcome.CANCELLED
-            else -> TelemetryOutcome.FAILURE
-        }
-        val failureCode = AgentFailureCode.INVALID_STATE.takeIf { outcome == TelemetryOutcome.FAILURE }
-        recordTelemetry(TelemetryEvent.SessionStarted(sessionId, resumed = true))
-        recordTelemetry(
-            TelemetryEvent.SessionFinished(
-                sessionId = sessionId,
-                turn = state.turn,
-                outcome = outcome,
-                failureCode = failureCode,
-                usage = state.usage,
-            ),
-        )
-    }
-
     private fun resumeFailureFlow(
         sessionId: AgentSessionId,
         failureCode: AgentFailureCode,
-        state: AgentStateSnapshot? = null,
-    ): Flow<AgentEvent> {
-        if (state != null) {
-            recordTelemetry(TelemetryEvent.SessionStarted(sessionId, resumed = true))
-        }
-        recordTelemetry(
-            TelemetryEvent.SessionFinished(
-                sessionId = sessionId,
-                turn = state?.turn ?: 0,
-                outcome = TelemetryOutcome.FAILURE,
-                failureCode = failureCode,
-                usage = state?.usage ?: TokenUsage(),
-            ),
-        )
-        return flowOf(AgentEvent.Failed(sessionId, failureCode))
-    }
+    ): Flow<AgentEvent> = flowOf(AgentEvent.Failed(sessionId, failureCode))
 
-    override suspend fun cancel(sessionId: AgentSessionId) {
+    override suspend fun cancel(sessionId: AgentSessionId) = traceControl("cancel", sessionId) { traceState ->
         val operation = acquireStopOperation(sessionId, StopIntent.CANCEL)
+        traceState.started(operation.activeRun?.runId)
         try {
             operation.activeRun?.job?.cancelAndJoin()
-            markPersistedCancelled(sessionId)
+            traceState.started(markPersistedCancelled(sessionId))
         } finally {
             withContext(NonCancellable) {
                 releaseStopOperation(sessionId, operation.gate)
@@ -434,12 +528,14 @@ class DefaultAgentRunner(
         }
     }
 
-    override suspend fun interrupt(sessionId: AgentSessionId): AgentRecoveryInfo {
+    override suspend fun interrupt(sessionId: AgentSessionId): AgentRecoveryInfo =
+        traceControl("interrupt", sessionId) { traceState ->
         val operation = acquireStopOperation(sessionId, StopIntent.INTERRUPT)
-        return try {
+        traceState.started(operation.activeRun?.runId)
+        try {
             operation.activeRun?.job?.cancelAndJoin()
             markOrphanInterrupted(sessionId)
-            inspectRecovery(sessionId)
+            inspectRecoveryUntraced(sessionId)
         } finally {
             withContext(NonCancellable) {
                 releaseStopOperation(sessionId, operation.gate)
@@ -447,7 +543,12 @@ class DefaultAgentRunner(
         }
     }
 
-    override suspend fun inspectRecovery(sessionId: AgentSessionId): AgentRecoveryInfo {
+    override suspend fun inspectRecovery(sessionId: AgentSessionId): AgentRecoveryInfo =
+        traceControl("inspect_recovery", sessionId) { _ ->
+            inspectRecoveryUntraced(sessionId)
+        }
+
+    private suspend fun inspectRecoveryUntraced(sessionId: AgentSessionId): AgentRecoveryInfo {
         val active = mutex.withLock { activeRuns[sessionId.value] }
         if (active != null) {
             return AgentRecoveryInfo(
@@ -457,13 +558,44 @@ class DefaultAgentRunner(
                 status = AgentStatus.RUNNING,
             )
         }
-        val record = measureStoreOperation(sessionId, TelemetryStoreOperation.LOAD_STATE) {
+        val record = measureStoreOperation(sessionId, "load") {
             persistence.load(sessionId)
         } ?: return AgentRecoveryInfo(
             sessionId = sessionId,
             disposition = AgentRecoveryDisposition.NOT_FOUND,
         )
         return recoveryInfo(record)
+    }
+
+    private suspend fun <T> traceControl(
+        operation: String,
+        sessionId: AgentSessionId,
+        block: suspend (ControlTraceState) -> T,
+    ): T {
+        val traceState = ControlTraceState()
+        val span = tracing.startSpan(
+            RuntimeTraceNames.AGENT_CONTROL,
+            traceAttributes(
+                "magrathea.trace.schema_version" to 1,
+                "magrathea.sdk.version" to MagratheaSdk.version,
+                "magrathea.agent.session_id" to sessionId.value,
+                "magrathea.agent.operation" to operation,
+            ),
+        )
+        return try {
+            val result = span.context?.let { context ->
+                withMagratheaTraceContext(context) { block(traceState) }
+            } ?: block(traceState)
+            val runId = traceState.runId ?: (result as? AgentRecoveryInfo)?.runId
+            span.endSuccess("magrathea.agent.run_id" to runId?.value)
+            result
+        } catch (cancelled: CancellationException) {
+            span.endCancelled()
+            throw cancelled
+        } catch (failure: Throwable) {
+            span.endFailure(failure.toAgentFailureCode(), "runtime")
+            throw failure
+        }
     }
 
     private fun recoveryInfo(record: AgentPersistenceRecord): AgentRecoveryInfo {
@@ -527,7 +659,7 @@ class DefaultAgentRunner(
     }
 
     private suspend fun markOrphanInterrupted(sessionId: AgentSessionId) {
-        val record = measureStoreOperation(sessionId, TelemetryStoreOperation.LOAD_STATE) {
+        val record = measureStoreOperation(sessionId, "load") {
             persistence.load(sessionId)
         } ?: return
         if (
@@ -557,11 +689,11 @@ class DefaultAgentRunner(
         )
     }
 
-    private suspend fun markPersistedCancelled(sessionId: AgentSessionId) {
-        val record = measureStoreOperation(sessionId, TelemetryStoreOperation.LOAD_STATE) {
+    private suspend fun markPersistedCancelled(sessionId: AgentSessionId): AgentRunId? {
+        val record = measureStoreOperation(sessionId, "load") {
             persistence.load(sessionId)
-        } ?: return
-        if (record.snapshot.statusIsTerminal()) return
+        } ?: return null
+        if (record.snapshot.statusIsTerminal()) return record.snapshot.runId
         val cancelledState = record.snapshot.state.copy(
             status = AgentStatus.CANCELLED,
             stopReason = StopReason.CANCELLED,
@@ -572,6 +704,7 @@ class DefaultAgentRunner(
             state = cancelledState,
             recoveryCheckpoint = record.checkpoint,
         )
+        return record.snapshot.runId
     }
 
     private suspend fun commitTerminalStateWithAbandon(
@@ -640,7 +773,7 @@ class DefaultAgentRunner(
         stopIntent: StopIntent,
     ) = withContext(NonCancellable) {
         val previousState = runCatching {
-            measureStoreOperation(request.sessionId, TelemetryStoreOperation.LOAD_STATE) {
+            measureStoreOperation(request.sessionId, "load") {
                 persistence.load(request.sessionId)
             }?.snapshot?.state
         }.getOrNull()
@@ -690,9 +823,9 @@ class DefaultAgentRunner(
         request: AgentRequest,
         runId: AgentRunId,
         initialCheckpoint: AgentCheckpoint,
-        resumed: Boolean,
         recoveryAccountingState: AgentStateSnapshot? = null,
         stopController: RunStopController,
+        traceState: ExecutionTraceState,
     ): Flow<AgentEvent> = channelFlow {
         require(initialCheckpoint.sessionId == request.sessionId)
         require(initialCheckpoint.runId == runId)
@@ -705,7 +838,6 @@ class DefaultAgentRunner(
             val completedWithinDeadline = withContext(dispatcher) {
                 withTimeoutOrNull(request.engine.runtime.runTimeoutMillis) {
                     validateRuntimePayloads(activeRequest, runState.value)
-                    recordTelemetry(TelemetryEvent.SessionStarted(request.sessionId, resumed))
                     commitState(activeRequest, runId, runState.value, safeCheckpoint)
                     send(AgentEvent.Started(request.sessionId, runId))
                     send(AgentEvent.CheckpointSaved(safeCheckpoint))
@@ -806,8 +938,16 @@ class DefaultAgentRunner(
                     var completedNormally = false
                     while (cursor.turn < activeRequest.engine.runtime.maxTurns) {
                         val turn = cursor.turn
+                        val turnSpan = tracing.startSpan(
+                            RuntimeTraceNames.AGENT_TURN,
+                            traceAttributes(
+                                "magrathea.agent.session_id" to request.sessionId.value,
+                                "magrathea.agent.run_id" to runId.value,
+                                "magrathea.agent.turn" to turn,
+                            ),
+                        )
+                        val executeTurn: suspend () -> TurnLoopAction = turnBlock@{
                         if (cursor.phase != AgentResumePhase.TOOLS_PENDING) {
-                            recordTelemetry(TelemetryEvent.TurnStarted(request.sessionId, turn))
                             send(AgentEvent.TurnStarted(request.sessionId, turn))
                         }
 
@@ -875,7 +1015,9 @@ class DefaultAgentRunner(
                             commitState(activeRequest, runId, runState.value, safeCheckpoint)
                             send(AgentEvent.CheckpointSaved(safeCheckpoint))
                             val nextTurn = turn + 1
-                            if (nextTurn >= activeRequest.engine.runtime.maxTurns) break
+                            if (nextTurn >= activeRequest.engine.runtime.maxTurns) {
+                                return@turnBlock TurnLoopAction.BREAK
+                            }
                             runState.value = runState.value.copy(turn = nextTurn)
                             cursor = AgentResumeCursor(
                                 nextTurn,
@@ -889,7 +1031,7 @@ class DefaultAgentRunner(
                             )
                             commitState(activeRequest, runId, runState.value, safeCheckpoint)
                             send(AgentEvent.CheckpointSaved(safeCheckpoint))
-                            continue
+                            return@turnBlock TurnLoopAction.CONTINUE
                         }
 
                         if (cursor.phase == AgentResumePhase.TURN_PREPARING) {
@@ -944,7 +1086,9 @@ class DefaultAgentRunner(
                             val summaryAccounting = ContextSummaryUsageAccounting()
                             var completedSummaryRequestId: String? = null
                             val summaryInvocationLifecycle = ContextSummaryInvocationLifecycle(
+                                runId = runId,
                                 maxProviderRetries = activeRequest.engine.runtime.maxProviderRetries,
+                                turnTraceSpan = turnSpan,
                                 claim = { inputIdentity ->
                                     claimProviderInvocation(
                                         purpose = ProviderRequestPurpose.CONTEXT_SUMMARY,
@@ -964,20 +1108,46 @@ class DefaultAgentRunner(
                                 complete = { requestId -> completedSummaryRequestId = requestId },
                             )
                             var observedSummaryUsage: TokenUsage? = null
+                            val contextSpan = tracing.startSpan(
+                                RuntimeTraceNames.CONTEXT_PREPARE,
+                                traceAttributes(
+                                    "magrathea.agent.session_id" to request.sessionId.value,
+                                    "magrathea.agent.run_id" to runId.value,
+                                    "magrathea.agent.turn" to turn,
+                                    "magrathea.context.reason" to preparationReason.name.lowercase(),
+                                ),
+                            )
                             val preparation = try {
-                                withContext(summaryAccounting + summaryInvocationLifecycle) {
-                                    effectiveContextManager.prepare(
-                                        ContextPreparationRequest(
-                                            request = turnRequest.copy(messages = runState.value.messages),
-                                            state = runState.value,
-                                            turn = turn,
-                                            reason = preparationReason,
-                                        ),
-                                    )
+                                val prepare: suspend () -> saien.magrathea.core.ContextPreparationResult = {
+                                    withContext(summaryAccounting + summaryInvocationLifecycle) {
+                                        effectiveContextManager.prepare(
+                                            ContextPreparationRequest(
+                                                request = turnRequest.copy(messages = runState.value.messages),
+                                                state = runState.value,
+                                                turn = turn,
+                                                reason = preparationReason,
+                                            ),
+                                        )
+                                    }
                                 }
+                                val result = contextSpan.context?.let { context ->
+                                    withMagratheaTraceContext(context) { prepare() }
+                                } ?: prepare()
+                                contextSpan.endSuccess(
+                                    "magrathea.context.action" to result.action.name.lowercase(),
+                                    "magrathea.context.failure" to result.failure?.name?.lowercase(),
+                                    "magrathea.context.estimated_input_tokens" to result.estimatedInputTokens,
+                                    "magrathea.context.input_limit_tokens" to result.inputLimitTokens,
+                                )
+                                result
                             } catch (cancelled: CancellationException) {
+                                contextSpan.endCancelled()
                                 throw cancelled
                             } catch (failure: Throwable) {
+                                contextSpan.endFailure(
+                                    failure.toAgentFailureCode(),
+                                    "context.prepare",
+                                )
                                 if (preparationReason == ContextPreparationReason.OVERFLOW_RECOVERY) {
                                     throw AgentRuntimeFailure(AgentFailureCode.CONTEXT_LIMIT, failure)
                                 }
@@ -985,10 +1155,17 @@ class DefaultAgentRunner(
                             } finally {
                                 observedSummaryUsage = summaryAccounting.cumulativeUsageOrNull()
                                 observedSummaryUsage?.let { usage ->
+                                    traceState.observeUsage(usage)
                                     runState.value = runState.value.copy(
                                         usage = runState.value.usage + usage,
                                     )
                                 }
+                            }
+                            if (
+                                observedSummaryUsage == null &&
+                                preparation.summaryUsage.hasKnownValues()
+                            ) {
+                                traceState.observeUsage(preparation.summaryUsage)
                             }
                             runState.value = runState.value.copy(
                                 contextManagement = preparation.state,
@@ -1042,12 +1219,6 @@ class DefaultAgentRunner(
                                     projectedMessages.size,
                                 ),
                             )
-                            emitDebug(
-                                request.sessionId,
-                                "provider-request-messages",
-                                describeMessages(projectedMessages),
-                                ::send,
-                            )
                             val inputAnchorId = runState.value.messages.lastOrNull()?.id
                             val providerRequestBase = ProviderRequest(
                                 invocation = null,
@@ -1077,17 +1248,11 @@ class DefaultAgentRunner(
                                 invocation = providerInvocation.invocation,
                                 invocationIntent = providerInvocation.intent,
                             )
-                            emitDebug(
-                                request.sessionId,
-                                "provider-request-config",
-                                "streaming=${providerRequest.model.supportsStreaming}, endpoint=${if (providerRequest.endpoint == null) "default" else "custom"}, tools=${providerRequest.tools.size}",
-                                ::send,
-                            )
-                            emitDebug(request.sessionId, "provider-selected", provider.key, ::send)
                             try {
                                 val recoveryAccountingForAttempt = pendingRecoveryAccountingState
                                 turnResult = runProviderTurn(
                                     request = turnRequest,
+                                    runId = runId,
                                     provider = provider,
                                     providerRequestForInvocation = { claimed ->
                                         providerRequest.copy(
@@ -1111,6 +1276,10 @@ class DefaultAgentRunner(
                                         )
                                     },
                                     onPhysicalInvocationInvalidated = ::invalidateProviderInvocation,
+                                    turnTraceSpan = turnSpan,
+                                    traceState = traceState,
+                                    contextLimitRecoveryAvailable = overflowRetries <
+                                        activeRequest.engine.runtime.contextManagement.overflowRetryLimit,
                                 )
                                 markProviderInvocationCompleted(turnResult.invocation.requestId)
                                 break
@@ -1157,13 +1326,13 @@ class DefaultAgentRunner(
                             )
                             commitState(activeRequest, runId, runState.value, safeCheckpoint)
                             send(AgentEvent.CheckpointSaved(safeCheckpoint))
-                            continue
+                            return@turnBlock TurnLoopAction.CONTINUE
                         }
                         val followUp = appendFollowUpMessages(activeRequest, runState.value, turn, ::send)
                         runState.value = followUp.state
                         if (!turnResult.shouldContinue && !followUp.appended) {
                             completedNormally = true
-                            break
+                            return@turnBlock TurnLoopAction.BREAK
                         }
                         cursor = AgentResumeCursor(turn, AgentResumePhase.TURN_COMMITTED)
                         safeCheckpoint = AgentCheckpoint(
@@ -1175,7 +1344,9 @@ class DefaultAgentRunner(
                         commitState(activeRequest, runId, runState.value, safeCheckpoint)
                         send(AgentEvent.CheckpointSaved(safeCheckpoint))
                         val nextTurn = turn + 1
-                        if (nextTurn >= activeRequest.engine.runtime.maxTurns) break
+                        if (nextTurn >= activeRequest.engine.runtime.maxTurns) {
+                            return@turnBlock TurnLoopAction.BREAK
+                        }
                         runState.value = runState.value.copy(turn = nextTurn)
                         cursor = AgentResumeCursor(
                             nextTurn,
@@ -1189,6 +1360,24 @@ class DefaultAgentRunner(
                         )
                         commitState(activeRequest, runId, runState.value, safeCheckpoint)
                         send(AgentEvent.CheckpointSaved(safeCheckpoint))
+                        TurnLoopAction.CONTINUE
+                        }
+                        val turnAction = try {
+                            turnSpan.context?.let { context ->
+                                withMagratheaTraceContext(context) { executeTurn() }
+                            } ?: executeTurn()
+                        } catch (cancelled: CancellationException) {
+                            turnSpan.endCancelled()
+                            throw cancelled
+                        } catch (failure: Throwable) {
+                            turnSpan.endFailure(failure.toAgentFailureCode(), "runtime")
+                            throw failure
+                        }
+                        turnSpan.endSuccess()
+                        when (turnAction) {
+                            TurnLoopAction.CONTINUE -> continue
+                            TurnLoopAction.BREAK -> break
+                        }
                     }
                     val finalStopReason = if (completedNormally) {
                         runState.value.stopReason ?: StopReason.COMPLETED
@@ -1198,15 +1387,6 @@ class DefaultAgentRunner(
                     runState.value = runState.value.copy(status = AgentStatus.COMPLETED, stopReason = finalStopReason)
                     commitState(activeRequest, runId, runState.value, checkpoint = null)
                     terminalStatePersisted = true
-                    recordTelemetry(
-                        TelemetryEvent.SessionFinished(
-                            sessionId = request.sessionId,
-                            turn = runState.value.turn,
-                            outcome = TelemetryOutcome.SUCCESS,
-                            failureCode = null,
-                            usage = runState.value.usage,
-                        ),
-                    )
                     send(AgentEvent.Completed(request.sessionId, runState.value))
                     true
                 }
@@ -1237,15 +1417,6 @@ class DefaultAgentRunner(
                             // The explicit cancellation remains authoritative for the active flow.
                         }
                         trySend(AgentEvent.Cancelled(request.sessionId))
-                        recordTelemetry(
-                            TelemetryEvent.SessionFinished(
-                                sessionId = request.sessionId,
-                                turn = runState.value.turn,
-                                outcome = TelemetryOutcome.CANCELLED,
-                                failureCode = null,
-                                usage = runState.value.usage,
-                            ),
-                        )
                     }
                     StopIntent.INTERRUPT -> {
                         val interruption =
@@ -1277,18 +1448,10 @@ class DefaultAgentRunner(
                                 interruptedState,
                             ),
                         )
-                        recordTelemetry(
-                            TelemetryEvent.SessionFinished(
-                                sessionId = request.sessionId,
-                                turn = interruptedState.turn,
-                                outcome = TelemetryOutcome.INTERRUPTED,
-                                failureCode = null,
-                                usage = interruptedState.usage,
-                            ),
-                        )
                     }
                 }
             }
+            traceState.stopped(stopController.stopIntent)
             throw cancelled
         } catch (t: Throwable) {
             val interruptedAtEpochMs = SystemEpochClock.nowEpochMs()
@@ -1315,27 +1478,9 @@ class DefaultAgentRunner(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Throwable) {
-                    recordTelemetry(
-                        TelemetryEvent.SessionFinished(
-                            sessionId = request.sessionId,
-                            turn = interruptedState.turn,
-                            outcome = TelemetryOutcome.FAILURE,
-                            failureCode = AgentFailureCode.STORAGE,
-                            usage = interruptedState.usage,
-                        ),
-                    )
                     send(AgentEvent.Failed(request.sessionId, AgentFailureCode.STORAGE))
                     return@channelFlow
                 }
-                recordTelemetry(
-                    TelemetryEvent.SessionFinished(
-                        sessionId = request.sessionId,
-                        turn = interruptedState.turn,
-                        outcome = TelemetryOutcome.INTERRUPTED,
-                        failureCode = providerInterruption.code,
-                        usage = interruptedState.usage,
-                    ),
-                )
                 send(
                     AgentEvent.Interrupted(
                         request.sessionId,
@@ -1367,15 +1512,6 @@ class DefaultAgentRunner(
             } catch (_: Throwable) {
                 failureCode = AgentFailureCode.STORAGE
             }
-            recordTelemetry(
-                TelemetryEvent.SessionFinished(
-                    sessionId = request.sessionId,
-                    turn = runState.value.turn,
-                    outcome = TelemetryOutcome.FAILURE,
-                    failureCode = failureCode,
-                    usage = runState.value.usage,
-                ),
-            )
             send(AgentEvent.Failed(request.sessionId, failureCode))
         }
     }.buffer(capacity = 0)
@@ -1419,6 +1555,7 @@ class DefaultAgentRunner(
 
     private suspend fun runProviderTurn(
         request: AgentRequest,
+        runId: AgentRunId,
         provider: ProviderAdapter,
         providerRequestForInvocation: (ProviderInvocationClaim) -> ProviderRequest,
         initialInvocation: ProviderInvocationClaim,
@@ -1430,6 +1567,9 @@ class DefaultAgentRunner(
         onStateChanged: (AgentStateSnapshot) -> Unit,
         onPhysicalInvocationChanged: suspend () -> ProviderInvocationClaim,
         onPhysicalInvocationInvalidated: suspend (String) -> Unit,
+        turnTraceSpan: RuntimeTraceSpan,
+        traceState: ExecutionTraceState,
+        contextLimitRecoveryAvailable: Boolean,
     ): TurnResult {
         var state = initialState
         val inputHistory = initialState.messages
@@ -1472,122 +1612,161 @@ class DefaultAgentRunner(
             var providerTerminalObserved = false
             val usageBeforeTurn = state.usage
             var turnUsage = TokenUsage()
+            var usageObserved = false
             updateState(state.copy(latestRequestUsage = TokenUsage()))
-            val requestStartedAt = monotonicClock.nowMillis()
-            var requestFinished = false
-            recordTelemetry(
-                TelemetryEvent.ProviderRequestStarted(
-                    sessionId = request.sessionId,
-                    turn = turn,
-                    attempt = retryAttempt,
-                    purpose = ProviderRequestPurpose.MODEL,
+            val providerSpan = tracing.startSpan(
+                RuntimeTraceNames.PROVIDER_REQUEST,
+                traceAttributes(
+                    "magrathea.agent.session_id" to request.sessionId.value,
+                    "magrathea.agent.run_id" to runId.value,
+                    "magrathea.agent.turn" to turn,
+                    "magrathea.provider.key" to provider.key,
+                    "magrathea.provider.model" to providerRequest.model.model,
+                    "magrathea.provider.request_id" to invocation.invocation.requestId,
+                    "magrathea.provider.attempt" to retryAttempt,
+                    "magrathea.provider.purpose" to "model",
+                    "magrathea.provider.invocation_intent" to invocation.intent.traceValue(),
                 ),
             )
+            val debugCorrelation = RuntimeDebugCorrelation(
+                runId = runId,
+                turn = turn,
+                providerRequestId = invocation.invocation.requestId,
+                providerAttempt = retryAttempt,
+                providerPurpose = "model",
+                traceContext = providerSpan.context,
+            )
+            recordProviderRequestDebug(
+                sessionId = request.sessionId,
+                provider = provider,
+                request = providerRequest,
+                correlation = debugCorrelation,
+            )
+            var requestFinished = false
             fun finishProviderRequest(
-                outcome: TelemetryOutcome,
+                status: TraceStatus,
+                outcome: String,
                 failureCode: AgentFailureCode?,
+                phase: String? = null,
             ) {
                 if (requestFinished) return
                 requestFinished = true
-                recordTelemetry(
-                    TelemetryEvent.ProviderRequestFinished(
-                        sessionId = request.sessionId,
-                        turn = turn,
-                        attempt = retryAttempt,
-                        durationMillis = elapsedMillis(requestStartedAt),
-                        outcome = outcome,
-                        failureCode = failureCode,
-                        providerEventObserved = providerChunkObserved,
-                        usage = turnUsage,
-                        purpose = ProviderRequestPurpose.MODEL,
-                    ),
+                providerSpan.end(
+                    status,
+                    traceAttributes(
+                        "magrathea.outcome" to outcome,
+                        "magrathea.error.code" to failureCode?.name,
+                        "magrathea.error.phase" to phase,
+                        "magrathea.provider.event_observed" to providerChunkObserved,
+                    ) + turnUsage.takeIf { usageObserved }?.traceAttributes().orEmpty(),
                 )
+                if (usageObserved) traceState.observeUsage(turnUsage)
             }
+            suspend fun recordProviderFailure(
+                failure: Throwable,
+                level: MagratheaDebugLevel,
+            ) = recordProviderFailureDebug(
+                sessionId = request.sessionId,
+                provider = provider,
+                failure = failure,
+                level = level,
+                correlation = debugCorrelation,
+            )
             try {
                 var mergedAssistant: AgentMessage? = null
                 try {
-                    collectProviderWithProgressTimeouts(
-                        timeouts = providerRequest.timeouts,
-                        flow = { provider.generate(providerRequest) },
-                    ) { chunk ->
-                        if (providerTerminalObserved) {
-                            throw ProviderProtocolException(
-                                "Provider emitted a chunk after Completed",
-                            )
-                        }
-                        try {
-                            chunk.validateSemantics()
-                        } catch (failure: IllegalArgumentException) {
-                            throw ProviderProtocolException(
-                                "Provider chunk violated the canonical event contract",
-                                failure,
-                            )
-                        }
-                        val chunkCompletes = chunk.events.last() is ProviderEvent.Completed
-                        if (!providerChunkObserved) {
-                            providerChunkObserved = true
-                            recordTelemetry(
-                                TelemetryEvent.ProviderFirstChunk(
-                                    sessionId = request.sessionId,
-                                    turn = turn,
-                                    attempt = retryAttempt,
-                                    latencyMillis = elapsedMillis(requestStartedAt),
-                                    purpose = ProviderRequestPurpose.MODEL,
-                                ),
-                            )
-                        }
-                        chunk.usageObservation()?.let { observation ->
-                            turnUsage = if (observation.authoritative) {
-                                turnUsage.overlayKnown(observation.usage)
-                            } else {
-                                turnUsage + observation.usage
+                    val collectProvider: suspend () -> Unit = {
+                        collectProviderWithProgressTimeouts(
+                            timeouts = providerRequest.timeouts,
+                            flow = { provider.generate(providerRequest) },
+                        ) { chunk ->
+                            if (providerTerminalObserved) {
+                                throw ProviderProtocolException(
+                                    "Provider emitted a chunk after Completed",
+                                )
                             }
-                            updateState(
-                                state.copy(
-                                    usage = usageBeforeTurn + turnUsage,
-                                    latestRequestUsage = turnUsage,
-                                    contextManagement = state.contextManagement.withUsageObservation(
-                                        request = request,
-                                        messages = inputHistory,
-                                        throughMessageId = inputAnchorId,
-                                        inputTokens = turnUsage.inputTokens,
+                            try {
+                                chunk.validateSemantics()
+                            } catch (failure: IllegalArgumentException) {
+                                throw ProviderProtocolException(
+                                    "Provider chunk violated the canonical event contract",
+                                    failure,
+                                )
+                            }
+                            val chunkCompletes = chunk.events.last() is ProviderEvent.Completed
+                            if (!providerChunkObserved) {
+                                providerChunkObserved = true
+                                providerSpan.addEvent(RuntimeTraceEvents.PROVIDER_FIRST_EVENT)
+                            }
+                            chunk.usageObservation()?.let { observation ->
+                                usageObserved = true
+                                turnUsage = if (observation.authoritative) {
+                                    turnUsage.overlayKnown(observation.usage)
+                                } else {
+                                    turnUsage + observation.usage
+                                }
+                                updateState(
+                                    state.copy(
+                                        usage = usageBeforeTurn + turnUsage,
+                                        latestRequestUsage = turnUsage,
+                                        contextManagement = state.contextManagement.withUsageObservation(
+                                            request = request,
+                                            messages = inputHistory,
+                                            throughMessageId = inputAnchorId,
+                                            inputTokens = turnUsage.inputTokens,
+                                        ),
                                     ),
-                                ),
-                            )
-                        }
-                        emitDebug(request.sessionId, "provider-chunk", describeChunk(chunk), emit)
-                        mergedAssistant = handleChunk(
-                            request,
-                            state,
-                            turn,
-                            mergedAssistant,
-                            chunk,
-                            emit,
-                        )
-                        emitDebug(
-                            request.sessionId,
-                            "merged-assistant",
-                            mergedAssistant?.let(::describeMessage) ?: "none",
-                            emit,
-                        )
-                        mergedAssistant?.let { message ->
-                            updateState(
-                                state.copy(
-                                    messages = replaceOrAppend(state.messages, message),
-                                    turn = turn,
-                                    status = AgentStatus.RUNNING,
-                                    stopReason = message.stopReason,
-                                ),
-                            )
-                            emitDebug(
+                                )
+                            }
+                            debugging.record(
                                 request.sessionId,
-                                "state-after-chunk",
-                                describeMessages(state.messages),
+                                event = "provider.chunk",
+                                correlation = debugCorrelation,
+                            ) {
+                                chunk.debugAttributes()
+                            }
+                            mergedAssistant = handleChunk(
+                                request,
+                                state,
+                                turn,
+                                mergedAssistant,
+                                chunk,
                                 emit,
                             )
+                            debugging.record(
+                                request.sessionId,
+                                event = "provider.message.merged",
+                                correlation = debugCorrelation,
+                            ) {
+                                mergedAssistant?.debugAttributes()
+                                    ?: debugAttributes("present" to false)
+                            }
+                            mergedAssistant?.let { message ->
+                                updateState(
+                                    state.copy(
+                                        messages = replaceOrAppend(state.messages, message),
+                                        turn = turn,
+                                        status = AgentStatus.RUNNING,
+                                        stopReason = message.stopReason,
+                                    ),
+                                )
+                                debugging.record(
+                                    request.sessionId,
+                                    event = "agent.state.after_chunk",
+                                    correlation = debugCorrelation,
+                                ) {
+                                    state.messages.debugAttributes()
+                                }
+                            }
+                            if (chunkCompletes) {
+                                providerSpan.addEvent(RuntimeTraceEvents.PROVIDER_TERMINAL_EVENT)
+                            }
+                            providerTerminalObserved = chunkCompletes
                         }
-                        providerTerminalObserved = chunkCompletes
                     }
+                    providerSpan.context?.let { context ->
+                        withMagratheaTraceContext(context) { collectProvider() }
+                    } ?: collectProvider()
                     if (!providerChunkObserved) {
                         throw ProviderProtocolException("Provider flow completed without any chunks")
                     }
@@ -1619,7 +1798,7 @@ class DefaultAgentRunner(
                         emit(AgentEvent.MessageEmitted(request.sessionId, finalizedAssistant))
                     }
                 }
-                finishProviderRequest(TelemetryOutcome.SUCCESS, failureCode = null)
+                finishProviderRequest(TraceStatus.OK, "success", failureCode = null)
                 val toolCalls = assistant?.parts?.filterIsInstance<ToolCallPart>().orEmpty()
                 if (toolCalls.isNotEmpty()) {
                     updateState(
@@ -1637,13 +1816,24 @@ class DefaultAgentRunner(
                     invocation.invocation,
                 )
             } catch (timeout: TimeoutCancellationException) {
-                finishProviderRequest(TelemetryOutcome.FAILURE, AgentFailureCode.TIMEOUT)
+                finishProviderRequest(
+                    TraceStatus.ERROR,
+                    "failure",
+                    AgentFailureCode.TIMEOUT,
+                    "provider.transport",
+                )
+                recordProviderFailure(timeout, MagratheaDebugLevel.ERROR)
                 throw timeout
             } catch (cancelled: CancellationException) {
-                finishProviderRequest(TelemetryOutcome.CANCELLED, failureCode = null)
+                finishProviderRequest(TraceStatus.UNSET, "cancelled", failureCode = null)
                 throw cancelled
             } catch (t: Throwable) {
-                finishProviderRequest(TelemetryOutcome.FAILURE, t.toAgentFailureCode())
+                finishProviderRequest(
+                    TraceStatus.ERROR,
+                    "failure",
+                    t.toAgentFailureCode(),
+                    t.providerTracePhase(),
+                )
                 val invocationInvalidated = t is ProviderInvocationInvalidatedException
                 if (invocationInvalidated) {
                     // Once the Provider confirms that this physical invocation cannot be resumed,
@@ -1652,31 +1842,54 @@ class DefaultAgentRunner(
                 }
                 if (t is ProviderContextLimitException) {
                     if (providerChunkObserved) {
-                        throw ProviderProtocolException(
+                        val protocolFailure = ProviderProtocolException(
                             "Provider reported a context limit after emitting output",
                             t,
                         )
+                        recordProviderFailure(protocolFailure, MagratheaDebugLevel.ERROR)
+                        throw protocolFailure
                     }
+                    recordProviderFailure(
+                        t,
+                        if (contextLimitRecoveryAvailable) {
+                            MagratheaDebugLevel.WARN
+                        } else {
+                            MagratheaDebugLevel.ERROR
+                        },
+                    )
                     throw t
                 }
                 if (providerChunkObserved) {
+                    recordProviderFailure(t, MagratheaDebugLevel.ERROR)
                     throw t.asProviderInterruptionSignal(ProviderInterruptionPhase.AFTER_FIRST_EVENT) ?: t
                 }
                 if (!t.isRecoverableProviderFailure()) {
+                    recordProviderFailure(t, MagratheaDebugLevel.ERROR)
                     throw t
                 }
                 if (retryAttempt >= request.engine.runtime.maxProviderRetries) {
+                    recordProviderFailure(t, MagratheaDebugLevel.ERROR)
                     throw requireNotNull(
                         t.asProviderInterruptionSignal(ProviderInterruptionPhase.BEFORE_FIRST_EVENT),
                     )
                 }
                 val retryOrdinal = retryAttempt + 1
                 val policyFailure = t.providerFailureCause() ?: t
-                if (!retryPolicy.shouldRetry(retryOrdinal, policyFailure)) {
+                val shouldRetry = try {
+                    retryPolicy.shouldRetry(retryOrdinal, policyFailure)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (policyError: Throwable) {
+                    recordProviderFailure(t, MagratheaDebugLevel.ERROR)
+                    throw policyError
+                }
+                if (!shouldRetry) {
+                    recordProviderFailure(t, MagratheaDebugLevel.ERROR)
                     throw requireNotNull(
                         t.asProviderInterruptionSignal(ProviderInterruptionPhase.BEFORE_FIRST_EVENT),
                     )
                 }
+                recordProviderFailure(t, MagratheaDebugLevel.WARN)
                 val requiresFreshInvocation =
                     provider.invocationResumeMode == ProviderInvocationResumeMode.NEW_ATTEMPT ||
                         invocationInvalidated
@@ -1694,21 +1907,22 @@ class DefaultAgentRunner(
                         t.toAgentFailureCode(),
                     ),
                 )
-                recordTelemetry(
-                    TelemetryEvent.RetryScheduled(
-                        sessionId = request.sessionId,
-                        turn = turn,
-                        attempt = retryOrdinal,
-                        failureCode = t.toAgentFailureCode(),
-                    ),
-                )
                 val policyDelayMillis = retryPolicy.backoffDelayMs(retryOrdinal, policyFailure)
                     .coerceAtLeast(0L)
                 val providerDelayMillis = (policyFailure as? ProviderHttpException)
                     ?.retryAfterMillis
                     ?.coerceAtLeast(0L)
                     ?: 0L
-                delay(maxOf(policyDelayMillis, providerDelayMillis))
+                val retryDelayMillis = maxOf(policyDelayMillis, providerDelayMillis)
+                turnTraceSpan.addEvent(
+                    RuntimeTraceEvents.PROVIDER_RETRY_SCHEDULED,
+                    traceAttributes(
+                        "magrathea.provider.attempt" to retryOrdinal,
+                        "magrathea.error.code" to t.toAgentFailureCode().name,
+                        "magrathea.provider.retry_delay_ms" to retryDelayMillis,
+                    ),
+                )
+                delay(retryDelayMillis)
                 claimFreshInvocationBeforeRequest = requiresFreshInvocation
             }
         }
@@ -1728,10 +1942,6 @@ class DefaultAgentRunner(
         validateMessages(listOf(merged), request.engine.runtime, AgentFailureCode.PROVIDER_PROTOCOL)
         emit(AgentEvent.MessageEmitted(request.sessionId, merged))
         return merged
-    }
-
-    private suspend fun emitDebug(sessionId: AgentSessionId, label: String, payload: String, emit: suspend (AgentEvent) -> Unit) {
-        if (label in debugLabels) emit(AgentEvent.Debug(sessionId, label, payload))
     }
 
     private suspend fun executeToolCalls(
@@ -1757,37 +1967,84 @@ class DefaultAgentRunner(
         }
 
         suspend fun execute(entry: JournaledToolCall): ToolExecutionResult {
-            val completed = entry.record.result
-            if (completed != null) return completed
-            if (entry.record.state == ToolExecutionState.STARTED) {
-                val executor = toolRegistry.find(entry.indexed.toolCall.toolName)
-                if (executor?.recoveryPolicy != ToolRecoveryPolicy.REPLAY_SAFE) {
-                    throw AgentRuntimeFailure(AgentFailureCode.INVALID_STATE)
-                }
-            }
+            val replayed = entry.record.state != ToolExecutionState.PENDING
             var executionStarted = false
-            val result = executeMeasuredToolCall(
-                request = request,
-                runId = runId,
-                executionId = entry.record.executionId,
-                assistantMessage = assistantMessage,
-                toolCall = entry.indexed.toolCall,
-                callOrdinal = entry.indexed.ordinal,
-                previousRunCalls = previousRunCalls[entry.indexed.toolCall.toolName] ?: 0,
-                turn = turn,
-                onExecutionStarted = {
-                    check(!executionStarted) { "Tool execution cannot start more than once" }
-                    persistRecord(entry.record.copy(state = ToolExecutionState.STARTED))
-                    executionStarted = true
-                },
-            )
-            persistRecord(
-                entry.record.copy(
-                    state = ToolExecutionState.COMPLETED,
-                    result = result,
+            val toolSpan = tracing.startSpan(
+                RuntimeTraceNames.TOOL_CALL,
+                traceAttributes(
+                    "magrathea.agent.session_id" to request.sessionId.value,
+                    "magrathea.agent.run_id" to runId.value,
+                    "magrathea.agent.turn" to turn,
+                    "magrathea.tool.name" to entry.indexed.toolCall.toolName,
+                    "magrathea.tool.call_id" to entry.indexed.toolCall.toolCallId,
+                    "magrathea.tool.execution_id" to entry.record.executionId,
+                    "magrathea.tool.call_ordinal" to entry.indexed.ordinal,
+                    "magrathea.tool.replayed" to replayed,
                 ),
             )
-            return result
+            val executeBody: suspend () -> ToolExecutionResult = {
+                val completed = entry.record.result
+                if (completed != null) {
+                    toolSpan.addEvent(RuntimeTraceEvents.TOOL_RESULT_REUSED)
+                    completed
+                } else {
+                    if (entry.record.state == ToolExecutionState.STARTED) {
+                        val executor = toolRegistry.find(entry.indexed.toolCall.toolName)
+                        if (executor?.recoveryPolicy != ToolRecoveryPolicy.REPLAY_SAFE) {
+                            throw AgentRuntimeFailure(AgentFailureCode.INVALID_STATE)
+                        }
+                    }
+                    val result = executeToolCall(
+                        request = request,
+                        runId = runId,
+                        executionId = entry.record.executionId,
+                        assistantMessage = assistantMessage,
+                        toolCall = entry.indexed.toolCall,
+                        callOrdinal = entry.indexed.ordinal,
+                        previousRunCalls = previousRunCalls[entry.indexed.toolCall.toolName] ?: 0,
+                        onExecutionStarted = {
+                            check(!executionStarted) { "Tool execution cannot start more than once" }
+                            persistRecord(entry.record.copy(state = ToolExecutionState.STARTED))
+                            executionStarted = true
+                        },
+                    )
+                    persistRecord(
+                        entry.record.copy(
+                            state = ToolExecutionState.COMPLETED,
+                            result = result,
+                        ),
+                    )
+                    result
+                }
+            }
+            return try {
+                val result = toolSpan.context?.let { context ->
+                    withMagratheaTraceContext(context) { executeBody() }
+                } ?: executeBody()
+                toolSpan.end(
+                    if (result.isError) TraceStatus.ERROR else TraceStatus.OK,
+                    traceAttributes(
+                        "magrathea.outcome" to if (result.isError) "failure" else "success",
+                        "magrathea.tool.executor_started" to executionStarted,
+                        "magrathea.tool.result_error" to result.isError,
+                    ),
+                )
+                result
+            } catch (cancelled: CancellationException) {
+                toolSpan.endCancelled(
+                    "magrathea.tool.executor_started" to executionStarted,
+                    "magrathea.tool.result_error" to true,
+                )
+                throw cancelled
+            } catch (failure: Throwable) {
+                toolSpan.endFailure(
+                    failure.toAgentFailureCode(),
+                    "tool.execute",
+                    "magrathea.tool.executor_started" to executionStarted,
+                    "magrathea.tool.result_error" to true,
+                )
+                throw failure
+            }
         }
 
         return if (request.engine.runtime.toolExecutionMode == ToolExecutionMode.PARALLEL) {
@@ -1812,7 +2069,7 @@ class DefaultAgentRunner(
         }
     }
 
-    private suspend fun executeMeasuredToolCall(
+    private suspend fun executeToolCall(
         request: AgentRequest,
         runId: AgentRunId,
         executionId: String,
@@ -1820,55 +2077,17 @@ class DefaultAgentRunner(
         toolCall: ToolCallPart,
         callOrdinal: Int,
         previousRunCalls: Int,
-        turn: Int,
         onExecutionStarted: suspend () -> Unit,
-    ): ToolExecutionResult {
-        val startedAt = monotonicClock.nowMillis()
-        return try {
-            val result = executeSingleToolCall(
-                request,
-                runId,
-                executionId,
-                assistantMessage,
-                toolCall,
-                callOrdinal,
-                previousRunCalls,
-                onExecutionStarted,
-            )
-            recordTelemetry(
-                TelemetryEvent.ToolExecutionFinished(
-                    sessionId = request.sessionId,
-                    turn = turn,
-                    durationMillis = elapsedMillis(startedAt),
-                    outcome = TelemetryOutcome.SUCCESS,
-                    isError = result.isError,
-                ),
-            )
-            result
-        } catch (cancelled: CancellationException) {
-            recordTelemetry(
-                TelemetryEvent.ToolExecutionFinished(
-                    sessionId = request.sessionId,
-                    turn = turn,
-                    durationMillis = elapsedMillis(startedAt),
-                    outcome = TelemetryOutcome.CANCELLED,
-                    isError = true,
-                ),
-            )
-            throw cancelled
-        } catch (failure: Throwable) {
-            recordTelemetry(
-                TelemetryEvent.ToolExecutionFinished(
-                    sessionId = request.sessionId,
-                    turn = turn,
-                    durationMillis = elapsedMillis(startedAt),
-                    outcome = TelemetryOutcome.FAILURE,
-                    isError = true,
-                ),
-            )
-            throw failure
-        }
-    }
+    ): ToolExecutionResult = executeSingleToolCall(
+        request,
+        runId,
+        executionId,
+        assistantMessage,
+        toolCall,
+        callOrdinal,
+        previousRunCalls,
+        onExecutionStarted,
+    )
 
     private suspend fun executeSingleToolCall(
         request: AgentRequest,
@@ -2044,7 +2263,7 @@ class DefaultAgentRunner(
             )
         }
         try {
-            measureStoreOperation(request.sessionId, TelemetryStoreOperation.COMMIT_STATE) {
+            measureStoreOperation(request.sessionId, "commit") {
                 persistence.commit(
                     snapshot = AgentSessionSnapshot(
                         sessionId = request.sessionId,
@@ -2065,54 +2284,28 @@ class DefaultAgentRunner(
 
     private suspend fun <T> measureStoreOperation(
         sessionId: AgentSessionId,
-        operation: TelemetryStoreOperation,
+        operation: String,
         block: suspend () -> T,
     ): T {
-        val startedAt = monotonicClock.nowMillis()
+        val span = tracing.startSpan(
+            RuntimeTraceNames.STORE_OPERATION,
+            traceAttributes(
+                "magrathea.agent.session_id" to sessionId.value,
+                "magrathea.store.operation" to operation,
+            ),
+        )
         return try {
-            val result = block()
-            recordTelemetry(
-                TelemetryEvent.StoreOperationFinished(
-                    sessionId = sessionId,
-                    operation = operation,
-                    durationMillis = elapsedMillis(startedAt),
-                    outcome = TelemetryOutcome.SUCCESS,
-                ),
-            )
+            val result = span.context?.let { context ->
+                withMagratheaTraceContext(context) { block() }
+            } ?: block()
+            span.endSuccess()
             result
         } catch (cancelled: CancellationException) {
-            recordTelemetry(
-                TelemetryEvent.StoreOperationFinished(
-                    sessionId = sessionId,
-                    operation = operation,
-                    durationMillis = elapsedMillis(startedAt),
-                    outcome = TelemetryOutcome.CANCELLED,
-                ),
-            )
+            span.endCancelled()
             throw cancelled
         } catch (failure: Throwable) {
-            recordTelemetry(
-                TelemetryEvent.StoreOperationFinished(
-                    sessionId = sessionId,
-                    operation = operation,
-                    durationMillis = elapsedMillis(startedAt),
-                    outcome = TelemetryOutcome.FAILURE,
-                ),
-            )
+            span.endFailure(AgentFailureCode.STORAGE, "persistence.$operation")
             throw failure
-        }
-    }
-
-    private fun elapsedMillis(startedAt: Long): Long {
-        val finishedAt = monotonicClock.nowMillis()
-        return if (finishedAt >= startedAt) finishedAt - startedAt else 0L
-    }
-
-    private fun recordTelemetry(event: TelemetryEvent) {
-        try {
-            telemetry.record(event)
-        } catch (_: Throwable) {
-            // Observability is optional and must never change the chatbot result.
         }
     }
 
@@ -2190,74 +2383,118 @@ class DefaultAgentRunner(
             val assembler = ProviderEventAssembler()
             var summaryMessage: AgentMessage? = null
             var usage = TokenUsage()
+            var usageObserved = false
             var terminalObserved = false
             var chunkObserved = false
-            val requestStartedAt = monotonicClock.nowMillis()
-            var requestFinished = false
-            recordTelemetry(
-                TelemetryEvent.ProviderRequestStarted(
-                    sessionId = request.sessionId,
-                    turn = request.turn,
-                    attempt = retryAttempt,
-                    purpose = ProviderRequestPurpose.CONTEXT_SUMMARY,
+            val providerSpan = tracing.startSpan(
+                RuntimeTraceNames.PROVIDER_REQUEST,
+                traceAttributes(
+                    "magrathea.agent.session_id" to request.sessionId.value,
+                    "magrathea.agent.run_id" to lifecycle.runId.value,
+                    "magrathea.agent.turn" to request.turn,
+                    "magrathea.provider.key" to provider.key,
+                    "magrathea.provider.model" to providerRequest.model.model,
+                    "magrathea.provider.request_id" to invocation.invocation.requestId,
+                    "magrathea.provider.attempt" to retryAttempt,
+                    "magrathea.provider.purpose" to "context_summary",
+                    "magrathea.provider.invocation_intent" to invocation.intent.traceValue(),
                 ),
             )
+            val debugCorrelation = RuntimeDebugCorrelation(
+                runId = lifecycle.runId,
+                turn = request.turn,
+                providerRequestId = invocation.invocation.requestId,
+                providerAttempt = retryAttempt,
+                providerPurpose = "context_summary",
+                traceContext = providerSpan.context,
+            )
+            recordProviderRequestDebug(
+                sessionId = request.sessionId,
+                provider = provider,
+                request = providerRequest,
+                correlation = debugCorrelation,
+            )
+            var requestFinished = false
             fun finishSummaryRequest(
-                outcome: TelemetryOutcome,
+                status: TraceStatus,
+                outcome: String,
                 failureCode: AgentFailureCode?,
+                phase: String? = null,
             ) {
                 if (requestFinished) return
                 requestFinished = true
-                recordTelemetry(
-                    TelemetryEvent.ProviderRequestFinished(
-                        sessionId = request.sessionId,
-                        turn = request.turn,
-                        attempt = retryAttempt,
-                        durationMillis = elapsedMillis(requestStartedAt),
-                        outcome = outcome,
-                        failureCode = failureCode,
-                        providerEventObserved = chunkObserved,
-                        usage = usage,
-                        purpose = ProviderRequestPurpose.CONTEXT_SUMMARY,
-                    ),
+                providerSpan.end(
+                    status,
+                    traceAttributes(
+                        "magrathea.outcome" to outcome,
+                        "magrathea.error.code" to failureCode?.name,
+                        "magrathea.error.phase" to phase,
+                        "magrathea.provider.event_observed" to chunkObserved,
+                    ) + usage.takeIf { usageObserved }?.traceAttributes().orEmpty(),
                 )
             }
+            suspend fun recordProviderFailure(
+                failure: Throwable,
+                level: MagratheaDebugLevel,
+            ) = recordProviderFailureDebug(
+                sessionId = request.sessionId,
+                provider = provider,
+                failure = failure,
+                level = level,
+                correlation = debugCorrelation,
+            )
             try {
                 try {
-                    collectProviderWithProgressTimeouts(
-                        timeouts = providerRequest.timeouts,
-                        flow = { provider.generate(providerRequest) },
-                    ) { chunk ->
-                        if (terminalObserved) {
-                            throw ProviderProtocolException(
-                                "Context summarizer emitted output after completion",
-                            )
-                        }
-                        chunk.validateSemantics()
-                        if (!chunkObserved) {
-                            chunkObserved = true
-                            recordTelemetry(
-                                TelemetryEvent.ProviderFirstChunk(
-                                    sessionId = request.sessionId,
-                                    turn = request.turn,
-                                    attempt = retryAttempt,
-                                    latencyMillis = elapsedMillis(requestStartedAt),
-                                    purpose = ProviderRequestPurpose.CONTEXT_SUMMARY,
-                                ),
-                            )
-                        }
-                        val chunkCompletes = chunk.events.last() is ProviderEvent.Completed
-                        chunk.usageObservation()?.let { observation ->
-                            usage = if (observation.authoritative) {
-                                usage.overlayKnown(observation.usage)
-                            } else {
-                                usage + observation.usage
+                    val collectProvider: suspend () -> Unit = {
+                        collectProviderWithProgressTimeouts(
+                            timeouts = providerRequest.timeouts,
+                            flow = { provider.generate(providerRequest) },
+                        ) { chunk ->
+                            if (terminalObserved) {
+                                throw ProviderProtocolException(
+                                    "Context summarizer emitted output after completion",
+                                )
                             }
-                            usageAccounting?.observe(invocation.invocation.requestId, usage)
+                            chunk.validateSemantics()
+                            if (!chunkObserved) {
+                                chunkObserved = true
+                                providerSpan.addEvent(RuntimeTraceEvents.PROVIDER_FIRST_EVENT)
+                            }
+                            val chunkCompletes = chunk.events.last() is ProviderEvent.Completed
+                            chunk.usageObservation()?.let { observation ->
+                                usageObserved = true
+                                usage = if (observation.authoritative) {
+                                    usage.overlayKnown(observation.usage)
+                                } else {
+                                    usage + observation.usage
+                                }
+                                usageAccounting?.observe(invocation.invocation.requestId, usage)
+                            }
+                            debugging.record(
+                                request.sessionId,
+                                event = "provider.chunk",
+                                correlation = debugCorrelation,
+                            ) {
+                                chunk.debugAttributes()
+                            }
+                            summaryMessage = assembler.apply(summaryMessage, chunk.events)
+                            debugging.record(
+                                request.sessionId,
+                                event = "provider.message.merged",
+                                correlation = debugCorrelation,
+                            ) {
+                                summaryMessage?.debugAttributes()
+                                    ?: debugAttributes("present" to false)
+                            }
+                            if (chunkCompletes) {
+                                providerSpan.addEvent(RuntimeTraceEvents.PROVIDER_TERMINAL_EVENT)
+                            }
+                            terminalObserved = chunkCompletes
                         }
-                        summaryMessage = assembler.apply(summaryMessage, chunk.events)
-                        terminalObserved = chunkCompletes
                     }
+                    providerSpan.context?.let { context ->
+                        withMagratheaTraceContext(context) { collectProvider() }
+                    } ?: collectProvider()
                     if (!chunkObserved || !terminalObserved) {
                         throw ProviderProtocolException("Context summarizer did not complete")
                     }
@@ -2278,42 +2515,66 @@ class DefaultAgentRunner(
                 if (summary.isBlank()) {
                     throw ProviderProtocolException("Context summarizer returned no summary text")
                 }
-                finishSummaryRequest(TelemetryOutcome.SUCCESS, failureCode = null)
+                finishSummaryRequest(TraceStatus.OK, "success", failureCode = null)
                 lifecycle.complete(invocation.invocation.requestId)
                 return ContextSummaryResult(summary = summary, usage = usage)
             } catch (timeout: TimeoutCancellationException) {
-                finishSummaryRequest(TelemetryOutcome.FAILURE, AgentFailureCode.TIMEOUT)
+                finishSummaryRequest(
+                    TraceStatus.ERROR,
+                    "failure",
+                    AgentFailureCode.TIMEOUT,
+                    "provider.transport",
+                )
+                recordProviderFailure(timeout, MagratheaDebugLevel.ERROR)
                 throw timeout
             } catch (cancelled: CancellationException) {
-                finishSummaryRequest(TelemetryOutcome.CANCELLED, failureCode = null)
+                finishSummaryRequest(TraceStatus.UNSET, "cancelled", failureCode = null)
                 throw cancelled
             } catch (failure: Throwable) {
-                finishSummaryRequest(TelemetryOutcome.FAILURE, failure.toAgentFailureCode())
+                finishSummaryRequest(
+                    TraceStatus.ERROR,
+                    "failure",
+                    failure.toAgentFailureCode(),
+                    failure.providerTracePhase(),
+                )
                 val invocationInvalidated = failure is ProviderInvocationInvalidatedException
                 if (invocationInvalidated) {
                     // A rejected reattachment is no longer a valid durable recovery anchor.
                     lifecycle.invalidate(invocation.invocation.requestId)
                 }
                 if (chunkObserved) {
+                    recordProviderFailure(failure, MagratheaDebugLevel.ERROR)
                     throw failure.asProviderInterruptionSignal(
                         ProviderInterruptionPhase.AFTER_FIRST_EVENT,
                     ) ?: failure
                 }
                 if (!failure.isRecoverableProviderFailure()) {
+                    recordProviderFailure(failure, MagratheaDebugLevel.ERROR)
                     throw failure
                 }
                 if (retryAttempt >= lifecycle.maxProviderRetries) {
+                    recordProviderFailure(failure, MagratheaDebugLevel.ERROR)
                     throw failure.asProviderInterruptionSignal(
                         ProviderInterruptionPhase.BEFORE_FIRST_EVENT,
                     ) ?: failure
                 }
                 val retryOrdinal = retryAttempt + 1
                 val policyFailure = failure.providerFailureCause() ?: failure
-                if (!retryPolicy.shouldRetry(retryOrdinal, policyFailure)) {
+                val shouldRetry = try {
+                    retryPolicy.shouldRetry(retryOrdinal, policyFailure)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (policyError: Throwable) {
+                    recordProviderFailure(failure, MagratheaDebugLevel.ERROR)
+                    throw policyError
+                }
+                if (!shouldRetry) {
+                    recordProviderFailure(failure, MagratheaDebugLevel.ERROR)
                     throw failure.asProviderInterruptionSignal(
                         ProviderInterruptionPhase.BEFORE_FIRST_EVENT,
                     ) ?: failure
                 }
+                recordProviderFailure(failure, MagratheaDebugLevel.WARN)
                 val requiresFreshInvocation =
                     provider.invocationResumeMode == ProviderInvocationResumeMode.NEW_ATTEMPT ||
                         invocationInvalidated
@@ -2329,7 +2590,16 @@ class DefaultAgentRunner(
                     ?.retryAfterMillis
                     ?.coerceAtLeast(0L)
                     ?: 0L
-                delay(maxOf(policyDelayMillis, providerDelayMillis))
+                val retryDelayMillis = maxOf(policyDelayMillis, providerDelayMillis)
+                lifecycle.turnTraceSpan.addEvent(
+                    RuntimeTraceEvents.PROVIDER_RETRY_SCHEDULED,
+                    traceAttributes(
+                        "magrathea.provider.attempt" to retryOrdinal,
+                        "magrathea.error.code" to failure.toAgentFailureCode().name,
+                        "magrathea.provider.retry_delay_ms" to retryDelayMillis,
+                    ),
+                )
+                delay(retryDelayMillis)
                 claimFreshInvocationBeforeRequest = requiresFreshInvocation
             }
         }
@@ -2337,6 +2607,59 @@ class DefaultAgentRunner(
 
     private suspend fun resolveProviderConfig(request: AgentRequest): ResolvedProviderConfig {
         return resolveProviderConfig(request.model.provider, request.engine.provider)
+    }
+
+    private suspend fun recordProviderRequestDebug(
+        sessionId: AgentSessionId,
+        provider: ProviderAdapter,
+        request: ProviderRequest,
+        correlation: RuntimeDebugCorrelation,
+    ) {
+        debugging.record(
+            sessionId,
+            event = "provider.request.messages",
+            correlation = correlation,
+        ) {
+            request.messages.debugAttributes()
+        }
+        debugging.record(
+            sessionId,
+            event = "provider.request.config",
+            correlation = correlation,
+        ) {
+            debugAttributes(
+                "streaming" to request.model.supportsStreaming,
+                "custom_endpoint" to (request.endpoint != null),
+                "tool_count" to request.tools.size,
+            )
+        }
+        debugging.record(
+            sessionId,
+            event = "provider.selected",
+            correlation = correlation,
+        ) {
+            debugAttributes(
+                "provider" to provider.key,
+                "model" to request.model.model,
+            )
+        }
+    }
+
+    private suspend fun recordProviderFailureDebug(
+        sessionId: AgentSessionId,
+        provider: ProviderAdapter,
+        failure: Throwable,
+        level: MagratheaDebugLevel,
+        correlation: RuntimeDebugCorrelation,
+    ) {
+        debugging.record(
+            sessionId,
+            event = "provider.failed",
+            level = level,
+            correlation = correlation,
+        ) {
+            failure.debugFailureAttributes(provider.key)
+        }
     }
 
     private suspend fun resolveProviderConfig(
@@ -2521,6 +2844,79 @@ class DefaultAgentRunner(
         INTERRUPT,
     }
 
+    private class ExecutionTraceState {
+        private val state = MutableStateFlow(ExecutionTraceSnapshot())
+
+        val stopIntent: StopIntent
+            get() = state.value.stopIntent
+
+        val runId: AgentRunId?
+            get() = state.value.runId
+
+        val turn: Int?
+            get() = state.value.turn
+
+        val usage: TokenUsage?
+            get() = state.value.let { snapshot ->
+                snapshot.usage.takeIf { snapshot.usageObserved }
+            }
+
+        fun started(runId: AgentRunId, turn: Int?) {
+            update { current ->
+                current.copy(
+                    runId = runId,
+                    turn = turn ?: current.turn,
+                )
+            }
+        }
+
+        fun turnStarted(turn: Int) {
+            update { it.copy(turn = turn) }
+        }
+
+        fun observeUsage(usage: TokenUsage) {
+            update { current ->
+                current.copy(
+                    usage = current.usage + usage,
+                    usageObserved = true,
+                )
+            }
+        }
+
+        fun stopped(stopIntent: StopIntent) {
+            update { it.copy(stopIntent = stopIntent) }
+        }
+
+        private fun update(transform: (ExecutionTraceSnapshot) -> ExecutionTraceSnapshot) {
+            while (true) {
+                val current = state.value
+                if (state.compareAndSet(current, transform(current))) return
+            }
+        }
+    }
+
+    private data class ExecutionTraceSnapshot(
+        val stopIntent: StopIntent = StopIntent.ACTIVE,
+        val runId: AgentRunId? = null,
+        val turn: Int? = null,
+        val usage: TokenUsage = TokenUsage(),
+        val usageObserved: Boolean = false,
+    )
+
+    private class ControlTraceState {
+        var runId: AgentRunId? = null
+            private set
+
+        fun started(runId: AgentRunId?) {
+            if (runId != null) this.runId = runId
+        }
+    }
+
+    private enum class TurnLoopAction {
+        CONTINUE,
+        BREAK,
+    }
+
     private class RunStopController {
         private val state = MutableStateFlow(StopIntent.ACTIVE)
 
@@ -2562,7 +2958,9 @@ private class ContextSummaryUsageAccounting :
 }
 
 private class ContextSummaryInvocationLifecycle(
+    val runId: AgentRunId,
     val maxProviderRetries: Int,
+    val turnTraceSpan: RuntimeTraceSpan,
     private val claim: suspend (String) -> ProviderInvocationClaim,
     private val replace: suspend (String) -> ProviderInvocationClaim,
     private val invalidate: suspend (String) -> Unit,
@@ -2975,63 +3373,89 @@ private val CONTEXT_SUMMARY_SYSTEM_PROMPT = """
     Return only the summary in plain text.
 """.trimIndent()
 
-private fun describeMessages(messages: List<AgentMessage>): String {
-    return buildString {
-        append("messages=")
-        append(messages.size)
-        MessageRole.entries.forEach { role ->
-            append(", ")
-            append(role.name.lowercase())
-            append('=')
-            append(messages.count { it.role == role })
-        }
-        append(", textChars=")
-        append(messages.sumOf { message -> message.parts.filterIsInstance<TextPart>().sumOf { it.text.length } })
-        append(", reasoningChars=")
-        append(messages.sumOf { message -> message.parts.filterIsInstance<ReasoningPart>().sumOf { it.text.length } })
-        append(", attachments=")
-        append(messages.sumOf { it.parts.count { part -> part is AttachmentPart } })
-        append(", toolCalls=")
-        append(messages.sumOf { it.parts.count { part -> part is ToolCallPart } })
-        append(", toolResults=")
-        append(messages.sumOf { it.parts.count { part -> part is ToolResultPart } })
-        append(", metadataKeys=")
-        append(messages.flatMap { it.metadata.keys }.distinct().sorted())
-    }
+private fun List<AgentMessage>.debugAttributes() = debugAttributes(
+    "message_count" to size,
+    *MessageRole.entries.map { role ->
+        "${role.name.lowercase()}_count" to count { it.role == role }
+    }.toTypedArray(),
+    "text_chars" to sumOf { message ->
+        message.parts.filterIsInstance<TextPart>().sumOf { it.text.length }
+    },
+    "reasoning_chars" to sumOf { message ->
+        message.parts.filterIsInstance<ReasoningPart>().sumOf { it.text.length }
+    },
+    "attachment_count" to sumOf { it.parts.count { part -> part is AttachmentPart } },
+    "tool_call_count" to sumOf { it.parts.count { part -> part is ToolCallPart } },
+    "tool_result_count" to sumOf { it.parts.count { part -> part is ToolResultPart } },
+    "metadata_key_count" to flatMap { it.metadata.keys }.distinct().size,
+)
+
+private fun AgentMessage.debugAttributes() = debugAttributes(
+    "present" to true,
+    "role" to role.name.lowercase(),
+    "part_count" to parts.size,
+    "text_chars" to parts.filterIsInstance<TextPart>().sumOf { it.text.length },
+    "reasoning_chars" to parts.filterIsInstance<ReasoningPart>().sumOf { it.text.length },
+    "attachment_count" to parts.count { it is AttachmentPart },
+    "tool_call_count" to parts.count { it is ToolCallPart },
+    "tool_result_count" to parts.count { it is ToolResultPart },
+    "stop_reason" to (stopReason?.name ?: "none"),
+    "metadata_key_count" to metadata.size,
+)
+
+private fun ProviderChunk.debugAttributes() = debugAttributes(
+    "event_count" to events.size,
+    "event_types" to events.map(ProviderEvent::debugType).distinct().joinToString(","),
+    "completed" to (events.lastOrNull() is ProviderEvent.Completed),
+    "usage_present" to events.any {
+        it is ProviderEvent.UsageDelta || (it is ProviderEvent.Completed && it.usage != null)
+    },
+)
+
+private fun ProviderEvent.debugType(): String = when (this) {
+    is ProviderEvent.TextStart -> "text_start"
+    is ProviderEvent.TextDelta -> "text_delta"
+    is ProviderEvent.TextEnd -> "text_end"
+    is ProviderEvent.ReasoningStart -> "reasoning_start"
+    is ProviderEvent.ReasoningDelta -> "reasoning_delta"
+    is ProviderEvent.ReasoningEnd -> "reasoning_end"
+    is ProviderEvent.ToolCallStart -> "tool_call_start"
+    is ProviderEvent.ToolCallDelta -> "tool_call_delta"
+    is ProviderEvent.ToolCallEnd -> "tool_call_end"
+    is ProviderEvent.UsageDelta -> "usage_delta"
+    is ProviderEvent.Completed -> "completed"
 }
 
-private fun describeMessage(message: AgentMessage): String {
-    return buildString {
-        append("role=")
-        append(message.role.name.lowercase())
-        append(", parts=")
-        append(message.parts.size)
-        append(", textChars=")
-        append(message.parts.filterIsInstance<TextPart>().sumOf { it.text.length })
-        append(", reasoningChars=")
-        append(message.parts.filterIsInstance<ReasoningPart>().sumOf { it.text.length })
-        append(", attachments=")
-        append(message.parts.count { it is AttachmentPart })
-        append(", toolCalls=")
-        append(message.parts.count { it is ToolCallPart })
-        append(", toolResults=")
-        append(message.parts.count { it is ToolResultPart })
-        append(", stopReason=")
-        append(message.stopReason?.name ?: "none")
-        append(", metadataKeys=")
-        append(message.metadata.keys.sorted())
-    }
+private fun Throwable.debugFailureAttributes(provider: String): Map<String, MagratheaDebugValue> {
+    val failure = providerFailureCause() ?: this
+    return debugAttributes(
+        "provider" to provider,
+        "failure_type" to failure.debugFailureType(),
+        "code" to if (failure is TimeoutCancellationException) {
+            AgentFailureCode.TIMEOUT.name
+        } else {
+            failure.toAgentFailureCode().name
+        },
+        "protocol_error" to (failure is ProviderProtocolException),
+        "http_status" to (failure as? ProviderHttpException)?.statusCode,
+        "retryable" to (failure as? ProviderException)?.retryable,
+    )
 }
 
-private fun describeChunk(chunk: ProviderChunk): String {
-    return buildString {
-        append("events=")
-        append(chunk.events.map { it::class.simpleName })
-        append(", completed=")
-        append(chunk.events.lastOrNull() is ProviderEvent.Completed)
-        append(", usagePresent=")
-        append(chunk.events.any { it is ProviderEvent.UsageDelta || (it is ProviderEvent.Completed && it.usage != null) })
-    }
+private fun Throwable.debugFailureType(): String = when (this) {
+    is TimeoutCancellationException,
+    is ProviderTimeoutException,
+    -> "timeout"
+    is ProviderContextLimitException -> "context_limit"
+    is ProviderAuthException -> "auth"
+    is ProviderPermissionException -> "permission"
+    is ProviderRateLimitException -> "rate_limit"
+    is ProviderNetworkException -> "network"
+    is ProviderProtocolException -> "protocol"
+    is ProviderClientException -> "client"
+    is ProviderServerException -> "server"
+    is ProviderException -> "provider"
+    else -> "internal"
 }
 
 private data class ProviderUsageObservation(
@@ -3061,6 +3485,9 @@ private fun ProviderUsage.toTokenUsage(): TokenUsage = TokenUsage(
     outputTokens = outputTokens?.toLong(),
     reasoningTokens = reasoningTokens?.toLong(),
 )
+
+private fun TokenUsage.hasKnownValues(): Boolean =
+    inputTokens != null || outputTokens != null || reasoningTokens != null
 
 private fun TokenUsage.overlayKnown(authoritative: TokenUsage): TokenUsage = TokenUsage(
     inputTokens = authoritative.inputTokens ?: inputTokens,
