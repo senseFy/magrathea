@@ -14,17 +14,17 @@ The group and version come from `gradle.properties`:
 
 ```text
 group: saien.magrathea
-version: 0.1.0-alpha.6
+version: 0.1.0-alpha.7
 artifact: logical module name
 ```
 
 Examples:
 
 ```text
-saien.magrathea:magrathea-core:0.1.0-alpha.6
-saien.magrathea:magrathea-runtime:0.1.0-alpha.6
-saien.magrathea:magrathea-chatbot:0.1.0-alpha.6
-saien.magrathea:magrathea-provider-openai:0.1.0-alpha.6
+saien.magrathea:magrathea-core:0.1.0-alpha.7
+saien.magrathea:magrathea-runtime:0.1.0-alpha.7
+saien.magrathea:magrathea-chatbot:0.1.0-alpha.7
+saien.magrathea:magrathea-provider-openai:0.1.0-alpha.7
 ```
 
 Kotlin Multiplatform generates target variants from the 16 logical modules. Consumers declare the
@@ -67,9 +67,9 @@ repositories {
 }
 
 dependencies {
-    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.6")
-    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.6")
-    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.6")
+    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.7")
+    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.7")
+    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.7")
 }
 ```
 
@@ -169,14 +169,14 @@ Prepare the reviewed version metadata and local quick gate through the single ma
 point:
 
 ```bash
-scripts/prepare-release 0.1.0-alpha.6
+scripts/prepare-release 0.1.0-alpha.7
 ```
 
 It performs no commit, push, tag, or remote publication. Review and commit the prepared files onto
 local `main`, then run:
 
 ```bash
-scripts/release 0.1.0-alpha.6
+scripts/release 0.1.0-alpha.7
 ```
 
 That command presents one confirmation, pushes the exact commit, waits for exact-SHA CI, and starts

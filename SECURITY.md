@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-`0.1.0-alpha.6` receives best-effort fixes while it is the latest Alpha. It does not carry a
+`0.1.0-alpha.7` receives best-effort fixes while it is the latest Alpha. It does not carry a
 security SLA or production certification. Reports are evaluated against both the latest release
 and the current `main` branch.
 

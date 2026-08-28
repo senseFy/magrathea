@@ -9,7 +9,7 @@ Magrathea 是一个 Kotlin Multiplatform Agent Runtime，用于在 Android、JVM
 集成能力。
 
 > [!NOTE]
-> `0.1.0-alpha.6` 是最新已发布的 Alpha；`main` 可能包含尚未发布的变更。在进入
+> `0.1.0-alpha.7` 是最新已发布的 Alpha；`main` 可能包含尚未发布的变更。在进入
 > 稳定版本前，API 与持久化格式仍可能演进。
 
 ## 模块
@@ -55,15 +55,15 @@ cd magrathea
 
 ```kotlin
 dependencies {
-    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.6")
-    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.6")
-    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.6")
+    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.7")
+    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.7")
+    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.7")
 }
 ```
 
 完整组合方式参见 [Provider-neutral 构建指南](docs/architecture.md#provider-neutral-runtime-and-chatbot-facade)
 与 [samples](samples)。Release 产物与供应链材料：
-[`v0.1.0-alpha.6`](https://github.com/senseFy/magrathea/releases/tag/v0.1.0-alpha.6)。
+[`v0.1.0-alpha.7`](https://github.com/senseFy/magrathea/releases/tag/v0.1.0-alpha.7)。
 
 ## 平台
 
