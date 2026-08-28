@@ -5,7 +5,7 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
-## 0.1.0-alpha.7 — 2026-08-28
+## 0.1.0-alpha.8 — 2026-08-29
 
 ### Added
 
