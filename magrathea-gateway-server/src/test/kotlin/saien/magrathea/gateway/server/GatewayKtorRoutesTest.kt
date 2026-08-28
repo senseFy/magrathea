@@ -510,7 +510,7 @@ class GatewayKtorRoutesTest {
         application {
             installMagratheaGateway(
                 fixture.dependencies,
-                GatewayHttpConfig(sseHeartbeatMillis = 10),
+                GatewayHttpConfig(sseHeartbeatMillis = 100),
             )
         }
         val createdResponse = client.post("/v3/streams") {
@@ -530,14 +530,20 @@ class GatewayKtorRoutesTest {
             )
             val channel = response.bodyAsChannel()
             val lines = mutableListOf<String>()
-            withTimeout(2_000) {
-                while (lines.none { it == ": heartbeat" }) {
-                    lines += channel.readLine() ?: error("SSE ended before heartbeat")
+            withTimeout(5_000) {
+                while (
+                    lines.none { it == "id: 0" } ||
+                    lines.none { it == ": heartbeat" }
+                ) {
+                    lines += channel.readLine() ?: error("SSE ended before initial event and heartbeat")
                 }
             }
-            assertTrue(lines.any { it == "id: 0" })
-            assertTrue(lines.any { it == ": heartbeat" })
-            assertTrue(lines.none { it.startsWith("id: 1") })
+            assertTrue(lines.any { it == "id: 0" }, "Missing initial SSE event in $lines")
+            assertTrue(lines.any { it == ": heartbeat" }, "Missing SSE heartbeat in $lines")
+            assertTrue(
+                lines.none { it.startsWith("id: 1") },
+                "Heartbeat consumed a semantic sequence in $lines",
+            )
         }
 
         fixture.close()
