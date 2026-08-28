@@ -92,7 +92,7 @@ build/reports/supply-chain/third-party-licenses.tsv
 
 The SBOM is a production dependency inventory, not a claim that a remote advisory scan ran or that
 the release is vulnerability-free. The nightly workflow scans the normalized SBOM with the pinned
-OSV-Scanner version and retains its own report.
+OSV-Scanner version, lists findings in the job log and summary, and retains the full JSON report.
 
 Build and inspect the release bundle:
 

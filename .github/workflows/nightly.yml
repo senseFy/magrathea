@@ -56,10 +56,58 @@ jobs:
       - name: Scan the production SBOM against current OSV advisories
         run: |
           mkdir -p build/reports/osv
+          set +e
           /tmp/osv-scanner scan source \
             --lockfile build/reports/supply-chain/magrathea-sbom.cdx.json \
             --format json \
             --output-file build/reports/osv/osv-results.json
+          scan_status=$?
+          set -e
+
+          if [ ! -s build/reports/osv/osv-results.json ]; then
+            echo "::error title=OSV advisory scan::Scanner produced no JSON report."
+            exit 1
+          fi
+
+          finding_count=$(jq '[.results[]?.packages[]?.vulnerabilities[]?] | length' build/reports/osv/osv-results.json)
+          {
+            echo "## OSV advisory scan"
+            echo
+            if [ "$finding_count" -eq 0 ]; then
+              echo "No known vulnerabilities found in the production SBOM."
+            else
+              echo "Found $finding_count known vulnerabilities:"
+              echo
+              echo "| Severity | Package | Advisory | Summary |"
+              echo "| --- | --- | --- | --- |"
+              jq -r '
+                .results[]?.packages[]? |
+                .package as $package |
+                .vulnerabilities[]? |
+                "| \(.database_specific.severity // "UNKNOWN") | `\($package.name)@\($package.version)` | [\(.id)](https://osv.dev/vulnerability/\(.id)) | \((.summary // "") | gsub("[|\\r\\n]"; " ")) |"
+              ' build/reports/osv/osv-results.json
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$finding_count" -gt 0 ]; then
+            echo "::error title=OSV advisory scan::$finding_count known vulnerabilities found in the production SBOM; see the job summary."
+            jq -r '
+              .results[]?.packages[]? |
+              .package as $package |
+              .vulnerabilities[]? |
+              "OSV_FINDING severity=\(.database_specific.severity // "UNKNOWN") package=\($package.name)@\($package.version) advisory=\(.id) summary=\((.summary // "") | gsub("[\\r\\n]"; " "))"
+            ' build/reports/osv/osv-results.json
+          elif [ "$scan_status" -ne 0 ]; then
+            echo "::error title=OSV advisory scan::Scanner failed with exit status $scan_status."
+            echo "OSV_SCAN_ERROR status=$scan_status"
+          else
+            echo "OSV_SCAN_OK findings=0"
+          fi
+
+          if [ "$finding_count" -gt 0 ]; then
+            exit 1
+          fi
+          exit "$scan_status"
 
       - name: Retain dated vulnerability evidence
         if: always()

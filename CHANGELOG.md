@@ -21,6 +21,11 @@ Notable changes to Magrathea are documented here. The project follows
 - Debug diagnostics are removed from `AgentEvent`; hosts receive them only through the dedicated
   recorder port.
 
+### Security
+
+- The Web artifact pins patched `ws` and Webpack releases for known advisory fixes, and Nightly
+  failures now list affected packages and advisories directly in the job log and summary.
+
 ## 0.1.0-alpha.6 — 2026-08-24
 
 ### Added

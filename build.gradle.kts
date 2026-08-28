@@ -16,6 +16,9 @@ import org.cyclonedx.gradle.CyclonedxDirectTask
 import org.cyclonedx.model.License
 import org.cyclonedx.model.LicenseChoice
 import org.cyclonedx.parsers.JsonParser
+import org.jetbrains.kotlin.gradle.targets.js.nodejs.NodeJsRootExtension
+import org.jetbrains.kotlin.gradle.targets.js.yarn.YarnRootExtension
+import org.jetbrains.kotlin.gradle.targets.wasm.yarn.WasmYarnRootExtension
 
 plugins {
     alias(libs.plugins.androidKotlinMultiplatformLibrary) apply false
@@ -29,6 +32,17 @@ plugins {
     alias(libs.plugins.androidxRoom) apply false
     `maven-publish`
 }
+
+val secureWebpackVersion = "5.104.1"
+val secureWsVersion = "8.21.0"
+
+YarnRootExtension[rootProject].apply {
+    resolution("ws", secureWsVersion)
+}
+WasmYarnRootExtension[rootProject].apply {
+    resolution("ws", secureWsVersion)
+}
+rootProject.extensions.getByType<NodeJsRootExtension>().versions.webpack.version = secureWebpackVersion
 
 apiValidation {
     ignoredProjects.addAll(
@@ -962,15 +976,34 @@ val generateWebThirdPartyNotices = webClientProject.tasks.register("generateWebT
 
         val generatedPackage = groovy.json.JsonSlurper().parse(generatedWebClientPackageJson.get().asFile) as? Map<*, *>
             ?: error("Generated Web client package metadata must be a JSON object")
-        val generatedRuntimeDependencies = (generatedPackage["dependencies"] as? Map<*, *>).orEmpty()
-            .map { (name, version) -> name as String to version as String }
-            .toMap()
+        val generatedRuntimeDependencyNames = (generatedPackage["dependencies"] as? Map<*, *>).orEmpty()
+            .keys
+            .map { name -> name as String }
+            .toSet()
         val reviewedRuntimeDependencies = reviewedNpmPackages.values
             .filter { component -> component["role"] == "runtimeDependency" }
             .associate { component -> component["name"] as String to component["version"] as String }
-        check(generatedRuntimeDependencies == reviewedRuntimeDependencies) {
-            "Generated Web npm runtime dependencies differ from the license ledger; " +
-                "actual=$generatedRuntimeDependencies reviewed=$reviewedRuntimeDependencies"
+        check(generatedRuntimeDependencyNames == reviewedRuntimeDependencies.keys) {
+            "Generated Web npm runtime dependency names differ from the license ledger; " +
+                "actual=$generatedRuntimeDependencyNames reviewed=${reviewedRuntimeDependencies.keys}"
+        }
+
+        fun resolvedNpmVersion(name: String): String {
+            val packageFile = kotlinJsNodeModulesDirectory.get().asFile.resolve(name).resolve("package.json")
+            check(packageFile.isFile) { "Resolved Web npm package metadata is missing: $name" }
+            val metadata = groovy.json.JsonSlurper().parse(packageFile) as? Map<*, *>
+                ?: error("Resolved Web npm package metadata must be a JSON object: $name")
+            check(metadata["name"] == name) { "Resolved Web npm package has the wrong name: $name" }
+            return metadata["version"] as? String
+                ?: error("Resolved Web npm package has no version: $name")
+        }
+
+        reviewedRuntimeDependencies.forEach { (name, version) ->
+            val resolvedVersion = resolvedNpmVersion(name)
+            check(resolvedVersion == version) {
+                "Resolved Web npm runtime dependency $name differs from the license ledger: " +
+                    "actual=$resolvedVersion reviewed=$version"
+            }
         }
         val generatedDevelopmentDependencies = (generatedPackage["devDependencies"] as? Map<*, *>).orEmpty()
             .map { (name, version) -> name as String to version as String }
@@ -978,9 +1011,13 @@ val generateWebThirdPartyNotices = webClientProject.tasks.register("generateWebT
         reviewedNpmPackages.values.filter { component -> component["role"] == "bundleGenerator" }.forEach { component ->
             val name = component["name"] as String
             val version = component["version"] as String
-            check(generatedDevelopmentDependencies[name] == version) {
-                "Generated Web bundle tool $name differs from the license ledger: " +
-                    "actual=${generatedDevelopmentDependencies[name]} reviewed=$version"
+            check(name in generatedDevelopmentDependencies) {
+                "Generated Web bundle tool is missing: $name"
+            }
+            val resolvedVersion = resolvedNpmVersion(name)
+            check(resolvedVersion == version) {
+                "Resolved Web bundle tool $name differs from the license ledger: " +
+                    "actual=$resolvedVersion reviewed=$version"
             }
         }
 
