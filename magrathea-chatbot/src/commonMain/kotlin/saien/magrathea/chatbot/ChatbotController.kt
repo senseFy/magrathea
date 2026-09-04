@@ -1,50 +1,61 @@
 package saien.magrathea.chatbot
 
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import saien.magrathea.core.AgentEvent
-import saien.magrathea.core.AgentFailureCode
 import saien.magrathea.core.AgentMessage
-import saien.magrathea.core.AgentRecoveryDisposition
 import saien.magrathea.core.AgentRequest
-import saien.magrathea.core.AgentRunner
-import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.MessageRole
+import saien.magrathea.runtime.AgentSessionLease
+import saien.magrathea.runtime.AgentSessionPhase
+import saien.magrathea.runtime.AgentSessionRuntimeSnapshot
 
+/** Chatbot projection and command adapter over one manager-owned Agent session lease. */
 internal class ChatbotController(
-    private val runner: AgentRunner,
+    private val lease: AgentSessionLease,
     private val requestFactory: ChatbotRequestFactory,
     initialConfiguration: ChatbotSessionConfiguration,
     private val reducer: ChatbotEventReducer = ChatbotEventReducer(),
-    scope: CoroutineScope? = null,
+    scope: CoroutineScope,
 ) {
-    private val ownsScope = scope == null
-    private val controllerScope = scope ?: CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val commandMutex = Mutex()
     private val stateMutex = Mutex()
-    private val conversation = mutableListOf<AgentMessage>()
-    private var activeRun: ActiveRun? = null
-    private var sessionId: AgentSessionId? = null
-    private var configuration: ChatbotSessionConfiguration = initialConfiguration
-    private var nextGeneration: Long = 0
-    private var closed: Boolean = false
-    private val mutableState = MutableStateFlow(ChatbotSnapshot(configuration = initialConfiguration))
+    private var closed = false
+    private val mutableState = MutableStateFlow(
+        projectRuntime(
+            runtime = lease.state.value,
+            previous = ChatbotSnapshot(configuration = initialConfiguration),
+            fallbackConfiguration = initialConfiguration,
+            reducer = reducer,
+        ),
+    )
+    private val projectionJob = scope.launch {
+        lease.state.collect { runtime ->
+            stateMutex.withLock {
+                if (!closed) {
+                    mutableState.value = projectRuntime(
+                        runtime = runtime,
+                        previous = mutableState.value,
+                        fallbackConfiguration = mutableState.value.configuration,
+                        reducer = reducer,
+                    )
+                }
+            }
+        }
+    }
 
     val state: StateFlow<ChatbotSnapshot> = mutableState.asStateFlow()
+    val sessionId: String
+        get() = lease.sessionId.value
 
     suspend fun sendMessage(
         text: String,
@@ -55,407 +66,125 @@ internal class ChatbotController(
         require(text.isNotBlank() || attachments.isNotEmpty()) {
             "A chatbot message requires text or at least one attachment"
         }
-        val stoppedActiveRun = stopActiveRun()
-        val currentSessionId = sessionId ?: AgentSessionId.create()
-        val currentConversation = stateMutex.withLock { conversation.toList() }
-        val updatedConversation = currentConversation + userChatbotMessage(text, attachments, options.metadata)
-        val request = try {
-            buildRequest(currentSessionId, configuration, updatedConversation)
-        } catch (failure: Throwable) {
-            if (stoppedActiveRun) markCancelled()
-            throw failure
-        }
-        stateMutex.withLock {
-            sessionId = currentSessionId
-            conversation.replaceWith(updatedConversation)
-            val messages = updatedConversation.map { it.toChatbotMessageSnapshot() }
-            val previousActivities = if (stoppedActiveRun) {
-                mutableState.value.toolActivities.withUnresolvedToolActivities(
-                    ChatbotToolActivityStatus.CANCELLED,
-                )
-            } else {
-                mutableState.value.toolActivities
-            }
-            mutableState.value = mutableState.value.copy(
-                sessionId = currentSessionId.value,
-                messages = messages,
-                status = ChatbotStatus.RUNNING,
-                failure = null,
-                interruption = null,
-                toolActivities = reconcileToolActivities(messages, previousActivities),
-            )
-        }
-        startRun(request)
+        stopPendingExecution()
+        val messages = lease.state.value.authoritativeMessages() +
+            userChatbotMessage(text, attachments, options.metadata)
+        lease.start(buildRequest(messages))
+        syncFromLease()
     }
 
     suspend fun regenerate(messageId: String) = commandMutex.withLock {
         ensureOpen()
-        val currentSessionId = sessionId ?: AgentSessionId.create()
-        val updatedConversation = stateMutex.withLock {
-            val index = conversation.indexOfFirst { it.id == messageId }
-            require(index >= 0) { "Message $messageId not found" }
-            require(conversation[index].role == MessageRole.USER) {
-                "Regenerate requires a user message"
-            }
-            conversation.take(index + 1)
+        val currentMessages = lease.state.value.authoritativeMessages()
+        val index = currentMessages.indexOfFirst { it.id == messageId }
+        require(index >= 0) { "Message $messageId not found" }
+        require(currentMessages[index].role == MessageRole.USER) {
+            "Regenerate requires a user message"
         }
-        val stoppedActiveRun = stopActiveRun()
-        val request = try {
-            buildRequest(currentSessionId, configuration, updatedConversation)
-        } catch (failure: Throwable) {
-            if (stoppedActiveRun) markCancelled()
-            throw failure
-        }
-        stateMutex.withLock {
-            sessionId = currentSessionId
-            conversation.replaceWith(updatedConversation)
-            val messages = updatedConversation.map { it.toChatbotMessageSnapshot() }
-            val previousActivities = if (stoppedActiveRun) {
-                mutableState.value.toolActivities.withUnresolvedToolActivities(
-                    ChatbotToolActivityStatus.CANCELLED,
-                )
-            } else {
-                mutableState.value.toolActivities
-            }
-            mutableState.value = mutableState.value.copy(
-                sessionId = currentSessionId.value,
-                messages = messages,
-                status = ChatbotStatus.RUNNING,
-                failure = null,
-                interruption = null,
-                toolActivities = reconcileToolActivities(messages, previousActivities),
-            )
-        }
-        startRun(request)
+        val regeneratedMessages = currentMessages.take(index + 1)
+        stopPendingExecution()
+        lease.start(buildRequest(regeneratedMessages))
+        syncFromLease()
     }
 
-    suspend fun resume(sessionId: AgentSessionId) = commandMutex.withLock {
+    suspend fun resume() = commandMutex.withLock {
         ensureOpen()
-        stateMutex.withLock {
-            check(activeRun == null) { "Cannot resume while a run is active" }
-            this@ChatbotController.sessionId = sessionId
-            mutableState.value = mutableState.value.copy(
-                sessionId = sessionId.value,
-                status = ChatbotStatus.RUNNING,
-                failure = null,
-                interruption = null,
-            )
-        }
-        startOperation(sessionId) { runner.resume(sessionId) }
+        lease.resume()
+        syncFromLease()
     }
 
-    suspend fun updateConfiguration(
-        configuration: ChatbotSessionConfiguration,
-        persistRequest: suspend (AgentSessionId, AgentRequest) -> Unit,
-    ): Boolean = commandMutex.withLock {
-        ensureOpen()
-        val current = stateMutex.withLock {
-            if (this.configuration == configuration) return@withLock ConfigurationState.Unchanged
-            if (mutableState.value.hasPendingRun) return@withLock ConfigurationState.Busy
-            ConfigurationState.Ready(
-                sessionId = sessionId,
-                messages = conversation.toList(),
-            )
-        }
-        when (current) {
-            ConfigurationState.Unchanged -> return@withLock true
-            ConfigurationState.Busy -> return@withLock false
-            is ConfigurationState.Ready -> {
-                current.sessionId?.let { id ->
-                    persistRequest(id, buildRequest(id, configuration, current.messages))
-                }
-                stateMutex.withLock {
-                    this.configuration = configuration
-                    mutableState.value = mutableState.value.copy(configuration = configuration)
-                }
-                true
+    suspend fun updateConfiguration(configuration: ChatbotSessionConfiguration): Boolean =
+        commandMutex.withLock {
+            ensureOpen()
+            val runtime = lease.state.value
+            val currentConfiguration = runtime.request?.toChatbotSessionConfiguration()
+                ?: stateMutex.withLock { mutableState.value.configuration }
+            if (currentConfiguration == configuration) return@withLock true
+            if (runtime.phase.hasPendingExecution) return@withLock false
+
+            runtime.request?.let {
+                lease.replaceIdleRequest(buildRequest(runtime.authoritativeMessages(), configuration))
             }
+            stateMutex.withLock {
+                mutableState.value = mutableState.value.copy(configuration = configuration)
+            }
+            syncFromLease(fallbackConfiguration = configuration)
+            true
         }
-    }
 
     suspend fun cancel() = commandMutex.withLock {
         if (closed) return@withLock
-        val stopped = stopActiveRun()
-        val persistedSessionId = stateMutex.withLock {
-            sessionId?.takeIf {
-                mutableState.value.status == ChatbotStatus.INTERRUPTED ||
-                    mutableState.value.status == ChatbotStatus.RECOVERY_BLOCKED
-            }
-        }
-        if (!stopped && persistedSessionId != null) {
-            runner.cancel(persistedSessionId)
-        }
-        if (stopped || persistedSessionId != null) {
-            stateMutex.withLock {
-                mutableState.value = mutableState.value.copy(
-                    status = ChatbotStatus.CANCELLED,
-                    failure = null,
-                    interruption = null,
-                    toolActivities = mutableState.value.toolActivities.withUnresolvedToolActivities(
-                        ChatbotToolActivityStatus.CANCELLED,
-                    ),
-                )
-            }
+        if (lease.state.value.phase.hasPendingExecution) {
+            lease.cancel()
+            syncFromLease()
         }
     }
 
     suspend fun interrupt() = commandMutex.withLock {
         if (closed) return@withLock
-        interruptActiveRun()
-    }
-
-    suspend fun loadHistory(
-        messages: List<AgentMessage>,
-        sessionId: AgentSessionId? = null,
-        configuration: ChatbotSessionConfiguration = this.configuration,
-        usage: ChatbotUsage = ChatbotUsage(),
-        latestRequestUsage: ChatbotUsage = ChatbotUsage(),
-        contextManagement: ChatbotContextManagementSnapshot =
-            ChatbotContextManagementSnapshot(),
-        status: ChatbotStatus = ChatbotStatus.IDLE,
-        interruption: ChatbotInterruption? = null,
-    ) = commandMutex.withLock {
-        ensureOpen()
-        stopActiveRun()
-        stateMutex.withLock {
-            conversation.replaceWith(messages)
-            this@ChatbotController.sessionId = sessionId
-            this@ChatbotController.configuration = configuration
-            val messageSnapshots = messages.map { it.toChatbotMessageSnapshot() }
-            mutableState.value = ChatbotSnapshot(
-                configuration = configuration,
-                sessionId = sessionId?.value,
-                messages = messageSnapshots,
-                status = status,
-                interruption = interruption,
-                usage = usage,
-                latestRequestUsage = latestRequestUsage,
-                contextManagement = contextManagement,
-                toolActivities = reconcileToolActivities(
-                    messages = messageSnapshots,
-                    terminalUnresolvedStatus = ChatbotToolActivityStatus.INTERRUPTED,
-                ),
-            )
+        if (lease.state.value.phase == AgentSessionPhase.ACTIVE) {
+            lease.interrupt()
+            syncFromLease()
         }
     }
 
     suspend fun close() {
-        var cancelOwnedScope = false
-        commandMutex.withLock {
-            if (closed) return@withLock
-            interruptActiveRun()
-            closed = true
-            cancelOwnedScope = ownsScope
+        val shouldClose = commandMutex.withLock {
+            if (closed) false else {
+                closed = true
+                true
+            }
         }
-        if (cancelOwnedScope) controllerScope.cancel()
+        if (!shouldClose) return
+        withContext(NonCancellable) {
+            projectionJob.cancelAndJoin()
+            lease.release()
+        }
     }
 
-    private suspend fun startRun(request: AgentRequest) {
-        startOperation(request.sessionId) { runner.run(request) }
+    private suspend fun stopPendingExecution() {
+        if (lease.state.value.phase.hasPendingExecution) {
+            lease.cancel()
+            syncFromLease()
+        }
     }
 
-    private fun buildRequest(
-        sessionId: AgentSessionId,
-        configuration: ChatbotSessionConfiguration,
+    private suspend fun buildRequest(
         messages: List<AgentMessage>,
+        configuration: ChatbotSessionConfiguration? = null,
     ): AgentRequest {
+        val selectedConfiguration = configuration
+            ?: lease.state.value.request?.toChatbotSessionConfiguration()
+            ?: stateMutex.withLock { mutableState.value.configuration }
         val request = requestFactory.create(
             ChatbotRequestContext(
-                sessionId = sessionId,
-                configuration = configuration,
+                sessionId = lease.sessionId,
+                configuration = selectedConfiguration,
                 messages = messages,
             ),
         )
         return request.copy(
-            sessionId = sessionId,
+            sessionId = lease.sessionId,
             messages = messages,
-            model = configuration.model,
-            reasoningPreference = configuration.reasoningPreference,
+            model = selectedConfiguration.model,
+            reasoningPreference = selectedConfiguration.reasoningPreference,
             engine = request.engine.copy(
                 provider = request.engine.provider.copy(
-                    credentialRef = configuration.credentialRef,
+                    credentialRef = selectedConfiguration.credentialRef,
                 ),
             ),
         )
     }
 
-    private suspend fun startOperation(
-        sessionId: AgentSessionId,
-        source: suspend () -> Flow<AgentEvent>,
+    private suspend fun syncFromLease(
+        fallbackConfiguration: ChatbotSessionConfiguration? = null,
     ) {
-        nextGeneration += 1
-        val generation = nextGeneration
-        val ready = CompletableDeferred<Unit>()
-        val job = controllerScope.launch(start = CoroutineStart.LAZY) {
-            var terminalSeen = false
-            var cancelled = false
-            try {
-                source().collect { event ->
-                    val applied = applyEvent(event, sessionId, generation)
-                    ready.complete(Unit)
-                    if (applied && event.isTerminal()) {
-                        terminalSeen = true
-                        throw TerminalEventCollected()
-                    }
-                }
-            } catch (_: TerminalEventCollected) {
-                // A terminal AgentEvent owns completion; stop collecting upstream immediately.
-            } catch (error: CancellationException) {
-                cancelled = true
-                throw error
-            } catch (_: Throwable) {
-                applyFailure(sessionId, generation)
-                terminalSeen = true
-            } finally {
-                if (!cancelled && !terminalSeen) {
-                    applyFailure(sessionId, generation)
-                }
-                clearActiveRun(generation)
-                ready.complete(Unit)
-            }
-        }
         stateMutex.withLock {
-            activeRun = ActiveRun(sessionId, generation, job, ready)
-        }
-        if (!job.start()) {
-            applyFailure(sessionId, generation)
-            clearActiveRun(generation)
-            ready.complete(Unit)
-        }
-    }
-
-    private suspend fun stopActiveRun(): Boolean {
-        val active = claimActiveRun() ?: return false
-        try {
-            runner.cancel(active.sessionId)
-        } finally {
-            active.job.cancelAndJoin()
-        }
-        return true
-    }
-
-    private suspend fun interruptActiveRun(): Boolean {
-        val active = claimActiveRun() ?: return false
-        val recovery = try {
-            runner.interrupt(active.sessionId)
-        } finally {
-            active.job.cancelAndJoin()
-        }
-        stateMutex.withLock {
-            val recoveredState = recovery.state
-            val recoveredMessages = recoveredState?.messages
-                ?.map { it.toChatbotMessageSnapshot() }
-                ?: mutableState.value.messages
-            if (recoveredState != null) {
-                conversation.replaceWith(recoveredState.messages)
-            }
-            val recoveredSnapshot = mutableState.value.copy(
-                messages = recoveredMessages,
-                usage = recoveredState?.usage?.toChatbotUsage() ?: mutableState.value.usage,
-                latestRequestUsage = recoveredState?.latestRequestUsage?.toChatbotUsage()
-                    ?: mutableState.value.latestRequestUsage,
-                contextManagement = recoveredState?.contextManagement
-                    ?.toChatbotContextManagementSnapshot()
-                    ?: mutableState.value.contextManagement,
-                toolActivities = reconcileToolActivities(
-                    messages = recoveredMessages,
-                    previous = mutableState.value.toolActivities,
-                ),
-            )
-            mutableState.value = when (recovery.disposition) {
-                AgentRecoveryDisposition.BLOCKED -> recoveredSnapshot.copy(
-                    status = ChatbotStatus.RECOVERY_BLOCKED,
-                    failure = ChatbotFailure.RECOVERY_BLOCKED,
-                    interruption = recovery.interruption?.toChatbotInterruption(),
-                    toolActivities = reconcileToolActivities(
-                        messages = recoveredMessages,
-                        previous = mutableState.value.toolActivities,
-                        terminalUnresolvedStatus = ChatbotToolActivityStatus.INTERRUPTED,
-                    ),
-                )
-                AgentRecoveryDisposition.RESUMABLE -> recoveredSnapshot.copy(
-                    status = ChatbotStatus.INTERRUPTED,
-                    failure = null,
-                    interruption = recovery.interruption?.toChatbotInterruption(),
-                    toolActivities = reconcileToolActivities(
-                        messages = recoveredMessages,
-                        previous = mutableState.value.toolActivities,
-                        terminalUnresolvedStatus = ChatbotToolActivityStatus.INTERRUPTED,
-                    ),
-                )
-                AgentRecoveryDisposition.TERMINAL -> recoveredSnapshot.copy(
-                    status = recovery.status?.toChatbotStatus() ?: mutableState.value.status,
-                    failure = null,
-                    interruption = null,
-                )
-                AgentRecoveryDisposition.NOT_FOUND,
-                AgentRecoveryDisposition.ACTIVE,
-                -> recoveredSnapshot.copy(
-                    status = ChatbotStatus.RECOVERY_BLOCKED,
-                    failure = ChatbotFailure.RECOVERY_BLOCKED,
-                    toolActivities = reconcileToolActivities(
-                        messages = recoveredMessages,
-                        previous = mutableState.value.toolActivities,
-                        terminalUnresolvedStatus = ChatbotToolActivityStatus.INTERRUPTED,
-                    ),
-                )
-            }
-        }
-        return true
-    }
-
-    private suspend fun claimActiveRun(): ActiveRun? {
-        val observed = stateMutex.withLock { activeRun } ?: return null
-        observed.ready.await()
-        return stateMutex.withLock {
-            activeRun
-                ?.takeIf { current ->
-                    current.generation == observed.generation && mutableState.value.isRunning
-                }
-                ?.also { activeRun = null }
-        }
-    }
-
-    private suspend fun applyEvent(
-        event: AgentEvent,
-        expectedSessionId: AgentSessionId,
-        generation: Long,
-    ): Boolean = stateMutex.withLock {
-        val active = activeRun
-        if (active?.generation != generation || active.sessionId != expectedSessionId) return@withLock false
-        if (event.sessionId() != expectedSessionId) return@withLock false
-        mutableState.value = reducer.reduce(mutableState.value, event)
-        when (event) {
-            is AgentEvent.CheckpointSaved -> conversation.replaceWith(event.checkpoint.state.messages)
-            is AgentEvent.Completed -> conversation.replaceWith(event.state.messages)
-            is AgentEvent.Interrupted -> conversation.replaceWith(event.state.messages)
-            is AgentEvent.MessageEmitted -> conversation.replaceOrAppend(event.message)
-            else -> Unit
-        }
-        true
-    }
-
-    private suspend fun applyFailure(sessionId: AgentSessionId, generation: Long) {
-        applyEvent(
-            AgentEvent.Failed(sessionId, AgentFailureCode.INTERNAL),
-            sessionId,
-            generation,
-        )
-    }
-
-    private suspend fun clearActiveRun(generation: Long) {
-        stateMutex.withLock {
-            if (activeRun?.generation == generation) activeRun = null
-        }
-    }
-
-    private suspend fun markCancelled() {
-        stateMutex.withLock {
-            mutableState.value = mutableState.value.copy(
-                status = ChatbotStatus.CANCELLED,
-                toolActivities = mutableState.value.toolActivities.withUnresolvedToolActivities(
-                    ChatbotToolActivityStatus.CANCELLED,
-                ),
+            mutableState.value = projectRuntime(
+                runtime = lease.state.value,
+                previous = mutableState.value,
+                fallbackConfiguration = fallbackConfiguration ?: mutableState.value.configuration,
+                reducer = reducer,
             )
         }
     }
@@ -463,60 +192,88 @@ internal class ChatbotController(
     private fun ensureOpen() {
         check(!closed) { "ChatbotController is closed" }
     }
+}
 
-    private data class ActiveRun(
-        val sessionId: AgentSessionId,
-        val generation: Long,
-        val job: Job,
-        val ready: CompletableDeferred<Unit>,
-    )
-
-    private sealed interface ConfigurationState {
-        data object Unchanged : ConfigurationState
-        data object Busy : ConfigurationState
-        data class Ready(
-            val sessionId: AgentSessionId?,
-            val messages: List<AgentMessage>,
-        ) : ConfigurationState
+private fun projectRuntime(
+    runtime: AgentSessionRuntimeSnapshot,
+    previous: ChatbotSnapshot,
+    fallbackConfiguration: ChatbotSessionConfiguration,
+    reducer: ChatbotEventReducer,
+): ChatbotSnapshot {
+    val eventProjection = runtime.lastEvent?.let { reducer.reduce(previous, it) } ?: previous
+    val state = runtime.state
+    val runtimeFailure = runtime.failure
+    val messages = runtime.authoritativeMessages().map { it.toChatbotMessageSnapshot() }
+    val status = runtime.toChatbotStatus(eventProjection.status)
+    var toolActivities = reconcileToolActivities(messages, eventProjection.toolActivities)
+    state?.pendingToolCalls?.forEach { toolCall ->
+        toolActivities = toolActivities.withToolRequested(toolCall)
+    }
+    (runtime.lastEvent as? AgentEvent.ToolCompleted)?.let { event ->
+        toolActivities = toolActivities.withToolCompleted(event.result)
+    }
+    val terminalToolStatus = when (status) {
+        ChatbotStatus.CANCELLED -> ChatbotToolActivityStatus.CANCELLED
+        ChatbotStatus.COMPLETED,
+        ChatbotStatus.FAILED,
+        ChatbotStatus.INTERRUPTED,
+        ChatbotStatus.RECOVERY_BLOCKED,
+        -> ChatbotToolActivityStatus.INTERRUPTED
+        ChatbotStatus.IDLE,
+        ChatbotStatus.RUNNING,
+        ChatbotStatus.WAITING_FOR_TOOL,
+        -> null
+    }
+    if (terminalToolStatus != null) {
+        toolActivities = toolActivities.withUnresolvedToolActivities(terminalToolStatus)
     }
 
-    private class TerminalEventCollected : Throwable()
+    return eventProjection.copy(
+        configuration = runtime.request?.toChatbotSessionConfiguration() ?: fallbackConfiguration,
+        sessionId = if (runtime.phase == AgentSessionPhase.NEW) null else runtime.sessionId.value,
+        messages = messages,
+        status = status,
+        failure = when {
+            runtime.phase == AgentSessionPhase.RECOVERY_BLOCKED -> ChatbotFailure.RECOVERY_BLOCKED
+            runtimeFailure != null -> runtimeFailure.toChatbotFailure()
+            status == ChatbotStatus.FAILED -> eventProjection.failure
+            else -> null
+        },
+        interruption = runtime.recovery?.interruption?.toChatbotInterruption()
+            ?: if (status == ChatbotStatus.INTERRUPTED) eventProjection.interruption else null,
+        usage = state?.usage?.toChatbotUsage() ?: eventProjection.usage,
+        latestRequestUsage = state?.latestRequestUsage?.toChatbotUsage()
+            ?: eventProjection.latestRequestUsage,
+        contextManagement = state?.contextManagement?.toChatbotContextManagementSnapshot()
+            ?: eventProjection.contextManagement,
+        toolActivities = toolActivities,
+    )
 }
 
-private val ChatbotSnapshot.hasPendingRun: Boolean
-    get() = isRunning ||
-        status == ChatbotStatus.INTERRUPTED ||
-        status == ChatbotStatus.RECOVERY_BLOCKED
+private fun AgentSessionRuntimeSnapshot.toChatbotStatus(fallback: ChatbotStatus): ChatbotStatus =
+    when (phase) {
+        AgentSessionPhase.NEW -> ChatbotStatus.IDLE
+        AgentSessionPhase.RESUMABLE -> ChatbotStatus.INTERRUPTED
+        AgentSessionPhase.RECOVERY_BLOCKED -> ChatbotStatus.RECOVERY_BLOCKED
+        AgentSessionPhase.ACTIVE,
+        AgentSessionPhase.INACTIVE,
+        AgentSessionPhase.TERMINAL,
+        AgentSessionPhase.CLOSED,
+        AgentSessionPhase.DELETED,
+        -> state?.status?.toChatbotStatus() ?: fallback
+    }
 
-private fun MutableList<AgentMessage>.replaceWith(messages: List<AgentMessage>) {
-    clear()
-    addAll(messages)
-}
+private val AgentSessionPhase.hasPendingExecution: Boolean
+    get() = this == AgentSessionPhase.ACTIVE ||
+        this == AgentSessionPhase.RESUMABLE ||
+        this == AgentSessionPhase.RECOVERY_BLOCKED
 
-private fun MutableList<AgentMessage>.replaceOrAppend(message: AgentMessage) {
-    val index = indexOfFirst { it.id == message.id }
-    if (index >= 0) this[index] = message else add(message)
-}
+private fun AgentSessionRuntimeSnapshot.authoritativeMessages(): List<AgentMessage> =
+    state?.messages ?: request?.messages.orEmpty()
 
-private fun AgentEvent.sessionId(): AgentSessionId = when (this) {
-    is AgentEvent.Started -> sessionId
-    is AgentEvent.TurnStarted -> sessionId
-    is AgentEvent.ContextTransformed -> sessionId
-    is AgentEvent.MessageEmitted -> sessionId
-    is AgentEvent.ToolRequested -> sessionId
-    is AgentEvent.ToolCompleted -> sessionId
-    is AgentEvent.RetryScheduled -> sessionId
-    is AgentEvent.CheckpointSaved -> checkpoint.sessionId
-    is AgentEvent.Completed -> sessionId
-    is AgentEvent.Failed -> sessionId
-    is AgentEvent.Cancelled -> sessionId
-    is AgentEvent.Interrupted -> sessionId
-    is AgentEvent.RecoveryBlocked -> sessionId
-}
-
-private fun AgentEvent.isTerminal(): Boolean =
-    this is AgentEvent.Completed ||
-        this is AgentEvent.Failed ||
-        this is AgentEvent.Cancelled ||
-        this is AgentEvent.Interrupted ||
-        this is AgentEvent.RecoveryBlocked
+internal fun AgentRequest.toChatbotSessionConfiguration(): ChatbotSessionConfiguration =
+    ChatbotSessionConfiguration(
+        model = model,
+        credentialRef = engine.provider.credentialRef,
+        reasoningPreference = reasoningPreference,
+    )

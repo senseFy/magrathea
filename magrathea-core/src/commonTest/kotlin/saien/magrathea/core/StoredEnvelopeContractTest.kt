@@ -30,7 +30,7 @@ class StoredEnvelopeContractTest {
         val encoded = sessionCodec.encode(expected)
         val envelope = json.parseToJsonElement(encoded).jsonObject
 
-        assertEquals(STORAGE_SCHEMA_V6_VERSION, CURRENT_STORAGE_SCHEMA_VERSION)
+        assertEquals(STORAGE_SCHEMA_V7_VERSION, CURRENT_STORAGE_SCHEMA_VERSION)
         assertEquals(CURRENT_STORAGE_SCHEMA_VERSION, envelope.getValue("schemaVersion").jsonPrimitive.content.toInt())
         assertEquals("test-sdk", envelope.getValue("sdkVersion").jsonPrimitive.content)
         assertEquals(expected, sessionCodec.decode(encoded))
@@ -38,6 +38,63 @@ class StoredEnvelopeContractTest {
         assertEquals(expected, result.value)
         assertEquals(CURRENT_STORAGE_SCHEMA_VERSION, result.sourceSchemaVersion)
         assertNull(result.rewritePayload)
+    }
+
+    @Test
+    fun sessionCodec_roundTripsModelOutputCapability() {
+        val original = snapshot()
+        val expected = original.copy(
+            request = original.request.copy(
+                model = original.request.model.copy(maxOutputTokens = 16_384),
+            ),
+        )
+
+        assertEquals(expected, sessionCodec.decode(sessionCodec.encode(expected)))
+    }
+
+    @Test
+    fun schemaV6MigrationAddsUnknownCapabilityToRequestAndCompactionModels() {
+        val original = snapshot()
+        val withCompaction = original.copy(
+            state = original.state.copy(
+                contextManagement = ContextManagementState(
+                    compaction = ContextCompaction(
+                        summary = "Earlier context",
+                        firstKeptMessageId = original.state.messages.single().id,
+                        summarizedThroughMessageId = "older-message",
+                        sourcePrefixDigest = "prefix-digest",
+                        tokensBefore = 100,
+                        generation = 1,
+                        summaryModel = original.request.model,
+                        createdAtEpochMs = 1L,
+                    ),
+                ),
+            ),
+        )
+        val current = sessionCodec.encode(withCompaction)
+        val v6 = current
+            .replaceFirst("\"schemaVersion\":7", "\"schemaVersion\":6")
+            .replace(",\"maxOutputTokens\":null", "")
+
+        assertEquals(2, current.split("\"maxOutputTokens\":null").size - 1)
+        val migrated = sessionCodec.decodeResult(v6)
+
+        assertEquals(6, migrated.sourceSchemaVersion)
+        assertEquals(withCompaction, migrated.value)
+        assertTrue(requireNotNull(migrated.rewritePayload).contains("\"maxOutputTokens\":null"))
+    }
+
+    @Test
+    fun schemaV6MigrationRejectsAPrematureSchemaV7TargetField() {
+        val mislabeled = sessionCodec.encode(snapshot())
+            .replaceFirst("\"schemaVersion\":7", "\"schemaVersion\":6")
+
+        val failure = assertFailsWith<StoredEnvelopeDecodeException> {
+            sessionCodec.decode(mislabeled)
+        }
+
+        assertEquals(StoredEnvelopeDecodeFailure.MIGRATION_FAILED, failure.failure)
+        assertEquals(6, failure.storedSchemaVersion)
     }
 
     @Test
@@ -188,7 +245,7 @@ class StoredEnvelopeContractTest {
         val encoded = sessionCodec.encode(snapshot())
         val prior = encoded.replaceFirst(
             "\"schemaVersion\":$CURRENT_STORAGE_SCHEMA_VERSION",
-            "\"schemaVersion\":${CURRENT_STORAGE_SCHEMA_VERSION - 1}",
+            "\"schemaVersion\":${MINIMUM_READABLE_STORAGE_SCHEMA_VERSION - 1}",
         )
         val future = encoded
             .replaceFirst(
@@ -203,7 +260,7 @@ class StoredEnvelopeContractTest {
             StoredEnvelopeDecodeFailure.UNSUPPORTED_OLDER_SCHEMA,
             priorFailure.failure,
         )
-        assertEquals(CURRENT_STORAGE_SCHEMA_VERSION - 1, priorFailure.storedSchemaVersion)
+        assertEquals(MINIMUM_READABLE_STORAGE_SCHEMA_VERSION - 1, priorFailure.storedSchemaVersion)
 
         val futureFailure = assertFailsWith<StoredEnvelopeDecodeException> {
             sessionCodec.decode(future)

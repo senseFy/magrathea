@@ -11,8 +11,10 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import saien.magrathea.core.AgentRunId
+import saien.magrathea.core.AgentCheckpointCodec
 import saien.magrathea.core.AgentSessionSnapshotCodec
 import saien.magrathea.core.CURRENT_STORAGE_SCHEMA_VERSION
+import saien.magrathea.core.MINIMUM_READABLE_STORAGE_SCHEMA_VERSION
 import saien.magrathea.core.StoredEnvelopeDecodeFailure
 
 class JvmRoomDatabaseIntegrationTest {
@@ -64,6 +66,53 @@ class JvmRoomDatabaseIntegrationTest {
     }
 
     @Test
+    fun schemaV6SessionAndCheckpointAreRewrittenAfterAValidatedLoad() = runTest {
+        val directory = Files.createTempDirectory("magrathea-room-v6-migration-")
+        val databasePath = directory.resolve("magrathea.db")
+        val session = roomTestSnapshot("v6-migration", updatedAtEpochMs = 88L)
+        val checkpoint = roomTestCheckpoint(session, turn = 2)
+        val v6Session = AgentSessionSnapshotCodec().encode(session).toSchemaV6()
+        val v6Checkpoint = AgentCheckpointCodec().encode(checkpoint).toSchemaV6()
+        val rawDatabase = buildMagratheaRoomDatabase(
+            Room.databaseBuilder<MagratheaDatabase>(name = databasePath.toString()),
+        )
+        rawDatabase.sessionDao().upsert(
+            AgentSessionEntity(session.sessionId.value, v6Session, session.updatedAtEpochMs),
+        )
+        rawDatabase.checkpointDao().upsert(
+            AgentCheckpointEntity(session.sessionId.value, v6Checkpoint, checkpoint.turn),
+        )
+        rawDatabase.close()
+
+        val store = JvmMagratheaRoom.open(
+            databasePath.toString(),
+            StoredRecordCorruptionReporter { error("Unexpected corruption: $it") },
+        )
+        val loaded = assertNotNull(store.persistence.load(session.sessionId))
+        assertEquals(session, loaded.snapshot)
+        assertEquals(checkpoint, loaded.checkpoint)
+        store.close()
+
+        val rewrittenDatabase = buildMagratheaRoomDatabase(
+            Room.databaseBuilder<MagratheaDatabase>(name = databasePath.toString()),
+        )
+        val rewrittenSession = assertNotNull(
+            rewrittenDatabase.sessionDao().findById(session.sessionId.value),
+        ).payload
+        val rewrittenCheckpoint = assertNotNull(
+            rewrittenDatabase.checkpointDao().findById(session.sessionId.value),
+        ).payload
+        assertTrue("\"schemaVersion\":7" in rewrittenSession)
+        assertTrue("\"maxOutputTokens\":null" in rewrittenSession)
+        assertTrue("\"schemaVersion\":7" in rewrittenCheckpoint)
+        rewrittenDatabase.close()
+
+        check(directory.toFile().deleteRecursively()) {
+            "Failed to remove Room schema-v6 migration directory"
+        }
+    }
+
+    @Test
     fun corruptCurrentRows_canBeClearedAndRebuiltWithoutDecoding() = runTest {
         val directory = Files.createTempDirectory("magrathea-room-rebuild-")
         val databasePath = directory.resolve("magrathea.db")
@@ -105,7 +154,7 @@ class JvmRoomDatabaseIntegrationTest {
         val currentPayload = AgentSessionSnapshotCodec().encode(session)
         val olderPayload = currentPayload.replaceFirst(
             "\"schemaVersion\":$CURRENT_STORAGE_SCHEMA_VERSION",
-            "\"schemaVersion\":${CURRENT_STORAGE_SCHEMA_VERSION - 1}",
+            "\"schemaVersion\":${MINIMUM_READABLE_STORAGE_SCHEMA_VERSION - 1}",
         )
         val reports = mutableListOf<StoredRecordCorruption>()
         val rawDatabase = buildMagratheaRoomDatabase(
@@ -127,7 +176,10 @@ class JvmRoomDatabaseIntegrationTest {
             StoredEnvelopeDecodeFailure.UNSUPPORTED_OLDER_SCHEMA,
             failure.issue.failure,
         )
-        assertEquals(CURRENT_STORAGE_SCHEMA_VERSION - 1, failure.issue.storedSchemaVersion)
+        assertEquals(
+            MINIMUM_READABLE_STORAGE_SCHEMA_VERSION - 1,
+            failure.issue.storedSchemaVersion,
+        )
         assertTrue(reports.isEmpty())
         store.close()
 
@@ -321,7 +373,7 @@ class JvmRoomDatabaseIntegrationTest {
         val codec = AgentSessionSnapshotCodec()
         val incompatiblePayload = codec.encode(incompatible).replaceFirst(
             "\"schemaVersion\":$CURRENT_STORAGE_SCHEMA_VERSION",
-            "\"schemaVersion\":${CURRENT_STORAGE_SCHEMA_VERSION - 1}",
+            "\"schemaVersion\":${MINIMUM_READABLE_STORAGE_SCHEMA_VERSION - 1}",
         )
         val database = buildMagratheaRoomDatabase(
             Room.databaseBuilder<MagratheaDatabase>(name = databasePath.toString()),
@@ -378,7 +430,7 @@ class JvmRoomDatabaseIntegrationTest {
         val incompatible = roomTestSnapshot("schema-list-row", updatedAtEpochMs = 20L)
         val incompatiblePayload = AgentSessionSnapshotCodec().encode(incompatible).replaceFirst(
             "\"schemaVersion\":$CURRENT_STORAGE_SCHEMA_VERSION",
-            "\"schemaVersion\":${CURRENT_STORAGE_SCHEMA_VERSION - 1}",
+            "\"schemaVersion\":${MINIMUM_READABLE_STORAGE_SCHEMA_VERSION - 1}",
         )
         val database = buildMagratheaRoomDatabase(
             Room.databaseBuilder<MagratheaDatabase>(name = databasePath.toString()),
@@ -445,3 +497,7 @@ class JvmRoomDatabaseIntegrationTest {
         }
     }
 }
+
+private fun String.toSchemaV6(): String =
+    replaceFirst("\"schemaVersion\":7", "\"schemaVersion\":6")
+        .replace(",\"maxOutputTokens\":null", "")

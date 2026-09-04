@@ -42,13 +42,14 @@ substitute for the public API or the tests themselves.
 | R-019 | Typed Tool result text/images carry explicit model/user audiences; user-only content never reaches a Provider, model images require declared input capability, inline media is bounded by decoded bytes, and external Tool identity reaches products only through typed origin | Core, Runtime, Provider request, MCP, and Chatbot contracts |
 | R-020 | Portable Image Search validates policy, HTTPS media/source URLs, attribution, MIME types, deduplication, result limits, failure redaction, replay-stable media references, and user-only image projection | Image Search common and Runtime contracts |
 | R-021 | Runtime detaches Provider collection locally; terminal cancellation or failure removes the checkpoint before bounded remote abandonment, while a failed terminal commit preserves the pending invocation for recovery | Runtime recovery and Gateway contracts |
+| R-022 | Starting or resuming a managed run makes it addressable by interrupt and cancel before returning; successful control drains the manager-owned collector before the next command, including through tracing decorators and without a dispatcher advance or business event | Runtime recovery and managed-session contracts |
 
 ## Chatbot, storage, and credentials
 
 | ID | Invariant | Nearest verification boundary |
 |---|---|---|
-| S-001 | Chatbot snapshots are reduced from Agent events and terminal state matches the persisted session | Chatbot contracts |
-| S-002 | Session and checkpoint codecs accept only the committed strict schema-v6 envelope, including run identity, exact resume cursor, interruption metadata, context state, Tool journal, typed Tool content, Tool origin, and reasoning preference | Serialization fixtures |
+| S-001 | Chatbot snapshots project the canonical managed-session state and terminal state matches persistence | Managed-session and Chatbot contracts |
+| S-002 | Session and checkpoint codecs accept the strict schema-v7 envelope and migrate the supported schema-v6 baseline, including run identity, exact resume cursor, interruption metadata, context state, Tool journal, typed Tool content, Tool origin, reasoning preference, and model output limits | Serialization fixtures |
 | S-003 | A corrupt Room row is isolated and produces a content-free report | Room JVM, Android, and iOS contracts |
 | S-004 | Store handles and facade close operations are idempotent; closed resources reject further use | Ownership contracts |
 | S-005 | Android credentials use Keystore AES-GCM and no-backup ciphertext | Android host and device fixture |
@@ -56,7 +57,8 @@ substitute for the public API or the tests themselves.
 | S-007 | JVM credentials are explicitly supplied by the host | JVM facade and sample |
 | S-008 | IndexedDB stores strict envelopes and no Gateway or vendor credential | JS/Wasm browser contracts |
 | S-009 | Session Provider profile/model selection drives requests, history, persistence, switching, and resume; profile Provider identity must match the model, and active generation rejects switching without cancellation | Chatbot facade and browser contracts |
-| S-010 | Envelope schema is classified before current-payload decoding; schema 6 is the migration baseline, every later revision requires a contiguous adjacent migration, and incompatible records are surfaced without filtering or rewriting their stored bytes | Core migration registry, Room integration, and browser storage contracts |
+| S-010 | Same-ID leases share one process-local runtime; releasing a lease never stops active work, while delete, clear, and root close fence old leases; committed destructive invalidation survives persistence failure and is reported as typed scope metadata | Managed-session and Chatbot destructive-failure contracts |
+| S-011 | Envelope schema is classified before current-payload decoding; schema 6 is the migration baseline, every later revision requires a contiguous adjacent migration, and incompatible records are surfaced without filtering or rewriting their stored bytes | Core migration registry, Room integration, and browser storage contracts |
 
 ## Gateway and Web
 

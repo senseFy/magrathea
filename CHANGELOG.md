@@ -5,6 +5,48 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+### Added
+
+- Models can declare a catalog-provided maximum output-token capability, including through the
+  browser facade, while an explicit request budget can replace stale or unknown catalog metadata.
+- `AgentSessionManager` and independently releasable session leases provide process-local canonical
+  execution ownership, replay-one live state, restore-only attachment, and fenced catalog mutation.
+- Managed-session suspend APIs declare typed manager and cancellation failures for Kotlin/Native
+  callers.
+- Chatbot hosts can restore persisted or manager-owned live sessions without implicitly starting
+  Provider work; repeated restores create independent facades over the canonical runtime.
+
+### Changed
+
+- Runtime now resolves one output-token bound for both normal and context-summary Provider calls,
+  clamps known bounds to the final Provider projection's remaining context, and preserves an
+  unknown bound when neither request policy nor model metadata supplies one.
+- Stored sessions and checkpoints advance to schema 7 with an additive migration from schema 6;
+  existing models migrate with an unknown output-token capability and are rewritten atomically
+  after successful validation.
+- Chatbot controllers are state projections over managed Agent leases. Closing a session detaches
+  without stopping work; closing an owning client interrupts the manager root, while a borrowed
+  client leaves that root running.
+- Chatbot facade delivery is fenced against concurrent client close, and concurrent close callers
+  now await one cleanup result instead of returning early or hiding the owning caller's failure.
+
+### Fixed
+
+- Managed lease and Chatbot facade handoffs now remain inside destructive-operation fences through
+  cancellation-safe delivery, so concurrent delete, clear, or close cannot overtake an admitted
+  attachment.
+- Managed cancellation now preserves a completed or failed result that won the same-run terminal
+  race, including when persistence committed before the terminal event reached the manager.
+- Historical storage migrations no longer inherit behavior from live serializers, so later schema
+  revisions cannot invalidate the supported schema-6 migration baseline.
+- Default Runtime tracing preserves synchronous run admission, so a managed session can be
+  interrupted or cancelled immediately after `start` or `resume`, before any business event or
+  dispatcher advance. Successful control also drains the manager-owned collector before a later
+  command is admitted.
+- Failed managed-session delete or clear operations now report whether canonical runtimes were
+  already invalidated, and Chatbot clients close the affected facades even when persistence
+  removal fails.
+
 ## 0.1.0-alpha.8 — 2026-08-29
 
 ### Added

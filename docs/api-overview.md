@@ -51,6 +51,16 @@ Its constructor accepts Core ports explicitly. `InMemoryAgentPersistence` and
 `InMemoryToolRegistry` are suitable for tests, previews, and intentionally ephemeral hosts;
 persistent products should use a platform `AgentPersistence`.
 
+`DefaultAgentSessionManager` composes an `AgentRunner` and its matching persistence into a
+process-local ownership root. `create` and `acquire` return independently releasable
+`AgentSessionLease` values for one canonical runtime. The lease `StateFlow` is authoritative for
+late attachment; its edge-event flow is best-effort and non-replay. See
+[Managed Agent sessions](session-management.md).
+
+`delete` and `clear` commit canonical invalidation before persistence mutation. A failure after
+that point exposes `AgentSessionException.invalidationScope`, while any retained record may be
+restored only as a new runtime generation.
+
 Capability contracts:
 
 - [Context Management](context-management.md)
@@ -74,14 +84,19 @@ local stdio processes. See [MCP](mcp.md).
 
 | API | Purpose |
 |---|---|
-| `ChatbotClient` | Create, resume, list, delete, and close sessions |
+| `ChatbotClient` | Create or attach facades, resume, list, delete, and apply owning/borrowed close semantics |
 | `ChatbotSession` | Observe, send, regenerate, cancel, interrupt, resume, and update configuration |
 | `ChatbotSessionConfiguration` | Conversation-owned Provider, model, reasoning preference, and non-secret credential profile |
 | `ChatbotSnapshot` | Immutable product-facing messages, status, usage, context, failures, and Tool activity with typed origin |
 | `ChatbotRequestFactory` | Map session state to an `AgentRequest` and apply host defaults |
 
-Create it with `createChatbotClient`, using the same `AgentPersistence` as the Runner. Pass
-`closeResources` when the composition owns Provider transports or platform stores.
+Create an owning root with `createChatbotClient(runner, ...)`, using the same `AgentPersistence` as
+the Runner. Pass `closeResources` when the composition owns Provider transports or platform stores.
+Use `createChatbotClient(manager, ...)` to borrow an existing managed-session root; closing that
+client releases only its own Chatbot facades.
+
+`ChatbotException.invalidationScope` distinguishes an ordinary operation failure from a failed
+destructive operation that already closed one or all registered facades.
 
 `ChatbotSnapshot.toolActivities` derives Tool lifecycle from canonical messages and live events
 while using the canonical persisted state. Typed user-audience image results and their stable
@@ -98,7 +113,8 @@ while using the canonical persisted state. Typed user-audience image results and
 JVM credentials remain host-owned. Store handles and clients close idempotently and reject
 subsequent operations once closed.
 
-Logical session and checkpoint envelopes use schema 6 as their current migration baseline.
+Logical session and checkpoint envelopes use schema 7, with schema 6 as the minimum readable
+migration baseline.
 Malformed payloads, unsupported older schemas, unsupported newer schemas, and migration failures
 are classified separately. Room and IndexedDB adapters surface incompatible schemas rather than
 silently hiding them as corrupt history; hosts may then present an upgrade or explicit reset flow.

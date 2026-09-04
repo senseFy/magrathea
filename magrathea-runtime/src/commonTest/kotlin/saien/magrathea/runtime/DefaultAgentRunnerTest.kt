@@ -43,6 +43,7 @@ import saien.magrathea.core.ToolExecutionResult
 import saien.magrathea.core.ToolResultPart
 import saien.magrathea.core.TypedTool
 import saien.magrathea.core.citations
+import saien.magrathea.core.text
 import saien.magrathea.provider.api.InMemoryProviderRegistry
 import saien.magrathea.provider.api.OpenAiTransportConfig
 import saien.magrathea.provider.api.OpenAiWireProtocol
@@ -304,6 +305,98 @@ class DefaultAgentRunnerTest {
         ).toList()
 
         assertEquals(preference, provider.requests.single().reasoningPreference)
+    }
+
+    @Test
+    fun modelOutputCapabilityBecomesTheDefaultProviderRequestBound() = runTest {
+        val provider = RecordingProvider()
+        val runner = DefaultAgentRunner(
+            providerRegistry = InMemoryProviderRegistry(listOf(provider)),
+            toolRegistry = InMemoryToolRegistry(),
+            persistence = InMemoryAgentPersistence(),
+        )
+
+        runner.run(
+            AgentRequest(
+                messages = listOf(
+                    AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("hello"))),
+                ),
+                model = ModelDescriptor(
+                    provider = provider.key,
+                    model = "bounded-model",
+                    maxOutputTokens = 16_384,
+                ),
+            ),
+        ).toList()
+
+        assertEquals(16_384, provider.requests.single().maxTokens)
+    }
+
+    @Test
+    fun providerConfigOutputOverrideTakesPrecedenceOverModelCapability() = runTest {
+        val provider = RecordingProvider()
+        val runner = DefaultAgentRunner(
+            providerRegistry = InMemoryProviderRegistry(listOf(provider)),
+            toolRegistry = InMemoryToolRegistry(),
+            persistence = InMemoryAgentPersistence(),
+        )
+
+        runner.run(
+            AgentRequest(
+                messages = listOf(
+                    AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("hello"))),
+                ),
+                model = ModelDescriptor(
+                    provider = provider.key,
+                    model = "bounded-model",
+                    maxOutputTokens = 16_384,
+                ),
+                engine = AgentEngineConfig(provider = ProviderConfig(maxTokens = 4_096)),
+            ),
+        ).toList()
+
+        assertEquals(4_096, provider.requests.single().maxTokens)
+    }
+
+    @Test
+    fun outputBoundUsesTheExpandedFinalProviderProjection() = runTest {
+        val provider = RecordingProvider()
+        val expandedText = "x".repeat(360)
+        val runner = DefaultAgentRunner(
+            providerRegistry = InMemoryProviderRegistry(listOf(provider)),
+            toolRegistry = InMemoryToolRegistry(),
+            persistence = InMemoryAgentPersistence(),
+            contextTransformer = ContextTransformer { messages ->
+                messages.map { message ->
+                    message.copy(parts = listOf(TextPart(expandedText)))
+                }
+            },
+        )
+
+        runner.run(outputBudgetRequest(text = "x")).toList()
+
+        assertEquals(expandedText, provider.requests.single().messages.single().text())
+        assertEquals(6, provider.requests.single().maxTokens)
+    }
+
+    @Test
+    fun outputBoundUsesTheReducedFinalProviderProjection() = runTest {
+        val provider = RecordingProvider()
+        val runner = DefaultAgentRunner(
+            providerRegistry = InMemoryProviderRegistry(listOf(provider)),
+            toolRegistry = InMemoryToolRegistry(),
+            persistence = InMemoryAgentPersistence(),
+            contextTransformer = ContextTransformer { messages ->
+                messages.map { message ->
+                    message.copy(parts = listOf(TextPart("x")))
+                }
+            },
+        )
+
+        runner.run(outputBudgetRequest(text = "x".repeat(360))).toList()
+
+        assertEquals("x", provider.requests.single().messages.single().text())
+        assertEquals(80, provider.requests.single().maxTokens)
     }
 
     @Test
@@ -741,4 +834,19 @@ class DefaultAgentRunnerTest {
         assertTrue(debugPayload.contains("attachment_count=LongValue(value=1)"))
         assertFalse(debugPayload.contains("IMAGE_DATA"))
     }
+
+    private fun outputBudgetRequest(text: String): AgentRequest = AgentRequest(
+        messages = listOf(AgentMessage(role = MessageRole.USER, parts = listOf(TextPart(text)))),
+        model = ModelDescriptor(
+            provider = "recording-provider",
+            model = "bounded-model",
+            contextWindowTokens = 100,
+            maxOutputTokens = 80,
+        ),
+        engine = AgentEngineConfig(
+            runtime = saien.magrathea.core.RuntimeConfig(
+                contextManagement = saien.magrathea.core.ContextManagementConfig(enabled = false),
+            ),
+        ),
+    )
 }

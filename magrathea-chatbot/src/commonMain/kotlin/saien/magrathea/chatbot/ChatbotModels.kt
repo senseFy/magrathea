@@ -326,9 +326,20 @@ enum class ChatbotFailure {
     OPERATION_FAILED,
 }
 
+/** Chatbot facades invalidated before an operation reported its failure. */
+enum class ChatbotInvalidationScope {
+    NONE,
+    SESSION,
+    ALL_SESSIONS,
+}
+
 class ChatbotException(
     val failure: ChatbotFailure,
-) : IllegalStateException("Chatbot operation failed (${failure.name.lowercase()})")
+    /** Machine-readable facade effect; it does not claim that persistence was removed. */
+    val invalidationScope: ChatbotInvalidationScope,
+) : IllegalStateException("Chatbot operation failed (${failure.name.lowercase()})") {
+    constructor(failure: ChatbotFailure) : this(failure, ChatbotInvalidationScope.NONE)
+}
 
 internal fun AgentMessage.toChatbotMessageSnapshot(): ChatbotMessageSnapshot = ChatbotMessageSnapshot(
     id = id,

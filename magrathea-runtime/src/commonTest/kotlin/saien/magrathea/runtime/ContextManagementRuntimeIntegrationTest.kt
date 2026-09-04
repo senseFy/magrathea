@@ -78,6 +78,8 @@ class ContextManagementRuntimeIntegrationTest {
         assertEquals(2, provider.requests.size)
         val summaryRequest = provider.requests.single { it.isContextSummary() }
         val modelRequest = provider.requests.single { !it.isContextSummary() }
+        assertEquals(1, summaryRequest.maxTokens)
+        assertEquals(20, modelRequest.maxTokens)
         assertTrue(summaryRequest.tools.isEmpty())
         val summaryTransport = summaryRequest.typedConfig as OpenAiTransportConfig
         assertTrue(summaryTransport.hostedTools.isEmpty())

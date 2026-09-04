@@ -24,17 +24,22 @@
 
 ## Schema evolution
 
-Schema 6 is the first SDK-owned migration baseline. Schemas 5 and older remain the intentional
-alpha clean break; they are retained as golden fixtures and rejected as unsupported older data.
+Schema 6 is the first SDK-owned migration baseline and schema 7 is the current format. Schemas 5
+and older remain the intentional alpha clean break; they are retained as golden fixtures and
+rejected as unsupported older data. The additive schema-6-to-7 migration records the newly
+persisted `ModelDescriptor.maxOutputTokens` capability as `null`, preserving the prior meaning that
+the model's output capability was unknown. Successful full-record loads atomically rewrite the
+canonical schema-7 envelope through the existing storage adapter contract.
 
 The SDK-owned machine-readable ledger is `persistence/schema-ledger.json`. It freezes schema 6 as
 the permanent migration baseline, each shipped session/checkpoint fixture by SHA-256, the current
 source version and production adapter, and every adjacent transition. Each migration transition
-must name one dedicated `AdjacentStorageSchemaMigration` object, which owns both strict source
-validation and transformation, and freeze its commonMain source path, symbol, and complete file
-SHA-256. The verifier also binds that migration ID, source version, and symbol to the runtime
-registry, so retaining an ID while editing or redirecting its behavior fails closed. Neither the
-baseline nor `minimumReadableVersion` may advance; every transition
+must name one dedicated `AdjacentStorageSchemaMigration` object, which owns the frozen source
+preconditions for every field it consumes, removes, or introduces together with the transformation,
+and freeze its commonMain source path, symbol, and complete file SHA-256. A migration must not
+delegate validation to a version adapter or live domain serializer. The verifier also binds that
+migration ID, source version, and symbol to the runtime registry, so retaining an ID while editing
+or redirecting its behavior fails closed. Neither the baseline nor `minimumReadableVersion` may advance; every transition
 starting at schema 6 or later must be a migration rather than a new clean break. Local
 `verifySdkCompatibility` checks the current ledger; pull-request and main-push CI additionally
 compares it with the base commit so frozen fixtures, adapters, transitions, and migration source
@@ -52,11 +57,15 @@ unchanged. A storage adapter may atomically rewrite the canonical current envelo
 transformations and validation succeed. Every release that adds an actual migration must exercise
 the adapter rewrite path and its failure-preservation tests in the same change.
 
-Before each adjacent transformation, the registry strictly decodes and validates the document with
-that transition's frozen source-schema adapter. A transformer never receives an invalid source
-document, and every intermediate schema is validated before the next step. The raw JSON scanner also
-rejects duplicate object keys at every depth before parsing, because map-based JSON trees otherwise
-discard one value and make version dispatch or nested payload semantics ambiguous.
+Before each adjacent transformation, the transition validates the old representation of every
+field it will consume or replace and rejects target fields that are not valid in its source version.
+Untouched data passes through every step and is accepted only if the final strict current-schema
+decode and canonical comparison succeeds. This composes across future revisions without executing
+historical adapters whose generated domain serializers may have evolved. A transition that removes,
+renames, or relaxes an old constraint must validate that old constraint before transforming it. The
+raw JSON scanner also rejects duplicate object keys at every depth before parsing, because map-based
+JSON trees otherwise discard one value and make version dispatch or nested payload semantics
+ambiguous.
 
 The JSON wire configuration is SDK-owned; a host-supplied `Json` instance cannot change field names,
 class discriminators, defaults, or strictness under the same schema version. `listSessions()` may
@@ -69,15 +78,15 @@ migration registry, ABI where applicable, upgrade policy, and cross-platform tes
 contract change. The Room/IndexedDB physical version changes only when their table/object-store
 shape changes; a JSON-envelope migration alone does not require a physical database migration.
 
-Schema 6 now has an explicit `StorageSchemaV6Adapter` and private envelope DTOs, so production codecs
-cannot silently switch to a generic envelope serializer. Its payload mapper still delegates the
-large nested Agent graph to generated domain serializers. A frozen recursive serializer-descriptor
-fingerprint covers serial names, kinds, nullability, optionality, inline types, fields, enums, and
-sealed subtype descriptors in addition to the golden payloads. The append-only fixture, descriptor,
-and adapter gates make ordinary drift fail closed, but they do not provide the same source-level
-isolation as frozen leaf DTOs for every nested subtype. New schema work should replace those mapper
-internals with immutable leaf DTOs incrementally; any observable wire change still requires a new
-adjacent schema.
+Schema 6 has an explicit `StorageSchemaV6Adapter` and private envelope DTOs, so the production codec
+for that release could not silently switch to a generic envelope serializer. Its payload mapper
+delegates the large nested Agent graph to generated domain serializers, so historical migrations do
+not execute that adapter. Frozen recursive serializer-descriptor fingerprints preserve the original
+serial names, kinds, nullability, optionality, inline types, fields, enums, and sealed subtype
+descriptors alongside golden payloads. The append-only fixture, descriptor, adapter-source, and
+transition gates make wire changes explicit; immutable leaf DTOs may replace current adapter mapper
+internals incrementally, but are not required in every historical migration. Any observable wire
+change still requires a new adjacent schema.
 
 ## Additive enum evolution within a frozen schema
 

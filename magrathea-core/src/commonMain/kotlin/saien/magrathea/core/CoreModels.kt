@@ -322,12 +322,17 @@ data class ModelDescriptor(
     val supportsStreaming: Boolean = false,
     val contextWindowTokens: Long? = null,
     val inputModalities: Set<ModelInputModality> = setOf(ModelInputModality.TEXT),
+    /** Catalog-declared output capability/default; a request may replace stale or unknown metadata. */
+    val maxOutputTokens: Int? = null,
 ) {
     val supportsReasoning: Boolean
         get() = reasoningCapabilities != null
 
     init {
         require(inputModalities.isNotEmpty()) { "Model input modalities must not be empty" }
+        require(maxOutputTokens == null || maxOutputTokens > 0) {
+            "Model maximum output tokens must be positive"
+        }
     }
 }
 

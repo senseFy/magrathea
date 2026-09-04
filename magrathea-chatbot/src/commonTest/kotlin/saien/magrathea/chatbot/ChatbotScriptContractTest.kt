@@ -54,24 +54,28 @@ class ChatbotScriptContractTest {
         val secret = "PRIVATE_CANONICAL_TOOL_RESULT"
         val tool = PrivateResultTool(secret)
         val provider = ScriptedProvider(tool.definition.name)
-        val controller = ChatbotController(
-            runner = DefaultAgentRunner(
-                providerRegistry = InMemoryProviderRegistry(listOf(provider)),
-                toolRegistry = InMemoryToolRegistry(listOf(tool)),
-                persistence = InMemoryAgentPersistence(),
-                dispatcher = StandardTestDispatcher(testScheduler),
-            ),
+        val persistence = InMemoryAgentPersistence()
+        val runner = DefaultAgentRunner(
+            providerRegistry = InMemoryProviderRegistry(listOf(provider)),
+            toolRegistry = InMemoryToolRegistry(listOf(tool)),
+            persistence = persistence,
+            dispatcher = StandardTestDispatcher(testScheduler),
+        )
+        val fixture = ManagedChatbotControllerFixture.create(
+            runner = runner,
+            scope = this,
+            persistence = persistence,
             requestFactory = DefaultChatbotRequestFactory(
                 tools = listOf(tool.definition),
                 configure = {
                     copy(engine = AgentEngineConfig(runtime = RuntimeConfig(maxTurns = 3)))
                 },
             ),
-            initialConfiguration = ChatbotSessionConfiguration(
+            configuration = ChatbotSessionConfiguration(
                 ModelDescriptor(provider = provider.key, model = "scripted-model"),
             ),
-            scope = this,
         )
+        val controller = fixture.controller
 
         controller.sendMessage("Use the private Tool")
         advanceUntilIdle()
@@ -80,6 +84,7 @@ class ChatbotScriptContractTest {
         assertEquals("Tool completed.", toolResult.text)
         assertFalse(controller.state.value.toString().contains(secret))
         assertFalse(provider.requests.last().toString().contains(secret))
+        fixture.close()
     }
 
     @Test
@@ -119,15 +124,17 @@ class ChatbotScriptContractTest {
             },
             dispatcher = StandardTestDispatcher(testScheduler),
         )
-        val controller = ChatbotController(
+        val fixture = ManagedChatbotControllerFixture.create(
             runner = runner,
+            scope = this,
+            persistence = persistence,
             requestFactory = DefaultChatbotRequestFactory(
                 tools = listOf(tool.definition),
                 configure = {
                     copy(engine = AgentEngineConfig(runtime = RuntimeConfig(maxTurns = 3)))
                 },
             ),
-            initialConfiguration = ChatbotSessionConfiguration(
+            configuration = ChatbotSessionConfiguration(
                 ModelDescriptor(
                     provider = provider.key,
                     model = "scripted-model",
@@ -136,8 +143,8 @@ class ChatbotScriptContractTest {
                     supportsStreaming = true,
                 ),
             ),
-            scope = this,
         )
+        val controller = fixture.controller
 
         controller.sendMessage("What is the weather?")
         advanceUntilIdle()
@@ -174,12 +181,14 @@ class ChatbotScriptContractTest {
         )
 
         val sessionId = requireNotNull(controller.state.value.sessionId)
-        controller.resume(saien.magrathea.core.AgentSessionId(sessionId))
-        advanceUntilIdle()
+        val attached = fixture.manager.acquire(saien.magrathea.core.AgentSessionId(sessionId))
 
+        assertEquals(saien.magrathea.runtime.AgentSessionPhase.TERMINAL, attached.state.value.phase)
         assertEquals(expected, controller.state.value.fingerprint())
         assertEquals(2, provider.requests.size)
         assertEquals(1, tool.executionCount)
+        attached.release()
+        fixture.close()
     }
 
     private class ScriptedProvider(

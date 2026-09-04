@@ -23,6 +23,7 @@ dependency direction. Platform limitations and external validation gaps are trac
 | [014](ADR-014-token-aware-context-management.md) | Token-aware semantic context management |
 | [015](ADR-015-runtime-tracing-contract.md) | Runtime tracing, context propagation, semantic conventions, and telemetry replacement |
 | [016](ADR-016-debug-recording-contract.md) | Typed, host-owned debug recording outside the agent event stream |
+| [017](ADR-017-managed-session-ownership.md) | Process-local canonical sessions, leases, and lifecycle ownership |
 
 Changes to an accepted decision require an explicit update to the affected record, public docs,
 and executable contract tests. A new record is preferred when a decision introduces a distinct

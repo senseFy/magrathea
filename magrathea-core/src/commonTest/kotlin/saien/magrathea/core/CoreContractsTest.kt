@@ -219,6 +219,9 @@ class CoreContractsTest {
             ModelDescriptor("test", "model", inputModalities = emptySet())
         }
         assertFailsWith<IllegalArgumentException> {
+            ModelDescriptor("test", "model", maxOutputTokens = 0)
+        }
+        assertFailsWith<IllegalArgumentException> {
             RuntimeConfig(maxToolResultContentItems = 0)
         }
         assertFailsWith<IllegalArgumentException> {

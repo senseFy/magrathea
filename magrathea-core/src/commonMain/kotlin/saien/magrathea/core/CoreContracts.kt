@@ -16,7 +16,13 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 
-/** Executes, resumes, and cancels Agent sessions while streaming canonical lifecycle events. */
+/**
+ * Executes, resumes, and controls Agent sessions while streaming canonical lifecycle events.
+ *
+ * A returned execution Flow is cold. On collection, an implementation must make the run
+ * addressable by [interrupt] and [cancel] before its first suspending I/O. This lets a runtime
+ * owner stop work during preflight without waiting for the first business event.
+ */
 interface AgentRunner {
     fun run(request: AgentRequest): Flow<AgentEvent>
     suspend fun resume(sessionId: AgentSessionId): Flow<AgentEvent>
@@ -109,7 +115,14 @@ data class ContextSummaryRequest(
     val maxOutputTokens: Int,
     val generation: Long,
     val turn: Int,
-)
+    val contextWindowTokens: Long? = model.contextWindowTokens,
+    val charsPerTokenEstimate: Int = 4,
+) {
+    init {
+        require(maxOutputTokens > 0) { "Summary maximum output tokens must be positive" }
+        require(charsPerTokenEstimate > 0) { "Summary chars-per-token estimate must be positive" }
+    }
+}
 
 data class ContextSummaryResult(
     val summary: String,
@@ -300,7 +313,7 @@ data class AgentSessionSnapshot(
     }
 }
 
-const val CURRENT_STORAGE_SCHEMA_VERSION: Int = 6
+const val CURRENT_STORAGE_SCHEMA_VERSION: Int = 7
 
 /** The first schema covered by the SDK-owned migration chain; older schemas are a clean break. */
 const val MINIMUM_READABLE_STORAGE_SCHEMA_VERSION: Int = 6
@@ -308,7 +321,13 @@ const val MINIMUM_READABLE_STORAGE_SCHEMA_VERSION: Int = 6
 private val storageSchemaEvolution = StorageSchemaEvolution(
     minimumReadableVersion = MINIMUM_READABLE_STORAGE_SCHEMA_VERSION,
     currentVersion = CURRENT_STORAGE_SCHEMA_VERSION,
-    migrations = emptyList(),
+    migrations = listOf(
+        RegisteredStorageSchemaMigration(
+            id = "agent-storage-v6-to-v7-max-output-tokens",
+            fromVersion = 6,
+            migration = StorageSchemaV6ToV7Migration,
+        ),
+    ),
 )
 
 /**
@@ -357,7 +376,7 @@ class AgentSessionSnapshotCodec(
 
     fun encode(snapshot: AgentSessionSnapshot): String {
         validateSessionIdentity(snapshot)
-        return StorageSchemaV6Adapter.encodeSession(json, sdkVersion, snapshot)
+        return StorageSchemaV7Adapter.encodeSession(json, sdkVersion, snapshot)
     }
 
     fun decode(payload: String): AgentSessionSnapshot {
@@ -368,7 +387,7 @@ class AgentSessionSnapshotCodec(
     fun decodeResult(payload: String): StoredEnvelopeDecodeResult<AgentSessionSnapshot> {
         val evolved = storageSchemaEvolution.evolve(payload, json)
         return evolved.decodeCurrentResult {
-            val envelope = StorageSchemaV6Adapter.decodeSession(json, evolved.document)
+            val envelope = StorageSchemaV7Adapter.decodeSession(json, evolved.document)
             validateEnvelope(envelope.schemaVersion, envelope.sdkVersion)
             validateSessionIdentity(envelope.payload)
             validateCanonicalEnvelope(
@@ -392,7 +411,7 @@ class AgentCheckpointCodec(
 
     fun encode(checkpoint: AgentCheckpoint): String {
         validateCheckpointIdentity(checkpoint)
-        return StorageSchemaV6Adapter.encodeCheckpoint(json, sdkVersion, checkpoint)
+        return StorageSchemaV7Adapter.encodeCheckpoint(json, sdkVersion, checkpoint)
     }
 
     fun decode(payload: String): AgentCheckpoint {
@@ -403,7 +422,7 @@ class AgentCheckpointCodec(
     fun decodeResult(payload: String): StoredEnvelopeDecodeResult<AgentCheckpoint> {
         val evolved = storageSchemaEvolution.evolve(payload, json)
         return evolved.decodeCurrentResult {
-            val envelope = StorageSchemaV6Adapter.decodeCheckpoint(json, evolved.document)
+            val envelope = StorageSchemaV7Adapter.decodeCheckpoint(json, evolved.document)
             validateEnvelope(envelope.schemaVersion, envelope.sdkVersion)
             validateCheckpointIdentity(envelope.payload)
             validateCanonicalEnvelope(

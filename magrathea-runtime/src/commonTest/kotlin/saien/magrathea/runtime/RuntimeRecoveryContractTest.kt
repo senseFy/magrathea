@@ -10,6 +10,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
@@ -83,6 +84,35 @@ import saien.magrathea.provider.api.ProviderUsage
 import saien.magrathea.provider.api.providerCancellationIntent
 
 class RuntimeRecoveryContractTest {
+    @Test
+    fun runIsInterruptibleBeforeAnUndispatchedCollectorReturns() = runTest {
+        val sessionId = AgentSessionId("immediate-host-interruption")
+        val persistence = InMemoryAgentPersistence()
+        val provider = RecordingCompleteProvider()
+        val runner = runner(provider, persistence)
+        val execution = launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                runner.run(request(sessionId)).collect { }
+            } catch (_: CancellationException) {
+                // Host interruption cancels the physical collection after recovery is durable.
+            }
+        }
+
+        val recovery = runner.interrupt(sessionId)
+        execution.join()
+
+        assertEquals(AgentRecoveryDisposition.RESUMABLE, recovery.disposition)
+        assertEquals(AgentInterruptionReason.HOST_REQUESTED, recovery.interruption?.reason)
+        assertEquals(AgentStatus.INTERRUPTED, persistence.load(sessionId)?.snapshot?.state?.status)
+
+        val completed = runner.resume(sessionId)
+            .toList()
+            .filterIsInstance<AgentEvent.Completed>()
+            .single()
+        assertEquals(AgentStatus.COMPLETED, completed.state.status)
+        assertEquals(1, provider.requests.size)
+    }
+
     @Test
     fun hostInterruptionRollsBackPartialOutputAndResumeUsesANewProviderAttempt() = runTest {
         val sessionId = AgentSessionId("host-interruption")

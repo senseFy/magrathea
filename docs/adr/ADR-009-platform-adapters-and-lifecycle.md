@@ -16,8 +16,9 @@ Platform behavior is supplied through narrow adapters and explicitly owned handl
   not enter Core or the Chatbot DTO surface.
 - Opening a store returns one owner for its atomic `AgentPersistence`. Close is idempotent and
   prevents continued use.
-- A facade closes active sessions before its Provider transport and persistence handles. Resources
-  created by a composition root are closed exactly once.
+- One application composition root owns its `AgentSessionManager`. Closing that root interrupts
+  live sessions before Provider transport and persistence handles close. Closing a borrowed
+  Chatbot facade only releases its leases. Resources created by a composition root close once.
 
 ## Composition
 
@@ -29,5 +30,7 @@ decisions.
 ## Consequences
 
 The shared runtime has no Android application lifecycle dependency or hidden global singleton.
+Applications may transfer their execution-host capability between UI and background components
+without replacing the process-local manager or its canonical sessions.
 Platform adapters can be tested against real Room, Keychain/Keystore, and IndexedDB boundaries
 without creating platform-specific product facades.

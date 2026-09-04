@@ -1302,8 +1302,10 @@ public abstract interface class saien/magrathea/core/ContextSummarizer {
 }
 
 public final class saien/magrathea/core/ContextSummaryRequest {
-	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/ModelDescriptor;Lsaien/magrathea/core/ProviderConfig;Ljava/lang/String;Ljava/lang/String;IJI)V
+	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/ModelDescriptor;Lsaien/magrathea/core/ProviderConfig;Ljava/lang/String;Ljava/lang/String;IJILjava/lang/Long;I)V
+	public synthetic fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/ModelDescriptor;Lsaien/magrathea/core/ProviderConfig;Ljava/lang/String;Ljava/lang/String;IJILjava/lang/Long;IILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun component10 ()I
 	public final fun component2 ()Lsaien/magrathea/core/ModelDescriptor;
 	public final fun component3 ()Lsaien/magrathea/core/ProviderConfig;
 	public final fun component4 ()Ljava/lang/String;
@@ -1311,9 +1313,12 @@ public final class saien/magrathea/core/ContextSummaryRequest {
 	public final fun component6 ()I
 	public final fun component7 ()J
 	public final fun component8 ()I
-	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/ModelDescriptor;Lsaien/magrathea/core/ProviderConfig;Ljava/lang/String;Ljava/lang/String;IJI)Lsaien/magrathea/core/ContextSummaryRequest;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/ContextSummaryRequest;Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/ModelDescriptor;Lsaien/magrathea/core/ProviderConfig;Ljava/lang/String;Ljava/lang/String;IJIILjava/lang/Object;)Lsaien/magrathea/core/ContextSummaryRequest;
+	public final fun component9 ()Ljava/lang/Long;
+	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/ModelDescriptor;Lsaien/magrathea/core/ProviderConfig;Ljava/lang/String;Ljava/lang/String;IJILjava/lang/Long;I)Lsaien/magrathea/core/ContextSummaryRequest;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/ContextSummaryRequest;Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/ModelDescriptor;Lsaien/magrathea/core/ProviderConfig;Ljava/lang/String;Ljava/lang/String;IJILjava/lang/Long;IILjava/lang/Object;)Lsaien/magrathea/core/ContextSummaryRequest;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCharsPerTokenEstimate ()I
+	public final fun getContextWindowTokens ()Ljava/lang/Long;
 	public final fun getConversation ()Ljava/lang/String;
 	public final fun getGeneration ()J
 	public final fun getMaxOutputTokens ()I
@@ -1696,8 +1701,8 @@ public final class saien/magrathea/core/MessageRole$Companion {
 
 public final class saien/magrathea/core/ModelDescriptor {
 	public static final field Companion Lsaien/magrathea/core/ModelDescriptor$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLsaien/magrathea/core/ReasoningCapabilities;ZLjava/lang/Long;Ljava/util/Set;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLsaien/magrathea/core/ReasoningCapabilities;ZLjava/lang/Long;Ljava/util/Set;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLsaien/magrathea/core/ReasoningCapabilities;ZLjava/lang/Long;Ljava/util/Set;Ljava/lang/Integer;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLsaien/magrathea/core/ReasoningCapabilities;ZLjava/lang/Long;Ljava/util/Set;Ljava/lang/Integer;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/lang/String;
@@ -1706,12 +1711,14 @@ public final class saien/magrathea/core/ModelDescriptor {
 	public final fun component6 ()Z
 	public final fun component7 ()Ljava/lang/Long;
 	public final fun component8 ()Ljava/util/Set;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLsaien/magrathea/core/ReasoningCapabilities;ZLjava/lang/Long;Ljava/util/Set;)Lsaien/magrathea/core/ModelDescriptor;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/ModelDescriptor;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLsaien/magrathea/core/ReasoningCapabilities;ZLjava/lang/Long;Ljava/util/Set;ILjava/lang/Object;)Lsaien/magrathea/core/ModelDescriptor;
+	public final fun component9 ()Ljava/lang/Integer;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLsaien/magrathea/core/ReasoningCapabilities;ZLjava/lang/Long;Ljava/util/Set;Ljava/lang/Integer;)Lsaien/magrathea/core/ModelDescriptor;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/ModelDescriptor;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLsaien/magrathea/core/ReasoningCapabilities;ZLjava/lang/Long;Ljava/util/Set;Ljava/lang/Integer;ILjava/lang/Object;)Lsaien/magrathea/core/ModelDescriptor;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getContextWindowTokens ()Ljava/lang/Long;
 	public final fun getDisplayName ()Ljava/lang/String;
 	public final fun getInputModalities ()Ljava/util/Set;
+	public final fun getMaxOutputTokens ()Ljava/lang/Integer;
 	public final fun getModel ()Ljava/lang/String;
 	public final fun getProvider ()Ljava/lang/String;
 	public final fun getReasoningCapabilities ()Lsaien/magrathea/core/ReasoningCapabilities;

@@ -2,14 +2,29 @@
 
 package saien.magrathea.chatbot
 
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.coroutines.startCoroutine
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -24,6 +39,8 @@ import saien.magrathea.core.AgentEngineConfig
 import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentFailureCode
 import saien.magrathea.core.AgentCheckpoint
+import saien.magrathea.core.AgentInterruption
+import saien.magrathea.core.AgentInterruptionReason
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentPersistence
 import saien.magrathea.core.AgentPersistenceRecord
@@ -54,6 +71,11 @@ import saien.magrathea.core.TokenUsage
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolResultPart
 import saien.magrathea.runtime.InMemoryAgentPersistence
+import saien.magrathea.runtime.AgentSessionLease
+import saien.magrathea.runtime.AgentSessionManager
+import saien.magrathea.runtime.AgentSessionPhase
+import saien.magrathea.runtime.AgentSessionRuntimeSnapshot
+import saien.magrathea.runtime.DefaultAgentSessionManager
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -272,10 +294,10 @@ class ChatbotFacadeContractTest {
         assertEquals(updated.reasoningPreference, runner.requests.last().reasoningPreference)
 
         session.close()
-        val resumed = client.resumeSession(sessionId.value)
-        assertEquals(updated, resumed.snapshot().configuration)
+        val restored = client.restoreSession(sessionId.value)
+        assertEquals(updated, restored.snapshot().configuration)
         advanceUntilIdle()
-        assertEquals(ChatbotStatus.COMPLETED, resumed.snapshot().status)
+        assertEquals(ChatbotStatus.COMPLETED, restored.snapshot().status)
         client.close()
     }
 
@@ -479,16 +501,9 @@ class ChatbotFacadeContractTest {
             override suspend fun clear() = Unit
         }
         val runnerStore = InMemoryAgentPersistence()
-        val client = composeChatbotClient(
+        val client = createChatbotClient(
+            runner = CompletingRunner(runnerStore),
             requestFactory = DefaultChatbotRequestFactory(),
-            controllerFactory = { requestFactory, configuration, scope ->
-                ChatbotController(
-                    CompletingRunner(runnerStore),
-                    requestFactory,
-                    configuration,
-                    scope = scope,
-                )
-            },
             persistence = blockingStore,
             closeResources = { },
             sessionDispatcher = StandardTestDispatcher(testScheduler),
@@ -513,26 +528,239 @@ class ChatbotFacadeContractTest {
     }
 
     @Test
+    fun concurrentCloseFollowerWaitsForThePublishedCleanupOutcome() = runTest {
+        val enteredCleanup = CompletableDeferred<Unit>()
+        val releaseCleanup = CompletableDeferred<Unit>()
+        var resourceCloses = 0
+        val store = InMemoryAgentPersistence()
+        val client = testClient(
+            runner = CompletingRunner(store),
+            store = store,
+            dispatcher = StandardTestDispatcher(testScheduler),
+            closeResources = {
+                resourceCloses += 1
+                enteredCleanup.complete(Unit)
+                releaseCleanup.await()
+            },
+        )
+
+        val owner = async { client.close() }
+        runCurrent()
+        enteredCleanup.await()
+        val follower = async { client.close() }
+        runCurrent()
+
+        assertFalse(owner.isCompleted)
+        assertFalse(follower.isCompleted)
+        assertEquals(
+            ChatbotFailure.CLOSED,
+            assertFailsWith<ChatbotException> { client.history() }.failure,
+        )
+
+        releaseCleanup.complete(Unit)
+        owner.await()
+        follower.await()
+        assertEquals(1, resourceCloses)
+    }
+
+    @Test
+    fun concurrentAndLateCloseCallersShareTheCleanupFailure() = runTest {
+        val enteredCleanup = CompletableDeferred<Unit>()
+        val releaseCleanup = CompletableDeferred<Unit>()
+        var resourceCloses = 0
+        val store = InMemoryAgentPersistence()
+        val client = testClient(
+            runner = CompletingRunner(store),
+            store = store,
+            dispatcher = StandardTestDispatcher(testScheduler),
+            closeResources = {
+                resourceCloses += 1
+                enteredCleanup.complete(Unit)
+                releaseCleanup.await()
+                error("close resource failure")
+            },
+        )
+
+        val owner = async {
+            assertFailsWith<ChatbotException> { client.close() }
+        }
+        runCurrent()
+        enteredCleanup.await()
+        val follower = async {
+            assertFailsWith<ChatbotException> { client.close() }
+        }
+        runCurrent()
+        assertFalse(follower.isCompleted)
+
+        releaseCleanup.complete(Unit)
+        val ownerFailure = owner.await()
+        val followerFailure = follower.await()
+        val lateFailure = assertFailsWith<ChatbotException> { client.close() }
+
+        assertEquals(ChatbotFailure.OPERATION_FAILED, ownerFailure.failure)
+        assertEquals(ownerFailure.failure, followerFailure.failure)
+        assertEquals(ownerFailure.failure, lateFailure.failure)
+        assertEquals(1, resourceCloses)
+    }
+
+    @Test
+    fun cancelledFirstCloserStillPublishesCleanupForFollowers() = runTest {
+        val enteredCleanup = CompletableDeferred<Unit>()
+        val releaseCleanup = CompletableDeferred<Unit>()
+        var resourceCloses = 0
+        val store = InMemoryAgentPersistence()
+        val client = testClient(
+            runner = CompletingRunner(store),
+            store = store,
+            dispatcher = StandardTestDispatcher(testScheduler),
+            closeResources = {
+                resourceCloses += 1
+                enteredCleanup.complete(Unit)
+                releaseCleanup.await()
+            },
+        )
+
+        val owner = async { client.close() }
+        runCurrent()
+        enteredCleanup.await()
+        owner.cancel()
+        val follower = async { client.close() }
+        runCurrent()
+
+        assertFalse(owner.isCompleted)
+        assertFalse(follower.isCompleted)
+
+        releaseCleanup.complete(Unit)
+        assertFailsWith<kotlin.coroutines.cancellation.CancellationException> { owner.await() }
+        follower.await()
+        client.close()
+        assertEquals(1, resourceCloses)
+    }
+
+    @Test
+    fun sessionCloseCallersShareControllerCleanupFailure() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val enteredRelease = CompletableDeferred<Unit>()
+        val releaseFailure = CompletableDeferred<Unit>()
+        var releaseCalls = 0
+        var ownerNotifications = 0
+        val delegate = CancellingHandoffLease(
+            sessionId = AgentSessionId("failing-session-close"),
+            cancellationPoint = HandoffCancellationPoint.NONE,
+            handoffJob = Job(),
+        )
+        val lease = object : AgentSessionLease by delegate {
+            override suspend fun release() {
+                releaseCalls += 1
+                enteredRelease.complete(Unit)
+                releaseFailure.await()
+                error("lease release failure")
+            }
+        }
+        val scope = CoroutineScope(dispatcher)
+        val session = ChatbotSession(
+            controller = ChatbotController(
+                lease = lease,
+                requestFactory = DefaultChatbotRequestFactory(),
+                initialConfiguration = testChatbotConfiguration(),
+                scope = scope,
+            ),
+            scope = scope,
+            onClosed = { ownerNotifications += 1 },
+        )
+
+        val owner = async {
+            assertFailsWith<ChatbotException> { session.close() }
+        }
+        runCurrent()
+        enteredRelease.await()
+        val follower = async {
+            assertFailsWith<ChatbotException> { session.close() }
+        }
+        runCurrent()
+        assertFalse(follower.isCompleted)
+
+        releaseFailure.complete(Unit)
+        val ownerFailure = owner.await()
+        val followerFailure = follower.await()
+        val lateFailure = assertFailsWith<ChatbotException> { session.close() }
+
+        assertEquals(ChatbotFailure.OPERATION_FAILED, ownerFailure.failure)
+        assertEquals(ownerFailure.failure, followerFailure.failure)
+        assertEquals(ownerFailure.failure, lateFailure.failure)
+        assertEquals(1, releaseCalls)
+        assertEquals(1, ownerNotifications)
+    }
+
+    @Test
+    fun rejectedHandoffCleanupContainsLeaseReleaseFailure() = runTest {
+        val uncaught = mutableListOf<Throwable>()
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val scope = CoroutineScope(
+            SupervisorJob() + dispatcher + CoroutineExceptionHandler { _, failure ->
+                uncaught += failure
+            },
+        )
+        var releaseCalls = 0
+        var ownerNotifications = 0
+        val delegate = CancellingHandoffLease(
+            sessionId = AgentSessionId("rejected-failing-handoff"),
+            cancellationPoint = HandoffCancellationPoint.NONE,
+            handoffJob = Job(),
+        )
+        val lease = object : AgentSessionLease by delegate {
+            override suspend fun release() {
+                releaseCalls += 1
+                error("rejected handoff release failure")
+            }
+        }
+        val session = ChatbotSession(
+            controller = ChatbotController(
+                lease = lease,
+                requestFactory = DefaultChatbotRequestFactory(),
+                initialConfiguration = testChatbotConfiguration(),
+                scope = scope,
+            ),
+            scope = scope,
+            onClosed = { ownerNotifications += 1 },
+        )
+
+        session.closeAfterRejectedHandoff()
+        runCurrent()
+
+        assertTrue(uncaught.isEmpty())
+        assertEquals(1, releaseCalls)
+        assertEquals(1, ownerNotifications)
+    }
+
+    @Test
     fun sessionCloseNotifiesItsOwnerOnceAndRacesSafelyWithClientClose() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val store = InMemoryAgentPersistence()
         var ownerNotifications = 0
         val directScope = CoroutineScope(dispatcher)
+        val directManager = DefaultAgentSessionManager(
+            runner = CompletingRunner(store),
+            persistence = store,
+            dispatcher = dispatcher,
+        )
+        val directLease = directManager.create()
         val directSession = ChatbotSession(
             controller = ChatbotController(
-                runner = CompletingRunner(store),
+                lease = directLease,
                 requestFactory = DefaultChatbotRequestFactory(),
                 initialConfiguration = testChatbotConfiguration(),
                 scope = directScope,
             ),
             scope = directScope,
-            persistRequest = { _, _ -> },
             onClosed = { ownerNotifications += 1 },
         )
 
         directSession.close()
         directSession.close()
+        advanceUntilIdle()
         assertEquals(1, ownerNotifications)
+        directManager.close()
 
         var resourceCloses = 0
         val client = testClient(
@@ -583,7 +811,10 @@ class ChatbotFacadeContractTest {
             ),
         )
         val client = testClient(
-            runner = CompletingRunner(store),
+            runner = CompletingRunner(
+                store,
+                recoveryDisposition = AgentRecoveryDisposition.RESUMABLE,
+            ),
             store = store,
             dispatcher = StandardTestDispatcher(testScheduler),
         )
@@ -591,9 +822,309 @@ class ChatbotFacadeContractTest {
         val resumed = client.resumeSession(sessionId.value)
 
         assertEquals("persisted question", resumed.snapshot().messages.single().text)
+        assertEquals(
+            ChatbotFailure.INVALID_ARGUMENT,
+            assertFailsWith<ChatbotException> {
+                client.resumeSession(sessionId.value)
+            }.failure,
+        )
         advanceUntilIdle()
         assertEquals(ChatbotStatus.COMPLETED, resumed.snapshot().status)
         client.close()
+    }
+
+    @Test
+    fun restoreProjectsRecoveryWithoutStartingPersistedExecution() = runTest {
+        val store = InMemoryAgentPersistence()
+        val sessionId = AgentSessionId("restore-only")
+        val user = AgentMessage(
+            id = "restore-only-user",
+            role = MessageRole.USER,
+            parts = listOf(TextPart("wait for a host")),
+            createdAtEpochMs = 1L,
+        )
+        val request = AgentRequest(
+            sessionId = sessionId,
+            messages = listOf(user),
+            model = ModelDescriptor("test", "test-model"),
+        )
+        val runId = AgentRunId("restore-only-run")
+        val runningState = AgentStateSnapshot(
+            messages = listOf(user),
+            status = AgentStatus.RUNNING,
+        )
+        store.commit(
+            AgentSessionSnapshot(
+                sessionId = sessionId,
+                runId = runId,
+                request = request,
+                state = runningState,
+                updatedAtEpochMs = 2L,
+            ),
+            AgentCheckpoint(
+                sessionId,
+                runId,
+                AgentResumeCursor(0, AgentResumePhase.MODEL_PENDING),
+                runningState,
+            ),
+        )
+        val runner = CompletingRunner(
+            store = store,
+            recoveryDisposition = AgentRecoveryDisposition.RESUMABLE,
+        )
+        val client = testClient(
+            runner = runner,
+            store = store,
+            dispatcher = StandardTestDispatcher(testScheduler),
+        )
+
+        val restored = client.restoreSession(sessionId.value)
+        val secondRestoredFacade = client.restoreSession(sessionId.value)
+        advanceUntilIdle()
+
+        assertTrue(restored !== secondRestoredFacade)
+        assertEquals(ChatbotStatus.INTERRUPTED, restored.snapshot().status)
+        assertEquals(restored.snapshot(), secondRestoredFacade.snapshot())
+        assertEquals(
+            ChatbotInterruptionReason.ORPHANED,
+            restored.snapshot().interruption?.reason,
+        )
+        assertEquals(0, runner.resumeCount)
+
+        restored.resume()
+        advanceUntilIdle()
+        assertEquals(1, runner.resumeCount)
+        assertEquals(ChatbotStatus.COMPLETED, restored.snapshot().status)
+        assertEquals(ChatbotStatus.COMPLETED, secondRestoredFacade.snapshot().status)
+        client.close()
+    }
+
+    @Test
+    fun restoreFailsClosedForUnattachableOrInconsistentRecovery() = runTest {
+        val store = InMemoryAgentPersistence()
+        val sessionId = AgentSessionId("restore-fail-closed")
+        val user = AgentMessage(
+            id = "restore-fail-closed-user",
+            role = MessageRole.USER,
+            parts = listOf(TextPart("recover safely")),
+        )
+        val request = AgentRequest(
+            sessionId = sessionId,
+            messages = listOf(user),
+            model = ModelDescriptor("test", "test-model"),
+        )
+        val runId = AgentRunId("restore-fail-closed-run")
+        val runningState = AgentStateSnapshot(
+            messages = listOf(user),
+            status = AgentStatus.RUNNING,
+        )
+        store.commit(
+            AgentSessionSnapshot(sessionId, runId, request, runningState),
+            AgentCheckpoint(
+                sessionId,
+                runId,
+                AgentResumeCursor(0, AgentResumePhase.MODEL_PENDING),
+                runningState,
+            ),
+        )
+
+        val activeClient = testClient(
+            runner = CompletingRunner(store, AgentRecoveryDisposition.ACTIVE),
+            store = store,
+        )
+        assertEquals(
+            ChatbotFailure.BUSY,
+            assertFailsWith<ChatbotException> {
+                activeClient.restoreSession(sessionId.value)
+            }.failure,
+        )
+        activeClient.close()
+
+        val missingClient = testClient(
+            runner = CompletingRunner(store, AgentRecoveryDisposition.NOT_FOUND),
+            store = store,
+        )
+        assertEquals(
+            ChatbotFailure.NOT_FOUND,
+            assertFailsWith<ChatbotException> {
+                missingClient.restoreSession(sessionId.value)
+            }.failure,
+        )
+        missingClient.close()
+
+        val inconsistentRunner = CompletingRunner(
+            store = store,
+            recoveryDisposition = AgentRecoveryDisposition.RESUMABLE,
+            recoveryRunId = AgentRunId("newer-run"),
+        )
+        val inconsistentClient = testClient(inconsistentRunner, store)
+        assertEquals(
+            ChatbotFailure.BUSY,
+            assertFailsWith<ChatbotException> {
+                inconsistentClient.restoreSession(sessionId.value)
+            }.failure,
+        )
+        assertEquals(2, inconsistentRunner.inspectCount)
+        inconsistentClient.close()
+    }
+
+    @Test
+    fun facadeCloseOnlyDetachesAndDoesNotInterruptCanonicalRuntime() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val store = InMemoryAgentPersistence()
+        val runner = BlockingRunner()
+        val manager = DefaultAgentSessionManager(runner, store, dispatcher)
+        val client = createChatbotClient(
+            sessionManager = manager,
+            requestFactory = DefaultChatbotRequestFactory(),
+            sessionDispatcher = dispatcher,
+        )
+        val session = client.createSession(testChatbotConfiguration())
+        session.send("keep running")
+        runCurrent()
+        val sessionId = AgentSessionId(requireNotNull(session.snapshot().sessionId))
+
+        session.close()
+
+        assertTrue(runner.interrupted.isEmpty())
+        assertTrue(sessionId in manager.liveSessionIds.value)
+        val attached = manager.acquire(sessionId)
+        assertTrue(attached.state.value.isExecuting)
+        attached.release()
+
+        client.close()
+        assertTrue(runner.interrupted.isEmpty())
+        manager.close()
+        assertEquals(listOf(sessionId), runner.interrupted)
+    }
+
+    @Test
+    fun closingBorrowedClientLeavesManagerUsable() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val store = InMemoryAgentPersistence()
+        val runner = BlockingRunner()
+        val manager = DefaultAgentSessionManager(runner, store, dispatcher)
+        val client = createChatbotClient(
+            sessionManager = manager,
+            requestFactory = DefaultChatbotRequestFactory(),
+            sessionDispatcher = dispatcher,
+        )
+        val session = client.createSession(testChatbotConfiguration())
+        session.send("background run")
+        runCurrent()
+        val sessionId = AgentSessionId(requireNotNull(session.snapshot().sessionId))
+
+        client.close()
+
+        assertTrue(runner.interrupted.isEmpty())
+        val lateLease = manager.acquire(sessionId)
+        assertTrue(lateLease.isAttached)
+        assertTrue(lateLease.state.value.isExecuting)
+        lateLease.release()
+        manager.close()
+        assertEquals(listOf(sessionId), runner.interrupted)
+    }
+
+    @Test
+    fun closingOwnedClientInterruptsManagedRoot() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val store = InMemoryAgentPersistence()
+        val runner = BlockingRunner()
+        val client = testClient(runner, store, dispatcher)
+        val session = client.createSession(testChatbotConfiguration())
+        session.send("owned run")
+        runCurrent()
+        val sessionId = AgentSessionId(requireNotNull(session.snapshot().sessionId))
+
+        client.close()
+
+        assertEquals(listOf(sessionId), runner.interrupted)
+    }
+
+    @Test
+    fun cancellationDuringFacadeConstructionReleasesTheAcquiredLease() = runTest {
+        val manager = CancellingHandoffManager(HandoffCancellationPoint.STATE_READ)
+        val client = createChatbotClient(
+            sessionManager = manager,
+            requestFactory = DefaultChatbotRequestFactory(),
+            sessionDispatcher = StandardTestDispatcher(testScheduler),
+        )
+
+        val creation = async { client.createSession(testChatbotConfiguration()) }
+        runCurrent()
+
+        assertTrue(creation.isCancelled)
+        assertFailsWith<kotlin.coroutines.cancellation.CancellationException> { creation.await() }
+        assertEquals(1, manager.lease.releaseCount)
+        client.close()
+    }
+
+    @Test
+    fun cancellationDuringResumeHandoffDetachesWithoutCancellingCanonicalExecution() = runTest {
+        val manager = CancellingHandoffManager(HandoffCancellationPoint.RESUME)
+        val client = createChatbotClient(
+            sessionManager = manager,
+            requestFactory = DefaultChatbotRequestFactory(),
+            sessionDispatcher = StandardTestDispatcher(testScheduler),
+        )
+
+        val resume = async { client.resumeSession(manager.sessionId.value) }
+        runCurrent()
+
+        assertTrue(resume.isCancelled)
+        assertFailsWith<kotlin.coroutines.cancellation.CancellationException> { resume.await() }
+        assertEquals(1, manager.lease.resumeCount)
+        assertEquals(1, manager.lease.releaseCount)
+        assertEquals(0, manager.lease.cancelCount)
+        assertEquals(0, manager.lease.interruptCount)
+        client.close()
+    }
+
+    @Test
+    fun closeCannotPassAnAdmittedOperationBeforeFacadeDelivery() = runTest {
+        val manager = CancellingHandoffManager(HandoffCancellationPoint.NONE)
+        val closeFinished = CompletableDeferred<Result<Unit>>()
+        val closeScopeJob = Job()
+        val closeScope = CoroutineScope(closeScopeJob + Dispatchers.Unconfined)
+        var cleanupObservedDeliveredLookup = false
+        lateinit var client: ChatbotClient
+        lateinit var lookupContext: CallbackOnJobLookupContext
+        lookupContext = CallbackOnJobLookupContext(
+            triggerAt = 2,
+            onTrigger = {
+                closeScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    closeFinished.complete(runCatching { client.close() })
+                }
+            },
+        )
+        client = ChatbotClient(
+            requestFactory = DefaultChatbotRequestFactory(),
+            sessionManager = manager,
+            ownsSessionManager = false,
+            closeResources = {
+                cleanupObservedDeliveredLookup = lookupContext.triggerReturned
+            },
+            sessionDispatcher = StandardTestDispatcher(testScheduler),
+        )
+        var creationResult: Result<ChatbotSession>? = null
+
+        suspend { client.createSession(testChatbotConfiguration()) }.startCoroutine(
+            object : Continuation<ChatbotSession> {
+                override val context: CoroutineContext = lookupContext
+
+                override fun resumeWith(result: Result<ChatbotSession>) {
+                    creationResult = result
+                }
+            },
+        )
+        runCurrent()
+
+        assertTrue(checkNotNull(creationResult).isSuccess)
+        closeFinished.await().getOrThrow()
+        assertTrue(cleanupObservedDeliveredLookup)
+        assertEquals(2, lookupContext.triggerAtLookup)
+        assertEquals(1, manager.lease.releaseCount)
+        closeScopeJob.cancel()
     }
 
     @Test
@@ -716,30 +1247,138 @@ class ChatbotFacadeContractTest {
         client.close()
     }
 
+    @Test
+    fun failedPersistenceDeleteStillClosesTheInvalidatedSessionFacades() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val backingStore = InMemoryAgentPersistence()
+        val persistence = FailingDestructivePersistence(
+            delegate = backingStore,
+            failDelete = true,
+        )
+        val client = testClient(
+            runner = CompletingRunner(backingStore),
+            store = persistence,
+            dispatcher = dispatcher,
+        )
+        val deleted = client.createSession(testChatbotConfiguration())
+        val retained = client.createSession(testChatbotConfiguration())
+        deleted.send("delete me")
+        retained.send("keep me")
+        advanceUntilIdle()
+        val deletedId = AgentSessionId(requireNotNull(deleted.snapshot().sessionId))
+
+        val failure = assertFailsWith<ChatbotException> {
+            client.deleteSession(deletedId.value)
+        }
+
+        assertEquals(ChatbotFailure.STORAGE, failure.failure)
+        assertEquals(ChatbotInvalidationScope.SESSION, failure.invalidationScope)
+        assertEquals(1, persistence.deleteCalls)
+        assertTrue(backingStore.load(deletedId) != null)
+        assertEquals(
+            ChatbotFailure.CLOSED,
+            assertFailsWith<ChatbotException> { deleted.send("stale facade") }.failure,
+        )
+        retained.send("still attached")
+        advanceUntilIdle()
+
+        val replacement = client.restoreSession(deletedId.value)
+        assertEquals(deletedId.value, replacement.snapshot().sessionId)
+        replacement.close()
+        retained.close()
+        client.close()
+    }
+
+    @Test
+    fun failedPersistenceClearStillClosesEveryInvalidatedSessionFacade() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val backingStore = InMemoryAgentPersistence()
+        val persistence = FailingDestructivePersistence(
+            delegate = backingStore,
+            failClear = true,
+        )
+        val client = testClient(
+            runner = CompletingRunner(backingStore),
+            store = persistence,
+            dispatcher = dispatcher,
+        )
+        val first = client.createSession(testChatbotConfiguration())
+        val second = client.createSession(testChatbotConfiguration())
+        first.send("first")
+        second.send("second")
+        advanceUntilIdle()
+        val firstId = AgentSessionId(requireNotNull(first.snapshot().sessionId))
+        val secondId = AgentSessionId(requireNotNull(second.snapshot().sessionId))
+
+        val failure = assertFailsWith<ChatbotException> { client.clearHistory() }
+
+        assertEquals(ChatbotFailure.STORAGE, failure.failure)
+        assertEquals(ChatbotInvalidationScope.ALL_SESSIONS, failure.invalidationScope)
+        assertEquals(1, persistence.clearCalls)
+        assertTrue(backingStore.load(firstId) != null)
+        assertTrue(backingStore.load(secondId) != null)
+        assertEquals(
+            ChatbotFailure.CLOSED,
+            assertFailsWith<ChatbotException> { first.send("stale first facade") }.failure,
+        )
+        assertEquals(
+            ChatbotFailure.CLOSED,
+            assertFailsWith<ChatbotException> { second.send("stale second facade") }.failure,
+        )
+
+        val replacement = client.restoreSession(firstId.value)
+        assertEquals(firstId.value, replacement.snapshot().sessionId)
+        replacement.close()
+        client.close()
+    }
+
     private fun testClient(
         runner: AgentRunner,
-        store: InMemoryAgentPersistence,
+        store: AgentPersistence,
         dispatcher: CoroutineDispatcher = Dispatchers.Default,
         closeResources: suspend () -> Unit = {},
         requestFactory: ChatbotRequestFactory = DefaultChatbotRequestFactory(),
-    ): ChatbotClient = composeChatbotClient(
+    ): ChatbotClient = createChatbotClient(
+        runner = runner,
         requestFactory = requestFactory,
-        controllerFactory = { factory, configuration, scope ->
-            ChatbotController(runner, factory, configuration, scope = scope)
-        },
         persistence = store,
-        inspectRecovery = runner::inspectRecovery,
         closeResources = closeResources,
         sessionDispatcher = dispatcher,
     )
+
+    private class FailingDestructivePersistence(
+        private val delegate: AgentPersistence,
+        private val failDelete: Boolean = false,
+        private val failClear: Boolean = false,
+    ) : AgentPersistence by delegate {
+        var deleteCalls: Int = 0
+            private set
+        var clearCalls: Int = 0
+            private set
+
+        override suspend fun deleteSession(sessionId: AgentSessionId) {
+            deleteCalls += 1
+            if (failDelete) error("synthetic delete failure")
+            delegate.deleteSession(sessionId)
+        }
+
+        override suspend fun clear() {
+            clearCalls += 1
+            if (failClear) error("synthetic clear failure")
+            delegate.clear()
+        }
+    }
 
     private class CompletingRunner(
         private val store: InMemoryAgentPersistence,
         private val recoveryDisposition: AgentRecoveryDisposition =
             AgentRecoveryDisposition.NOT_FOUND,
         private val recoveryStatus: AgentStatus? = null,
+        private val recoveryRunId: AgentRunId? = null,
     ) : TestAgentRunner() {
         var runCount = 0
+        var resumeCount = 0
+        var inspectCount = 0
         val requests = mutableListOf<AgentRequest>()
 
         override fun run(request: AgentRequest): Flow<AgentEvent> = flow {
@@ -773,20 +1412,46 @@ class ChatbotFacadeContractTest {
         }
 
         override suspend fun resume(sessionId: AgentSessionId): Flow<AgentEvent> = flow {
+            resumeCount += 1
             val snapshot = requireNotNull(store.load(sessionId)?.snapshot)
+            val completed = snapshot.state.copy(
+                status = AgentStatus.COMPLETED,
+                stopReason = StopReason.COMPLETED,
+            )
+            store.commit(snapshot.copy(state = completed, interruption = null), checkpoint = null)
             emit(AgentEvent.Started(sessionId, snapshot.runId))
-            emit(AgentEvent.Completed(sessionId, snapshot.state))
+            emit(AgentEvent.Completed(sessionId, completed))
         }
 
         override suspend fun cancel(sessionId: AgentSessionId) = Unit
 
         override suspend fun inspectRecovery(sessionId: AgentSessionId): AgentRecoveryInfo {
+            inspectCount += 1
             val snapshot = store.load(sessionId)?.snapshot
             return AgentRecoveryInfo(
                 sessionId = sessionId,
-                runId = snapshot?.runId,
+                runId = recoveryRunId ?: snapshot?.runId,
                 disposition = recoveryDisposition,
                 status = recoveryStatus ?: snapshot?.state?.status,
+                state = snapshot?.state?.let { state ->
+                    recoveryStatus?.let { status ->
+                        state.copy(
+                            status = status,
+                            stopReason = if (status == AgentStatus.COMPLETED) {
+                                StopReason.COMPLETED
+                            } else {
+                                state.stopReason
+                            },
+                        )
+                    } ?: state
+                },
+                interruption = snapshot?.interruption ?: if (
+                    recoveryDisposition == AgentRecoveryDisposition.RESUMABLE
+                ) {
+                    AgentInterruption(AgentInterruptionReason.ORPHANED)
+                } else {
+                    null
+                },
             )
         }
     }
@@ -794,19 +1459,217 @@ class ChatbotFacadeContractTest {
     private class BlockingRunner : TestAgentRunner() {
         val requests = mutableListOf<AgentRequest>()
         val cancelled = mutableListOf<AgentSessionId>()
+        val interrupted = mutableListOf<AgentSessionId>()
+        private val activeJobs = mutableMapOf<AgentSessionId, Job>()
 
         override fun run(request: AgentRequest): Flow<AgentEvent> = flow {
-            requests += request
-            emit(AgentEvent.Started(request.sessionId, TEST_RUN_ID))
-            awaitCancellation()
+            activeJobs[request.sessionId] = currentCoroutineContext()[Job]!!
+            try {
+                requests += request
+                emit(AgentEvent.Started(request.sessionId, TEST_RUN_ID))
+                awaitCancellation()
+            } finally {
+                activeJobs.remove(request.sessionId)
+            }
         }
 
         override suspend fun resume(sessionId: AgentSessionId): Flow<AgentEvent> = flow {
-            awaitCancellation()
+            activeJobs[sessionId] = currentCoroutineContext()[Job]!!
+            try {
+                awaitCancellation()
+            } finally {
+                activeJobs.remove(sessionId)
+            }
         }
 
         override suspend fun cancel(sessionId: AgentSessionId) {
             cancelled += sessionId
+            activeJobs[sessionId]?.cancelAndJoin()
         }
+
+        override suspend fun interrupt(sessionId: AgentSessionId): AgentRecoveryInfo {
+            interrupted += sessionId
+            activeJobs[sessionId]?.cancelAndJoin()
+            return AgentRecoveryInfo(
+                sessionId = sessionId,
+                runId = TEST_RUN_ID,
+                disposition = AgentRecoveryDisposition.RESUMABLE,
+                status = AgentStatus.INTERRUPTED,
+                interruption = AgentInterruption(AgentInterruptionReason.HOST_REQUESTED),
+            )
+        }
+    }
+
+    private enum class HandoffCancellationPoint {
+        NONE,
+        STATE_READ,
+        RESUME,
+    }
+
+    private class CancellingHandoffManager(
+        private val cancellationPoint: HandoffCancellationPoint,
+    ) : AgentSessionManager {
+        val sessionId = AgentSessionId("cancelled-handoff-${cancellationPoint.name.lowercase()}")
+        lateinit var lease: CancellingHandoffLease
+            private set
+
+        private val mutableLiveSessionIds = MutableStateFlow<Set<AgentSessionId>>(emptySet())
+        override val liveSessionIds: StateFlow<Set<AgentSessionId>> = mutableLiveSessionIds
+
+        override suspend fun create(sessionId: AgentSessionId): AgentSessionLease =
+            newLease(sessionId)
+
+        override suspend fun acquire(sessionId: AgentSessionId): AgentSessionLease {
+            assertEquals(this.sessionId, sessionId)
+            return newLease(sessionId)
+        }
+
+        override suspend fun listSessions(): List<AgentSessionSnapshot> = emptyList()
+        override suspend fun delete(sessionId: AgentSessionId) = Unit
+        override suspend fun clear() = Unit
+        override suspend fun close() = Unit
+
+        private suspend fun newLease(sessionId: AgentSessionId): AgentSessionLease {
+            lease = CancellingHandoffLease(
+                sessionId = sessionId,
+                cancellationPoint = cancellationPoint,
+                handoffJob = if (cancellationPoint == HandoffCancellationPoint.NONE) {
+                    Job()
+                } else {
+                    currentCoroutineContext()[Job]!!
+                },
+            )
+            mutableLiveSessionIds.value = setOf(sessionId)
+            return lease
+        }
+    }
+
+    private class CancellingHandoffLease(
+        override val sessionId: AgentSessionId,
+        private val cancellationPoint: HandoffCancellationPoint,
+        private val handoffJob: Job,
+    ) : AgentSessionLease {
+        private val request = AgentRequest(
+            sessionId = sessionId,
+            messages = listOf(
+                AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("resume me"))),
+            ),
+            model = ModelDescriptor("test", "test-model"),
+        )
+        private val runtime = MutableStateFlow(
+            if (cancellationPoint == HandoffCancellationPoint.RESUME) {
+                val interrupted = AgentStateSnapshot(
+                    messages = request.messages,
+                    status = AgentStatus.INTERRUPTED,
+                    stopReason = StopReason.INTERRUPTED,
+                )
+                AgentSessionRuntimeSnapshot(
+                    revision = 0L,
+                    sessionId = sessionId,
+                    request = request,
+                    runId = TEST_RUN_ID,
+                    state = interrupted,
+                    phase = AgentSessionPhase.RESUMABLE,
+                    recovery = AgentRecoveryInfo(
+                        sessionId = sessionId,
+                        runId = TEST_RUN_ID,
+                        disposition = AgentRecoveryDisposition.RESUMABLE,
+                        status = AgentStatus.INTERRUPTED,
+                        state = interrupted,
+                        interruption = AgentInterruption(AgentInterruptionReason.ORPHANED),
+                    ),
+                )
+            } else {
+                AgentSessionRuntimeSnapshot(revision = 0L, sessionId = sessionId)
+            },
+        )
+        private val edgeEvents = MutableSharedFlow<AgentEvent>()
+        private var cancelOnStateRead = cancellationPoint == HandoffCancellationPoint.STATE_READ
+        private var attached = true
+
+        var resumeCount = 0
+            private set
+        var releaseCount = 0
+            private set
+        var cancelCount = 0
+            private set
+        var interruptCount = 0
+            private set
+
+        override val state: StateFlow<AgentSessionRuntimeSnapshot>
+            get() {
+                if (cancelOnStateRead) {
+                    cancelOnStateRead = false
+                    handoffJob.cancel()
+                }
+                return runtime
+            }
+        override val events: SharedFlow<AgentEvent> = edgeEvents
+        override val isAttached: Boolean
+            get() = attached
+
+        override suspend fun start(request: AgentRequest) = Unit
+
+        override suspend fun resume() {
+            resumeCount += 1
+            if (cancellationPoint == HandoffCancellationPoint.RESUME) handoffJob.cancel()
+        }
+
+        override suspend fun interrupt(): AgentRecoveryInfo {
+            interruptCount += 1
+            return requireNotNull(runtime.value.recovery)
+        }
+
+        override suspend fun inspectRecovery(): AgentRecoveryInfo =
+            requireNotNull(runtime.value.recovery)
+
+        override suspend fun cancel() {
+            cancelCount += 1
+        }
+
+        override suspend fun replaceIdleRequest(request: AgentRequest) = Unit
+        override suspend fun awaitIdle() = Unit
+
+        override suspend fun release() {
+            if (attached) {
+                attached = false
+                releaseCount += 1
+            }
+        }
+    }
+
+    private class CallbackOnJobLookupContext(
+        private val triggerAt: Int,
+        private val onTrigger: () -> Unit,
+        private val delegate: Job = Job(),
+    ) : CoroutineContext {
+        var jobLookups: Int = 0
+            private set
+        var triggerAtLookup: Int = 0
+            private set
+        var triggerReturned: Boolean = false
+            private set
+
+        override fun <R> fold(
+            initial: R,
+            operation: (R, CoroutineContext.Element) -> R,
+        ): R = operation(initial, delegate)
+
+        @Suppress("UNCHECKED_CAST")
+        override fun <E : CoroutineContext.Element> get(
+            key: CoroutineContext.Key<E>,
+        ): E? {
+            if (key !== Job) return null
+            jobLookups += 1
+            if (jobLookups == triggerAt) {
+                triggerAtLookup = jobLookups
+                onTrigger()
+                triggerReturned = true
+            }
+            return delegate as E
+        }
+
+        override fun minusKey(key: CoroutineContext.Key<*>): CoroutineContext =
+            if (key === Job) EmptyCoroutineContext else this
     }
 }

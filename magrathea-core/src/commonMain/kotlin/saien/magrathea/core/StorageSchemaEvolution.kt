@@ -57,11 +57,12 @@ class StoredEnvelopeDecodeException internal constructor(
  * Frozen behavior for one adjacent schema transition.
  *
  * A shipped implementation must be a dedicated object whose complete source file is frozen by the
- * persistence ledger. Keeping source validation and transformation in the same object prevents a
- * later registry edit from weakening which historical documents the migration accepts.
+ * persistence ledger. Its validation owns every source field consumed, removed, or introduced by
+ * the transformation. The complete chain is then decoded and canonically validated only by the
+ * current schema adapter, so historical transitions never depend on drifting live serializers.
  */
 internal interface AdjacentStorageSchemaMigration {
-    /** Strictly decodes and validates the document as this migration's frozen source schema. */
+    /** Validates the frozen source preconditions required by this exact transformation. */
     fun validateSource(document: JsonObject)
 
     /** Transforms one validated document to the immediately following schema. */

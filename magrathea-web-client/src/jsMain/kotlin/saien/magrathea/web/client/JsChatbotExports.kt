@@ -65,6 +65,10 @@ class MagratheaWebChatbot @JsExport.Ignore internal constructor(
         MagratheaWebChatSession(client.resumeSession(sessionId), scope)
     }
 
+    fun restoreSession(sessionId: String): Promise<MagratheaWebChatSession> = scope.promise {
+        MagratheaWebChatSession(client.restoreSession(sessionId), scope)
+    }
+
     fun history(): Promise<Array<MagratheaWebChatHistoryItem>> = scope.promise {
         client.history().map(ChatbotHistoryItem::toJsHistoryItem).toTypedArray()
     }
@@ -280,6 +284,7 @@ class MagratheaWebChatModel(
     val supportsDisabledReasoning: Boolean,
     val supportsStreaming: Boolean,
     val contextWindowTokens: Double?,
+    val maxOutputTokens: Double? = null,
 ) {
     init {
         require(reasoningEfforts != null || !supportsDisabledReasoning) {
@@ -314,6 +319,7 @@ private fun MagratheaWebChatModel.toDescriptor(): ModelDescriptor {
         },
         supportsStreaming = supportsStreaming,
         contextWindowTokens = contextWindowTokens?.toContextWindowTokens(),
+        maxOutputTokens = maxOutputTokens?.toMaxOutputTokens(),
     )
 }
 
@@ -328,6 +334,7 @@ private fun ModelDescriptor.toJsModel(): MagratheaWebChatModel = MagratheaWebCha
     supportsDisabledReasoning = reasoningCapabilities?.supportsDisabled ?: false,
     supportsStreaming = supportsStreaming,
     contextWindowTokens = contextWindowTokens?.toDouble(),
+    maxOutputTokens = maxOutputTokens?.toDouble(),
 )
 
 private fun String.toReasoningPreference(): ReasoningPreference = when (lowercase()) {
@@ -359,6 +366,13 @@ private fun Double.toContextWindowTokens(): Long {
         "contextWindowTokens must be a positive safe integer"
     }
     return toLong()
+}
+
+private fun Double.toMaxOutputTokens(): Int {
+    require(isFinite() && this > 0.0 && this % 1.0 == 0.0 && this <= Int.MAX_VALUE.toDouble()) {
+        "maxOutputTokens must be a positive 32-bit integer"
+    }
+    return toInt()
 }
 
 private const val MAX_SAFE_INTEGER = 9_007_199_254_740_991.0

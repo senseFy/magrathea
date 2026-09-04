@@ -5,6 +5,8 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
@@ -47,9 +49,9 @@ class SerializationGoldenFixtureTest {
     }
 
     @Test
-    fun storedSessionEnvelope_matchesV6GoldenFixture() {
-        val expected = interruptedSessionFixture()
-        val fixture = resource("/v6/core/stored-session-envelope.json")
+    fun storedSessionEnvelope_matchesV7GoldenFixture() {
+        val expected = interruptedSessionFixture(maxOutputTokens = 16_384)
+        val fixture = resource("/v7/core/stored-session-envelope.json")
         val codec = AgentSessionSnapshotCodec(json, sdkVersion = fixtureSdkVersion)
 
         assertGolden(fixture, codec.encode(expected))
@@ -57,7 +59,7 @@ class SerializationGoldenFixtureTest {
     }
 
     @Test
-    fun storedCheckpointEnvelope_matchesV6GoldenFixture() {
+    fun storedCheckpointEnvelope_matchesV7GoldenFixture() {
         val session = sessionFixture()
         val expected = AgentCheckpoint(
             sessionId = session.sessionId,
@@ -89,7 +91,7 @@ class SerializationGoldenFixtureTest {
                 ),
             ),
         )
-        val fixture = resource("/v6/core/stored-checkpoint-envelope.json")
+        val fixture = resource("/v7/core/stored-checkpoint-envelope.json")
         val codec = AgentCheckpointCodec(json, sdkVersion = fixtureSdkVersion)
 
         assertGolden(fixture, codec.encode(expected))
@@ -104,6 +106,39 @@ class SerializationGoldenFixtureTest {
         assertThrows(SerializationException::class.java) {
             codec.decode(corruptFixture)
         }
+    }
+
+    @Test
+    fun shippedV6SessionEnvelopeMigratesToV7WithUnknownOutputCapability() {
+        val fixture = resource("/v6/core/stored-session-envelope.json")
+        val result = AgentSessionSnapshotCodec(json, sdkVersion = fixtureSdkVersion)
+            .decodeResult(fixture)
+
+        assertEquals(6, result.sourceSchemaVersion)
+        assertEquals(null, result.value.request.model.maxOutputTokens)
+        val rewrite = requireNotNull(result.rewritePayload)
+        assertEquals(
+            7,
+            json.parseToJsonElement(rewrite).jsonObject
+                .getValue("schemaVersion").jsonPrimitive.content.toInt(),
+        )
+        assertEquals(result.value, AgentSessionSnapshotCodec(json).decode(rewrite))
+    }
+
+    @Test
+    fun shippedV6CheckpointEnvelopeMigratesToV7() {
+        val fixture = resource("/v6/core/stored-checkpoint-envelope.json")
+        val result = AgentCheckpointCodec(json, sdkVersion = fixtureSdkVersion)
+            .decodeResult(fixture)
+
+        assertEquals(6, result.sourceSchemaVersion)
+        val rewrite = requireNotNull(result.rewritePayload)
+        assertEquals(
+            7,
+            json.parseToJsonElement(rewrite).jsonObject
+                .getValue("schemaVersion").jsonPrimitive.content.toInt(),
+        )
+        assertEquals(result.value, AgentCheckpointCodec(json).decode(rewrite))
     }
 
     @Test
@@ -257,7 +292,7 @@ class SerializationGoldenFixtureTest {
         toolLabel = "Image search",
     )
 
-    private fun sessionFixture(): AgentSessionSnapshot {
+    private fun sessionFixture(maxOutputTokens: Int? = null): AgentSessionSnapshot {
         val sessionId = AgentSessionId("session-fixture-1")
         val user = AgentMessage(
             id = "user-fixture-1",
@@ -275,6 +310,7 @@ class SerializationGoldenFixtureTest {
                 reasoningCapabilities = ReasoningCapabilities(),
                 supportsStreaming = true,
                 contextWindowTokens = 128_000,
+                maxOutputTokens = maxOutputTokens,
             ),
             engine = AgentEngineConfig(
                 provider = ProviderConfig(
@@ -307,8 +343,8 @@ class SerializationGoldenFixtureTest {
         )
     }
 
-    private fun interruptedSessionFixture(): AgentSessionSnapshot {
-        val session = sessionFixture()
+    private fun interruptedSessionFixture(maxOutputTokens: Int? = null): AgentSessionSnapshot {
+        val session = sessionFixture(maxOutputTokens)
         return session.copy(
             state = session.state.copy(
                 status = AgentStatus.INTERRUPTED,

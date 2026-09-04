@@ -5,6 +5,7 @@ import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -404,99 +405,119 @@ class DefaultAgentRunner(
         sessionId: AgentSessionId,
         resumed: Boolean,
         upstream: (ExecutionTraceState) -> Flow<AgentEvent>,
-    ): Flow<AgentEvent> = channelFlow {
-        val traceState = ExecutionTraceState()
-        val span = tracing.startSpan(
-            RuntimeTraceNames.AGENT_EXECUTION,
-            traceAttributes(
-                "magrathea.trace.schema_version" to 1,
-                "magrathea.sdk.version" to MagratheaSdk.version,
-                "magrathea.agent.session_id" to sessionId.value,
-                "magrathea.agent.operation" to operation,
-                "magrathea.agent.resumed" to resumed,
-            ),
-        )
-        var terminal: AgentEvent? = null
-        var thrown: Throwable? = null
-        val collectUpstream: suspend () -> Unit = {
-            upstream(traceState).collect { event ->
-                when (event) {
-                    is AgentEvent.Started -> traceState.started(event.runId, turn = null)
-                    is AgentEvent.TurnStarted -> traceState.turnStarted(event.turn)
-                    is AgentEvent.CheckpointSaved -> {
-                        traceState.started(event.checkpoint.runId, event.checkpoint.turn)
-                    }
-                    is AgentEvent.Completed -> {
-                        traceState.turnStarted(event.state.turn)
-                        terminal = event
-                    }
-                    is AgentEvent.Failed,
-                    is AgentEvent.Cancelled,
-                    -> terminal = event
-                    is AgentEvent.Interrupted -> {
-                        traceState.started(event.runId, event.state.turn)
-                        terminal = event
-                    }
-                    is AgentEvent.RecoveryBlocked -> {
-                        traceState.started(event.runId, turn = null)
-                        terminal = event
-                    }
-                    else -> Unit
-                }
-                send(event)
-            }
-        }
-        try {
-            span.context?.let { context ->
-                withMagratheaTraceContext(context) { collectUpstream() }
-            } ?: collectUpstream()
-        } catch (failure: Throwable) {
-            thrown = failure
-            throw failure
-        } finally {
-            val finalAttributes = arrayOf<Pair<String, Any?>>(
-                "magrathea.agent.run_id" to traceState.runId?.value,
-                "magrathea.agent.turn" to traceState.turn,
-                "magrathea.usage.input_tokens" to traceState.usage?.inputTokens,
-                "magrathea.usage.output_tokens" to traceState.usage?.outputTokens,
-                "magrathea.usage.reasoning_tokens" to traceState.usage?.reasoningTokens,
-            )
-            when (val event = terminal) {
-                is AgentEvent.Completed,
-                is AgentEvent.RecoveryBlocked,
-                -> span.endSuccess(*finalAttributes)
-                is AgentEvent.Failed -> span.endFailure(
-                    failureCode = event.code,
-                    phase = "runtime",
-                    *finalAttributes,
-                )
-                is AgentEvent.Cancelled -> span.endCancelled(*finalAttributes)
-                is AgentEvent.Interrupted -> span.endInterrupted(
-                    failureCode = event.interruption.provider?.code,
-                    phase = if (event.interruption.provider == null) "runtime" else "provider",
-                    *finalAttributes,
-                )
-                else -> when (val failure = thrown) {
-                    is CancellationException -> when (traceState.stopIntent) {
-                        StopIntent.INTERRUPT -> span.endInterrupted(
-                            failureCode = null,
-                            phase = "runtime",
-                            *finalAttributes,
-                        )
-                        StopIntent.ACTIVE,
-                        StopIntent.CANCEL,
-                        -> span.endCancelled(*finalAttributes)
-                    }
-                    null -> span.endSuccess(*finalAttributes)
-                    else -> span.endFailure(
-                        failureCode = failure.toAgentFailureCode(),
-                        phase = "runtime",
-                        *finalAttributes,
+    ): Flow<AgentEvent> = flow {
+        coroutineScope {
+            // Preserve AgentRunner's synchronous control-ready boundary while relaying emissions
+            // back to the collector context required by Flow's context-invariance contract.
+            val events = Channel<AgentEvent>(Channel.RENDEZVOUS)
+            val producer = launch(start = CoroutineStart.UNDISPATCHED) {
+                var completionFailure: Throwable? = null
+                try {
+                    val traceState = ExecutionTraceState()
+                    val span = tracing.startSpan(
+                        RuntimeTraceNames.AGENT_EXECUTION,
+                        traceAttributes(
+                            "magrathea.trace.schema_version" to 1,
+                            "magrathea.sdk.version" to MagratheaSdk.version,
+                            "magrathea.agent.session_id" to sessionId.value,
+                            "magrathea.agent.operation" to operation,
+                            "magrathea.agent.resumed" to resumed,
+                        ),
                     )
+                    var terminal: AgentEvent? = null
+                    var thrown: Throwable? = null
+                    val collectUpstream: suspend () -> Unit = {
+                        upstream(traceState).collect { event ->
+                            when (event) {
+                                is AgentEvent.Started -> traceState.started(event.runId, turn = null)
+                                is AgentEvent.TurnStarted -> traceState.turnStarted(event.turn)
+                                is AgentEvent.CheckpointSaved -> {
+                                    traceState.started(event.checkpoint.runId, event.checkpoint.turn)
+                                }
+                                is AgentEvent.Completed -> {
+                                    traceState.turnStarted(event.state.turn)
+                                    terminal = event
+                                }
+                                is AgentEvent.Failed,
+                                is AgentEvent.Cancelled,
+                                -> terminal = event
+                                is AgentEvent.Interrupted -> {
+                                    traceState.started(event.runId, event.state.turn)
+                                    terminal = event
+                                }
+                                is AgentEvent.RecoveryBlocked -> {
+                                    traceState.started(event.runId, turn = null)
+                                    terminal = event
+                                }
+                                else -> Unit
+                            }
+                            events.send(event)
+                        }
+                    }
+                    try {
+                        span.context?.let { context ->
+                            withMagratheaTraceContext(context) { collectUpstream() }
+                        } ?: collectUpstream()
+                    } catch (failure: Throwable) {
+                        thrown = failure
+                        throw failure
+                    } finally {
+                        val finalAttributes = arrayOf<Pair<String, Any?>>(
+                            "magrathea.agent.run_id" to traceState.runId?.value,
+                            "magrathea.agent.turn" to traceState.turn,
+                            "magrathea.usage.input_tokens" to traceState.usage?.inputTokens,
+                            "magrathea.usage.output_tokens" to traceState.usage?.outputTokens,
+                            "magrathea.usage.reasoning_tokens" to traceState.usage?.reasoningTokens,
+                        )
+                        when (val event = terminal) {
+                            is AgentEvent.Completed,
+                            is AgentEvent.RecoveryBlocked,
+                            -> span.endSuccess(*finalAttributes)
+                            is AgentEvent.Failed -> span.endFailure(
+                                failureCode = event.code,
+                                phase = "runtime",
+                                *finalAttributes,
+                            )
+                            is AgentEvent.Cancelled -> span.endCancelled(*finalAttributes)
+                            is AgentEvent.Interrupted -> span.endInterrupted(
+                                failureCode = event.interruption.provider?.code,
+                                phase = if (event.interruption.provider == null) "runtime" else "provider",
+                                *finalAttributes,
+                            )
+                            else -> when (val failure = thrown) {
+                                is CancellationException -> when (traceState.stopIntent) {
+                                    StopIntent.INTERRUPT -> span.endInterrupted(
+                                        failureCode = null,
+                                        phase = "runtime",
+                                        *finalAttributes,
+                                    )
+                                    StopIntent.ACTIVE,
+                                    StopIntent.CANCEL,
+                                    -> span.endCancelled(*finalAttributes)
+                                }
+                                null -> span.endSuccess(*finalAttributes)
+                                else -> span.endFailure(
+                                    failureCode = failure.toAgentFailureCode(),
+                                    phase = "runtime",
+                                    *finalAttributes,
+                                )
+                            }
+                        }
+                    }
+                } catch (failure: Throwable) {
+                    completionFailure = failure
+                    throw failure
+                } finally {
+                    events.close(completionFailure)
                 }
             }
+            try {
+                for (event in events) emit(event)
+            } finally {
+                producer.cancelAndJoin()
+            }
         }
-    }.buffer(Channel.RENDEZVOUS)
+    }
 
     private fun terminalResumeFlow(
         sessionId: AgentSessionId,
@@ -1212,6 +1233,17 @@ class DefaultAgentRunner(
                                 AgentFailureCode.INVALID_STATE,
                             )
                             val projectedMessages = transformedMessages.projectForProvider()
+                            val projectedInputTokens = estimateInputTokens(
+                                messages = projectedMessages,
+                                // The system prompt is already materialized in providerMessages
+                                // before host and replay transformations run.
+                                systemPrompt = "",
+                                tools = turnTools,
+                                providerOptions = activeRequest.engine.provider.options,
+                                modelInputModalities = activeRequest.model.inputModalities,
+                                charsPerToken = activeRequest.engine.runtime.contextManagement
+                                    .charsPerTokenEstimate,
+                            )
                             send(
                                 AgentEvent.ContextTransformed(
                                     request.sessionId,
@@ -1229,7 +1261,13 @@ class DefaultAgentRunner(
                                 credentialRef = activeRequest.engine.provider.credentialRef,
                                 credential = resolvedProviderConfig.credential,
                                 temperature = activeRequest.engine.provider.temperature,
-                                maxTokens = activeRequest.engine.provider.maxTokens,
+                                maxTokens = resolveMaxOutputTokens(
+                                    model = activeRequest.model,
+                                    explicitMaxTokens = activeRequest.engine.provider.maxTokens,
+                                    estimatedInputTokens = projectedInputTokens,
+                                    contextWindowTokensOverride = activeRequest.engine.runtime
+                                        .contextManagement.contextWindowTokensOverride,
+                                ),
                                 endpoint = resolvedProviderConfig.endpoint,
                                 headers = resolvedProviderConfig.headers,
                                 typedConfig = compileProviderTransportConfig(
@@ -2327,35 +2365,51 @@ class DefaultAgentRunner(
         val provider = providerRegistry.get(request.model.provider)
             ?: throw AgentRuntimeFailure(AgentFailureCode.PROVIDER_NOT_FOUND)
         val resolved = resolveProviderConfig(request.model.provider, request.provider)
+        val providerMessages = listOf(
+            AgentMessage(
+                id = "context-summary-system-${request.generation}",
+                role = MessageRole.SYSTEM,
+                parts = listOf(TextPart(CONTEXT_SUMMARY_SYSTEM_PROMPT)),
+                createdAtEpochMs = 0,
+            ),
+            AgentMessage(
+                id = "context-summary-input-${request.generation}",
+                role = MessageRole.USER,
+                parts = listOf(
+                    TextPart(
+                        contextSummaryInput(
+                            previousSummary = request.previousSummary,
+                            conversation = request.conversation,
+                        ),
+                    ),
+                ),
+                createdAtEpochMs = 0,
+            ),
+        )
+        val estimatedInputTokens = estimateInputTokens(
+            messages = providerMessages,
+            systemPrompt = "",
+            tools = emptyList(),
+            // Summary transport removes hosted Tools and Provider instructions below, so they do
+            // not consume this invocation's model context.
+            providerOptions = null,
+            modelInputModalities = request.model.inputModalities,
+            charsPerToken = request.charsPerTokenEstimate,
+        )
         val providerRequestBase = ProviderRequest(
             invocation = null,
             model = request.model,
-            messages = listOf(
-                AgentMessage(
-                    id = "context-summary-system-${request.generation}",
-                    role = MessageRole.SYSTEM,
-                    parts = listOf(TextPart(CONTEXT_SUMMARY_SYSTEM_PROMPT)),
-                    createdAtEpochMs = 0,
-                ),
-                AgentMessage(
-                    id = "context-summary-input-${request.generation}",
-                    role = MessageRole.USER,
-                    parts = listOf(
-                        TextPart(
-                            contextSummaryInput(
-                                previousSummary = request.previousSummary,
-                                conversation = request.conversation,
-                            ),
-                        ),
-                    ),
-                    createdAtEpochMs = 0,
-                ),
-            ),
+            messages = providerMessages,
             tools = emptyList(),
             credentialRef = request.provider.credentialRef,
             credential = resolved.credential,
             temperature = 0.0,
-            maxTokens = request.maxOutputTokens,
+            maxTokens = resolveMaxOutputTokens(
+                model = request.model,
+                explicitMaxTokens = request.maxOutputTokens,
+                estimatedInputTokens = estimatedInputTokens,
+                contextWindowTokensOverride = request.contextWindowTokens,
+            ),
             endpoint = resolved.endpoint,
             headers = resolved.headers,
             typedConfig = compileProviderTransportConfig(

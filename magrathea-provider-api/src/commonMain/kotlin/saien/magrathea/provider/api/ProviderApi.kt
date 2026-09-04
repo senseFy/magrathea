@@ -246,6 +246,7 @@ data class ProviderRequest(
     init {
         endpoint?.let(::requireValidHttpEndpoint)
         model.requireSupports(reasoningPreference)
+        require(maxTokens == null || maxTokens > 0) { "maxTokens must be positive" }
         require(invocationIntent != ProviderInvocationIntent.REATTACH || invocation != null) {
             "Provider reattachment requires an invocation identity"
         }

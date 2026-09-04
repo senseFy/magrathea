@@ -91,12 +91,12 @@ class ChatbotLifecycleContractTest {
     @Test
     fun terminalEventStopsChatbotUpstreamAndIgnoresLaterEvents() = runTest {
         val runner = PostTerminalRunner()
-        val controller = ChatbotController(
+        val fixture = ManagedChatbotControllerFixture.create(
             runner = runner,
-            requestFactory = DefaultChatbotRequestFactory(),
-            initialConfiguration = testChatbotConfiguration("chat-terminal", "chat-terminal"),
             scope = this,
+            configuration = testChatbotConfiguration("chat-terminal", "chat-terminal"),
         )
+        val controller = fixture.controller
 
         controller.sendMessage("hello")
         advanceUntilIdle()
@@ -106,6 +106,7 @@ class ChatbotLifecycleContractTest {
         assertFalse(controller.state.value.messages.any { it.text == "late-event" })
         assertFalse(runner.reachedCodeAfterTerminal)
         assertTrue(runner.cancelledByTerminal)
+        fixture.close()
     }
 
     private class PostTerminalRunner : TestAgentRunner() {
@@ -125,6 +126,7 @@ class ChatbotLifecycleContractTest {
                         request.sessionId,
                         AgentStateSnapshot(
                             messages = request.messages + assistant,
+                            status = saien.magrathea.core.AgentStatus.COMPLETED,
                             stopReason = StopReason.COMPLETED,
                         ),
                     ),

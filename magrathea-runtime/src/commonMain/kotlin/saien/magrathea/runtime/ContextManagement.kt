@@ -161,6 +161,9 @@ class TokenAwareContextManager(
                     maxOutputTokens = config.summaryMaxTokens,
                     generation = generation,
                     turn = request.turn,
+                    contextWindowTokens = config.contextWindowTokensOverride
+                        ?: request.request.model.contextWindowTokens,
+                    charsPerTokenEstimate = config.charsPerTokenEstimate,
                 ),
             )
         } catch (cancelled: CancellationException) {

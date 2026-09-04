@@ -47,14 +47,25 @@ while successful replay replaces the rolled-back attempt accounting rather than 
 Keep lifecycle policy in the application:
 
 - Let an active request continue while the platform still grants execution time.
-- Call `ChatbotSession.interrupt()` before intentionally releasing a live session or closing its
-  execution owner.
-- `ChatbotClient.close()` interrupts its live sessions before closing owned resources.
-- After restart, call `history()`. A persisted run without a live owner appears as `INTERRUPTED`;
-  resume it with `resumeSession(sessionId)`.
+- Closing a `ChatbotSession` releases only its lease. It does not interrupt or cancel execution.
+- Call `ChatbotSession.interrupt()` when the application runtime root must relinquish execution.
+- A successful managed `interrupt` or `cancel` returns after its collector is settled; the same
+  session may be resumed or started again immediately without a scheduling delay. A terminal event
+  that linearizes first remains authoritative.
+- An owning `ChatbotClient.close()` interrupts manager-owned live sessions before closing supplied
+  resources. A client created from an existing `AgentSessionManager` closes only its own facades.
+- After restart, call `history()`. Use `restoreSession(sessionId)` to open canonical state without
+  starting work, then apply application lifecycle policy before calling `session.resume()`.
+- Repeated restore calls return independent Chatbot facades backed by leases to the same canonical
+  runtime. Closing one facade does not invalidate another.
+- `restoreSession` attaches to active work already owned by the same manager. It fails `BUSY` for an
+  active raw runner outside that manager, and `NOT_FOUND` when no stable persisted/recoverable
+  record exists.
+- Use `resumeSession(sessionId)` only when the host intentionally wants restore and execution to be
+  one operation. It fails `BUSY` when that canonical runtime is already active.
 - Resume a still-open interrupted session with `session.resume()`.
 - Use the interruption phase and retry hint to choose an application-level automatic-resume policy.
-- `inspectRecovery(sessionId)` reports the disposition and latest authoritative state without
+- `lease.inspectRecovery()` reports the disposition and latest authoritative state without
   starting work.
 - Use `cancel()` only for an explicit user stop; it also terminally abandons a persisted
   interruption.
@@ -69,6 +80,10 @@ The process may disappear without a lifecycle callback. Atomic persistence leave
 previous checkpoint or the next complete checkpoint, and the next runtime recognizes the saved
 running state as orphaned.
 
+`ACTIVE` is manager/runner-instance ownership, not a cross-process attachment protocol. Hosts that
+handoff execution in one process share the same `AgentSessionManager` and transfer their
+application-owned host capability. They do not compose a second runner over the same persistence.
+
 ```kotlin
 // Called when the host must release active work.
 session.interrupt()
@@ -76,7 +91,10 @@ session.interrupt()
 // Called after the application recreates its composition root.
 client.history()
     .filter { it.status == ChatbotStatus.INTERRUPTED }
-    .forEach { client.resumeSession(it.sessionId) }
+    .map { client.restoreSession(it.sessionId) }
+    .forEach { session ->
+        if (applicationExecutionHostAvailable()) session.resume()
+    }
 ```
 
 ## Tool recovery
@@ -105,9 +123,9 @@ Other tools default to `FAIL_CLOSED`.
 
 ## Persistence
 
-`DefaultAgentRunner` and `ChatbotClient` must share one `AgentPersistence`. Its `commit` operation
-stores the session snapshot and checkpoint atomically; a terminal commit atomically removes the
-checkpoint.
+`DefaultAgentRunner` and its `DefaultAgentSessionManager` must use the same `AgentPersistence`.
+Its `commit` operation stores the session snapshot and checkpoint atomically; a terminal commit
+atomically removes the checkpoint.
 
 Use `InMemoryAgentPersistence` for ephemeral runs, Room on Android/JVM/iOS, and IndexedDB in the
 browser.

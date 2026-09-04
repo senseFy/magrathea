@@ -131,6 +131,18 @@ def verify_regex_probe(
         )
 
 
+def verify_migration_source_isolation(source: str, label: str) -> None:
+    forbidden = {
+        r"\bStorageSchemaV[0-9]+Adapter\b": "a version adapter",
+        r"\b(?:AgentSessionSnapshot|AgentCheckpoint)\s*\.\s*serializer\s*\(": (
+            "a live persisted-root serializer"
+        ),
+    }
+    for pattern, dependency in forbidden.items():
+        if re.search(pattern, source):
+            fail(f"{label} must not depend on {dependency}")
+
+
 def verify_migration_implementation(
     root: Path,
     raw_implementation: Any,
@@ -168,6 +180,7 @@ def verify_migration_implementation(
                 f"{label}.symbol must declare exactly one object implementing "
                 "AdjacentStorageSchemaMigration"
             )
+        verify_migration_source_isolation(source, label)
         actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
         if actual_digest != expected_digest:
             fail(f"{label} source changed: expected {expected_digest}, got {actual_digest}")
@@ -809,12 +822,13 @@ def run_contract_self_test(root: Path, ledger: dict[str, Any]) -> None:
     wrong_previous_digest = copy.deepcopy(normalized_recorded_descriptor)
     wrong_previous_digest["descriptorRefreezes"][-1]["fromSha256"] = "1" * 64
     try:
-        validate_ledger(
+        normalized_wrong_previous_digest = validate_ledger(
             root,
             wrong_previous_digest,
             "self-test descriptor refreeze with wrong previous digest",
             verify_sources_and_files=False,
         )
+        verify_append_only(ledger, normalized_wrong_previous_digest)
     except VerificationError:
         pass
     else:
@@ -963,6 +977,21 @@ def run_contract_self_test(root: Path, ledger: dict[str, Any]) -> None:
         pass
     else:
         fail("self-test: schema gate accepted a missing migration implementation symbol")
+
+    for forbidden_source in (
+        "StorageSchemaV7Adapter.decodeSession(json, document)",
+        "AgentSessionSnapshot.serializer()",
+        "AgentCheckpoint . serializer ()",
+    ):
+        try:
+            verify_migration_source_isolation(
+                forbidden_source,
+                "self-test migration source isolation",
+            )
+        except VerificationError:
+            pass
+        else:
+            fail("self-test: schema gate accepted a migration coupled to live schema behavior")
 
     redirected_registry = """
         RegisteredStorageSchemaMigration(

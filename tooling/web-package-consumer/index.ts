@@ -14,12 +14,16 @@ const model = new WebClient.MagratheaWebChatModel(
   false,
   true,
   128_000,
+  8_192,
 );
+const maxOutputTokens: number | null | undefined = model.maxOutputTokens;
 
 const sessionPromise: Promise<WebClient.MagratheaWebChatSession> = client.createSession(
   model,
   "medium",
 );
+const restoredSessionPromise: Promise<WebClient.MagratheaWebChatSession> =
+  client.restoreSession("persisted-session-id");
 const historyPromise: Promise<Array<WebClient.MagratheaWebChatHistoryItem>> = client.history();
 
 void sessionPromise.then((session) => {
@@ -53,4 +57,6 @@ void historyPromise.then((items) => {
   const reasoningPreferences: Array<string> = items.map((item) => item.reasoningPreference);
   void reasoningPreferences;
 });
+void restoredSessionPromise;
+void maxOutputTokens;
 void client.close();

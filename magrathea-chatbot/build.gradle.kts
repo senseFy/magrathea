@@ -10,6 +10,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(project(":magrathea-core"))
+            api(project(":magrathea-runtime"))
             api(libs.kotlinx.coroutines.core)
             api(libs.kotlinx.serialization.json)
         }

@@ -51,10 +51,15 @@
 - Portable Image Search follows the same host-owned backend boundary. It returns model-readable
   metadata and user-audience image blocks with source attribution.
 
-## Chatbot facade
+## Managed sessions and Chatbot facade
 
-- Chatbot state is reduced from `AgentEvent` values and stops consuming upstream events after the
-  first terminal event.
+- `AgentSessionManager` owns execution collectors and canonicalizes process-local runtimes by
+  session ID. Independently releasable leases expose a replay-one full-state projection; edge
+  events are best-effort and cannot rebuild state.
+- Commands serialize per session without blocking different session IDs. Recoverable work must be
+  resumed or cancelled before a fresh run, and destructive catalog mutations fence old leases.
+- Chatbot state is projected from the managed runtime snapshot. The Chatbot layer does not own or
+  collect `AgentRunner.run`.
 - Public Chatbot DTOs preserve text phases, redacted reasoning markers, citations, attachments,
   tool calls/results, typed user-audience images, timestamps, normalized stop reasons, and usage without exposing raw
   `AgentMessage` values or Provider metadata.
@@ -63,7 +68,7 @@
   appears in snapshots and history, and is persisted and restored with the authoritative request.
   Configuration changes are accepted between runs and fail with `BUSY` during active generation.
 - Send, regenerate, cancel, interrupt, resume, history, delete, clear, and close use stable session
-  identity and deterministic resource ownership. Closing a live session interrupts rather than
-  terminally cancelling it.
+  identity and deterministic resource ownership. Closing a Chatbot session detaches its lease;
+  closing an owning client interrupts the manager root before owned resources close.
 - In-memory stores synchronize concurrent access; registries are immutable after construction and
   reject duplicate keys.

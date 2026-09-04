@@ -35,12 +35,15 @@ public final class saien/magrathea/chatbot/ChatbotClient {
 	public final fun createSession (Lsaien/magrathea/chatbot/ChatbotSessionConfiguration;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun deleteSession (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun history (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun restoreSession (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun resumeSession (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class saien/magrathea/chatbot/ChatbotClientKt {
 	public static final fun createChatbotClient (Lsaien/magrathea/core/AgentRunner;Lsaien/magrathea/chatbot/ChatbotRequestFactory;Lsaien/magrathea/core/AgentPersistence;Lkotlin/jvm/functions/Function1;Lkotlinx/coroutines/CoroutineDispatcher;)Lsaien/magrathea/chatbot/ChatbotClient;
+	public static final fun createChatbotClient (Lsaien/magrathea/runtime/AgentSessionManager;Lsaien/magrathea/chatbot/ChatbotRequestFactory;Lkotlinx/coroutines/CoroutineDispatcher;)Lsaien/magrathea/chatbot/ChatbotClient;
 	public static synthetic fun createChatbotClient$default (Lsaien/magrathea/core/AgentRunner;Lsaien/magrathea/chatbot/ChatbotRequestFactory;Lsaien/magrathea/core/AgentPersistence;Lkotlin/jvm/functions/Function1;Lkotlinx/coroutines/CoroutineDispatcher;ILjava/lang/Object;)Lsaien/magrathea/chatbot/ChatbotClient;
+	public static synthetic fun createChatbotClient$default (Lsaien/magrathea/runtime/AgentSessionManager;Lsaien/magrathea/chatbot/ChatbotRequestFactory;Lkotlinx/coroutines/CoroutineDispatcher;ILjava/lang/Object;)Lsaien/magrathea/chatbot/ChatbotClient;
 }
 
 public final class saien/magrathea/chatbot/ChatbotContextManagementSnapshot {
@@ -61,7 +64,9 @@ public final class saien/magrathea/chatbot/ChatbotContextManagementSnapshot {
 
 public final class saien/magrathea/chatbot/ChatbotException : java/lang/IllegalStateException {
 	public fun <init> (Lsaien/magrathea/chatbot/ChatbotFailure;)V
+	public fun <init> (Lsaien/magrathea/chatbot/ChatbotFailure;Lsaien/magrathea/chatbot/ChatbotInvalidationScope;)V
 	public final fun getFailure ()Lsaien/magrathea/chatbot/ChatbotFailure;
+	public final fun getInvalidationScope ()Lsaien/magrathea/chatbot/ChatbotInvalidationScope;
 }
 
 public final class saien/magrathea/chatbot/ChatbotFailure : java/lang/Enum {
@@ -149,6 +154,15 @@ public final class saien/magrathea/chatbot/ChatbotInterruptionReason : java/lang
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/chatbot/ChatbotInterruptionReason;
 	public static fun values ()[Lsaien/magrathea/chatbot/ChatbotInterruptionReason;
+}
+
+public final class saien/magrathea/chatbot/ChatbotInvalidationScope : java/lang/Enum {
+	public static final field ALL_SESSIONS Lsaien/magrathea/chatbot/ChatbotInvalidationScope;
+	public static final field NONE Lsaien/magrathea/chatbot/ChatbotInvalidationScope;
+	public static final field SESSION Lsaien/magrathea/chatbot/ChatbotInvalidationScope;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/chatbot/ChatbotInvalidationScope;
+	public static fun values ()[Lsaien/magrathea/chatbot/ChatbotInvalidationScope;
 }
 
 public final class saien/magrathea/chatbot/ChatbotMessagePhase : java/lang/Enum {

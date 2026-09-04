@@ -37,6 +37,7 @@ import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentSessionSnapshotCodec
 import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.CURRENT_STORAGE_SCHEMA_VERSION
+import saien.magrathea.core.MINIMUM_READABLE_STORAGE_SCHEMA_VERSION
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.StoredEnvelopeDecodeFailure
@@ -71,6 +72,31 @@ class WebStorageBrowserContractTest {
             assertEquals(listOf(newer, older), reopened.persistence.listSessions())
             assertEquals(checkpoint, reopened.persistence.load(newer.sessionId)?.checkpoint)
             reopened.close()
+        }
+    }
+
+    @Test
+    fun schemaV6SessionAndCheckpointAreRewrittenAfterAValidatedLoad() = runTest {
+        withIsolatedDatabase { databaseName ->
+            val database = IndexedDbRecordDatabase(databaseName)
+            val session = testSnapshot("web-v6-migration", updatedAtEpochMs = 25L)
+            val checkpoint = testCheckpoint(session, turn = 2)
+            val v6Session = AgentSessionSnapshotCodec().encode(session).toSchemaV6()
+            val v6Checkpoint = AgentCheckpointCodec().encode(checkpoint).toSchemaV6()
+            database.commit(session.sessionId.value, v6Session, v6Checkpoint)
+            val store = createMagratheaWebStore(configuration(databaseName))
+
+            val loaded = assertNotNull(store.persistence.load(session.sessionId))
+            assertEquals(session, loaded.snapshot)
+            assertEquals(checkpoint, loaded.checkpoint)
+
+            val rewritten = assertNotNull(database.get(session.sessionId.value))
+            val rewrittenSession = assertNotNull(rewritten.session.payload)
+            val rewrittenCheckpoint = assertNotNull(assertNotNull(rewritten.checkpoint).payload)
+            assertTrue("\"schemaVersion\":7" in rewrittenSession)
+            assertTrue("\"maxOutputTokens\":null" in rewrittenSession)
+            assertTrue("\"schemaVersion\":7" in rewrittenCheckpoint)
+            store.close()
         }
     }
 
@@ -242,7 +268,7 @@ class WebStorageBrowserContractTest {
             val codec = AgentSessionSnapshotCodec()
             val incompatiblePayload = codec.encode(incompatible).replaceFirst(
                 "\"schemaVersion\":$CURRENT_STORAGE_SCHEMA_VERSION",
-                "\"schemaVersion\":${CURRENT_STORAGE_SCHEMA_VERSION - 1}",
+                "\"schemaVersion\":${MINIMUM_READABLE_STORAGE_SCHEMA_VERSION - 1}",
             )
             val database = IndexedDbRecordDatabase(databaseName)
             database.commit(
@@ -440,7 +466,7 @@ class WebStorageBrowserContractTest {
             val olderPayload = AgentSessionSnapshotCodec().encode(older)
                 .replaceFirst(
                     "\"schemaVersion\":$CURRENT_STORAGE_SCHEMA_VERSION",
-                    "\"schemaVersion\":${CURRENT_STORAGE_SCHEMA_VERSION - 1}",
+                    "\"schemaVersion\":${MINIMUM_READABLE_STORAGE_SCHEMA_VERSION - 1}",
                 )
             database.commit(older.sessionId.value, olderPayload, checkpointPayload = null)
 
@@ -450,7 +476,10 @@ class WebStorageBrowserContractTest {
 
             assertEquals(WebStorageFailure.UNSUPPORTED_OLDER_SCHEMA, failure.failure)
             assertEquals(null, failure.corruption)
-            assertEquals(CURRENT_STORAGE_SCHEMA_VERSION - 1, failure.storedSchemaVersion)
+            assertEquals(
+                MINIMUM_READABLE_STORAGE_SCHEMA_VERSION - 1,
+                failure.storedSchemaVersion,
+            )
             assertEquals(CURRENT_STORAGE_SCHEMA_VERSION, failure.currentSchemaVersion)
             assertEquals(WebStoredRecordKind.SESSION, failure.schemaIssue?.kind)
             assertEquals(older.sessionId.value, failure.schemaIssue?.recordId)
@@ -670,6 +699,10 @@ class WebStorageBrowserContractTest {
 
     private fun configuration(databaseName: String) = MagratheaWebStoreConfiguration(databaseName)
 }
+
+private fun String.toSchemaV6(): String =
+    replaceFirst("\"schemaVersion\":7", "\"schemaVersion\":6")
+        .replace(",\"maxOutputTokens\":null", "")
 
 private suspend fun withIsolatedDatabase(block: suspend (String) -> Unit) {
     val databaseName = "magrathea-test-${Uuid.random()}"

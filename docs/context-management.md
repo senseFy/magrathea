@@ -43,19 +43,46 @@ The effective input limit is:
 context window - max(reserveTokens, ProviderConfig.maxTokens)
 ```
 
+`ModelDescriptor.maxOutputTokens` is catalog/provider model metadata, not a product request policy.
+Runtime resolves the Provider output bound immediately before each invocation:
+
+```text
+requested output = ProviderConfig.maxTokens ?: ModelDescriptor.maxOutputTokens
+effective output = min(requested output, max(1, context window - final Provider input estimate))
+```
+
+An explicit `ProviderConfig.maxTokens` replaces catalog metadata, which lets a host correct stale
+or incomplete discovery data. When both values are unknown, Runtime keeps the Provider request
+unbounded instead of inventing a model capability. The remaining-context clamp is applied only
+when both the context window and final Provider input estimate are known.
+
+The clamp is computed after system-prompt insertion, host context transformation, replay
+transformation, and Provider-boundary projection, so content added or removed by those stages is
+included. The context manager's earlier estimate remains scoped to projection and compaction
+decisions.
+
+The input projection intentionally reserves `reserveTokens` and an explicit request override, but
+does not reserve the model's entire catalog maximum. A physical capability can be as large as the
+whole context window and does not mean the product intends every response to consume it. Products
+that require a predictable answer budget should therefore set `ProviderConfig.maxTokens` for the
+request; Runtime then uses that same value for input reservation and output generation. Context
+summary calls use `summaryMaxTokens` as their explicit request budget and pass through the same
+remaining-context resolver.
+
 Provider-reported input usage is authoritative when it is anchored to the same model, request
 shape, Provider options, compaction generation, and immutable history prefix. Otherwise Runtime
 estimates the input from message text, structured parts, attachments, system instructions, Tool
 schemas, and Provider-specific options that can add instructions or hosted Tools.
 
-Set `ModelDescriptor.contextWindowTokens` from trusted model metadata. For a compatible endpoint
-whose model discovery does not expose a reliable window, set `contextWindowTokensOverride`.
-Without either value, proactive compaction is skipped; a typed Provider context-limit response can
-still trigger one recovery attempt.
+Set `ModelDescriptor.contextWindowTokens` and `ModelDescriptor.maxOutputTokens` from trusted model
+metadata. For a compatible endpoint whose model discovery does not expose a reliable window, set
+`contextWindowTokensOverride`.
+Without a model context window or an explicit override, proactive compaction is skipped; a typed
+Provider context-limit response can still trigger one recovery attempt.
 
-The browser facade exposes the same value as the final `MagratheaWebChatModel.contextWindowTokens`
-constructor argument. JavaScript callers pass a positive integer or `null` when the window is
-unknown.
+The browser facade exposes both values as `MagratheaWebChatModel.contextWindowTokens` and
+`MagratheaWebChatModel.maxOutputTokens`. JavaScript callers pass positive integers or `null` when a
+capability is unknown.
 
 ## Semantic compaction
 
