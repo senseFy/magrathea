@@ -5,6 +5,8 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## 0.1.0-alpha.9 — 2026-09-04
+
 ### Added
 
 - Models can declare a catalog-provided maximum output-token capability, including through the

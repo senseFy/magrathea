@@ -3,7 +3,7 @@ plugins {
     id("com.android.kotlin.multiplatform.library") version "9.1.1"
 }
 
-val magratheaVersion = providers.gradleProperty("magrathea.version").orElse("0.1.0-alpha.8")
+val magratheaVersion = providers.gradleProperty("magrathea.version").orElse("0.1.0-alpha.9")
 val appleFrameworkBaseName = "MagratheaPublishedConsumer"
 providers.gradleProperty("magrathea.consumer.buildDir").orNull?.let { consumerBuildDirectory ->
     layout.buildDirectory.set(file(consumerBuildDirectory))
