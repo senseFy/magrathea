@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-CURRENT_VERSION="${2:-0.1.0-alpha.9}"
+CURRENT_VERSION="${2:-0.1.0-alpha.10}"
 COORDINATES_FILE="${3:?usage: verify-rollback-contract ROOT_DIR CURRENT_VERSION COORDINATES_FILE}"
 PREVIOUS_VERSION="0.0.0-rehearsal"
 GROUP="saien.magrathea"

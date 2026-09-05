@@ -5,6 +5,8 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## 0.1.0-alpha.10 — 2026-09-05
+
 ### Changed
 
 - Trace recording now bounds active spans, admission rate, attributes, events and retained text at
