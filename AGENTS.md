@@ -1,5 +1,11 @@
 # Repository Instructions
 
+## Development verification
+
+- Match verification to the change's scope and risk; avoid full builds or test matrices for every small edit.
+- Reuse passing results for unaffected scope; rerun checks when relevant changes or failures warrant it.
+- Complete necessary broader verification once edits settle, preserving required acceptance checks.
+
 ## Changelog discipline
 
 - Every user-visible behavior or contract change must update `CHANGELOG.md` under `Unreleased` in
