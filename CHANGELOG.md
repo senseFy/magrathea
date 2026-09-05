@@ -18,6 +18,7 @@ Notable changes to Magrathea are documented here. The project follows
 
 ### Bug Fixes
 
+* Chatbot follow-up sends and regenerations wait for prior execution cleanup after a terminal update instead of intermittently failing with `BUSY`.
 * Failed managed-session shutdown prevents destructive persistence deletion or clearing; manager close still attempts every independent cleanup and replays the same result to later callers. ([9844198](https://github.com/senseFy/magrathea/commit/98441988836e1f6d4281b28971dc0f1552bab966))
 * Managed sessions no longer remain falsely active after a fatal error or cancellation ends their collector without a terminal event. Late `ACTIVE` recovery observations cannot revive a settled execution or prevent its cleanup. ([9844198](https://github.com/senseFy/magrathea/commit/98441988836e1f6d4281b28971dc0f1552bab966))
 * Presentation-only session events no longer discard otherwise valid recovery observations; changes to execution results still invalidate older observations even if their values later match. ([9844198](https://github.com/senseFy/magrathea/commit/98441988836e1f6d4281b28971dc0f1552bab966))

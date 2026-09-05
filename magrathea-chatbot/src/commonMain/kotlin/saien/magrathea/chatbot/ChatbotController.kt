@@ -147,6 +147,7 @@ internal class ChatbotController(
             lease.cancel()
             syncFromLease()
         }
+        lease.awaitIdle()
     }
 
     private suspend fun buildRequest(
