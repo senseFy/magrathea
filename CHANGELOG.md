@@ -7,9 +7,16 @@ Notable changes to Magrathea are documented here. The project follows
 
 ### Changed
 
+- Trace recording now bounds active spans, admission rate, attributes, events and retained text at
+  construction. Completed handles release their event/attribute graphs; sink cancellation and
+  direct or wrapped fatal errors propagate.
+- Removed the debug recorder API and per-chunk debug path. Provider spans contain fixed incremental
+  request summaries, first-text timing and typed failures without retaining message histories.
+  Execution outcomes distinguish completed, failed, cancelled, interrupted and recovery blocked.
+
 - Runtime propagates direct and wrapped fatal errors to the host instead of converting them into
   Agent failures, retries, or fail-open results. Ordinary exceptions retain their typed failure
-  behavior, while cancellation remains cooperative control flow, including in tracing and debug
+  behavior, while cancellation remains cooperative control flow, including in tracing
   integrations.
 
 ### Fixed

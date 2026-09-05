@@ -27,14 +27,11 @@ import saien.magrathea.core.AgentPersistenceRecord
 import saien.magrathea.core.AgentRequest
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
-import saien.magrathea.core.MagratheaDebugLevel
-import saien.magrathea.core.MagratheaDebugRecorder
 import saien.magrathea.core.MagratheaTraceSpan
 import saien.magrathea.core.MagratheaTracer
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.MonotonicClock
-import saien.magrathea.core.NoopMagratheaDebugRecorder
 import saien.magrathea.core.RetryPolicy
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
@@ -88,6 +85,9 @@ class RuntimeTracingContractTest {
         assertEquals(listOf(false, true), providers.map {
             it.booleanAttribute("magrathea.provider.event_observed")
         })
+        val milestones = providers.last().events
+        assertTrue(milestones.single { it.name == RuntimeTraceEvents.PROVIDER_FIRST_EVENT }.offsetMillis <=
+            milestones.single { it.name == "magrathea.provider.first_text" }.offsetMillis)
         assertEquals(5L, providers.last().longAttribute("magrathea.usage.input_tokens"))
         assertEquals(2L, providers.last().longAttribute("magrathea.usage.output_tokens"))
         assertEquals(5L, execution.longAttribute("magrathea.usage.input_tokens"))
@@ -97,7 +97,7 @@ class RuntimeTracingContractTest {
             turn.events.count { it.name == RuntimeTraceEvents.PROVIDER_RETRY_SCHEDULED },
         )
         assertEquals(TraceStatus.OK, execution.status)
-        assertEquals("success", execution.stringAttribute("magrathea.outcome"))
+        assertEquals("completed", execution.stringAttribute("magrathea.outcome"))
         assertFalse(sink.spans.toString().contains(canary))
         assertTrue(sink.spans.all { it.durationMillis >= 0 })
     }
@@ -256,7 +256,7 @@ class RuntimeTracingContractTest {
         })
         val executions = sink.spans.named(RuntimeTraceNames.AGENT_EXECUTION)
         assertEquals(2, executions.size)
-        assertEquals(listOf("interrupted", "success"), executions.map {
+        assertEquals(listOf("interrupted", "completed"), executions.map {
             it.stringAttribute("magrathea.outcome")
         })
         assertEquals(listOf(false, true), executions.map {
@@ -329,32 +329,26 @@ class RuntimeTracingContractTest {
     }
 
     @Test
-    fun debugFailureRecordsCorrelateEachPhysicalRetryToItsProviderSpan() = runTest {
+    fun failureSummariesBelongToEachPhysicalAttempt() = runTest {
         val sink = RecordingTraceSink()
-        val recorder = RecordingDebugRecorder()
         val provider = AlwaysRateLimitedProvider()
         val runner = runner(
             provider = provider,
             sink = sink,
             retryPolicy = RetryOncePolicy(),
-            debugRecorder = recorder,
         )
 
         runner.run(request(provider.key, "safe")).toList()
 
-        val failures = recorder.records.filter { it.event == "provider.failed" }
-        assertEquals(listOf(MagratheaDebugLevel.WARN, MagratheaDebugLevel.ERROR), failures.map { it.level })
-        assertEquals(listOf(0L, 1L), failures.map { it.longAttribute("provider_attempt") })
-        assertTrue(failures.all { it.stringAttribute("provider_purpose") == "model" })
-        assertTrue(failures.all { it.stringAttribute("failure_type") == "rate_limit" })
-        assertTrue(failures.all { it.longAttribute("http_status") == 429L })
-        assertTrue(failures.all { it.booleanAttribute("retryable") == true })
-        assertTrue(failures.all { it.stringAttribute("run_id") != null })
-        assertTrue(failures.all { it.traceContext != null })
-        val providerSpanIds = sink.spans.named(RuntimeTraceNames.PROVIDER_REQUEST)
-            .map { it.context.spanId }
-            .toSet()
-        assertTrue(failures.all { it.traceContext?.spanId in providerSpanIds })
+        val attempts = sink.spans.filter { it.name == RuntimeTraceNames.PROVIDER_REQUEST }
+        assertEquals(listOf(0L, 1L), attempts.map { it.longAttribute("magrathea.provider.attempt") })
+        attempts.forEach { span ->
+            val failure = span.events.single { it.name == "magrathea.provider.failure" }
+            assertEquals(TraceValue.StringValue("rate_limit"), failure.attributes["type"])
+            assertEquals(TraceValue.LongValue(429), failure.attributes["http_status"])
+            assertEquals(TraceValue.BooleanValue(true), failure.attributes["retryable"])
+            assertEquals(TraceStatus.ERROR, span.status)
+        }
     }
 
     private fun runner(
@@ -362,14 +356,12 @@ class RuntimeTracingContractTest {
         sink: RecordingTraceSink,
         retryPolicy: RetryPolicy = saien.magrathea.core.NoopRetryPolicy,
         tools: List<ToolExecutor> = emptyList(),
-        debugRecorder: MagratheaDebugRecorder = NoopMagratheaDebugRecorder,
     ) = DefaultAgentRunner(
         providerRegistry = InMemoryProviderRegistry(listOf(provider)),
         toolRegistry = InMemoryToolRegistry(tools),
         persistence = InMemoryAgentPersistence(),
         retryPolicy = retryPolicy,
         tracer = sink.tracer(monotonicClock = IncrementingClock()),
-        debugRecorder = debugRecorder,
     )
 
     private fun request(provider: String, content: String) = AgentRequest(

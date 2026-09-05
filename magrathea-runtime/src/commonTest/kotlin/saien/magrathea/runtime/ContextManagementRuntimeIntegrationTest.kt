@@ -20,11 +20,9 @@ import saien.magrathea.core.ContextManagementState
 import saien.magrathea.core.ContextPreparationAction
 import saien.magrathea.core.ContextPreparationResult
 import saien.magrathea.core.ContextUsageObservation
-import saien.magrathea.core.MagratheaDebugRecorder
 import saien.magrathea.core.MagratheaTracer
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
-import saien.magrathea.core.NoopMagratheaDebugRecorder
 import saien.magrathea.core.NoopMagratheaTracer
 import saien.magrathea.core.ProviderConfig
 import saien.magrathea.core.ProviderRequestPurpose
@@ -138,13 +136,11 @@ class ContextManagementRuntimeIntegrationTest {
     @Test
     fun successfulSummaryTracingKeepsRequestUsageSeparateFromSessionCumulativeUsage() = runTest {
         val traceSink = RecordingTraceSink()
-        val debugRecorder = RecordingDebugRecorder()
         val provider = SummaryAwareProvider()
         val events = runner(
             provider = provider,
             persistence = InMemoryAgentPersistence(),
             tracer = traceSink.tracer(),
-            debugRecorder = debugRecorder,
         ).run(
             request(
                 sessionId = AgentSessionId("summary-success-accounting"),
@@ -180,12 +176,7 @@ class ContextManagementRuntimeIntegrationTest {
             .single { it.name == RuntimeTraceNames.AGENT_EXECUTION }
         assertEquals(150L, execution.longAttribute("magrathea.usage.input_tokens"))
         assertEquals(17L, execution.longAttribute("magrathea.usage.output_tokens"))
-        assertEquals(
-            listOf("context_summary", "model"),
-            debugRecorder.records
-                .filter { it.event == "provider.request.messages" }
-                .mapNotNull { it.stringAttribute("provider_purpose") },
-        )
+
     }
 
     @Test
@@ -520,7 +511,6 @@ class ContextManagementRuntimeIntegrationTest {
     fun contextLimitBeforeAnyOutput_forcesOneSemanticCompactionAndRetriesOnce() = runTest {
         val provider = OverflowThenCompleteProvider()
         val persistence = InMemoryAgentPersistence()
-        val debugRecorder = RecordingDebugRecorder()
         val request = request(
             sessionId = AgentSessionId("overflow-recovery-session"),
             messages = longHistory(),
@@ -530,7 +520,6 @@ class ContextManagementRuntimeIntegrationTest {
         val events = runner(
             provider = provider,
             persistence = persistence,
-            debugRecorder = debugRecorder,
         ).run(request).toList()
 
         assertTrue(events.any { it is AgentEvent.Completed })
@@ -540,15 +529,11 @@ class ContextManagementRuntimeIntegrationTest {
             provider.requests.map { if (it.isContextSummary()) "summary" else "model" },
         )
         assertNotNull(persistence.load(request.sessionId)?.snapshot?.state?.contextManagement?.compaction)
-        val failure = debugRecorder.records.single { it.event == "provider.failed" }
-        assertEquals(saien.magrathea.core.MagratheaDebugLevel.WARN, failure.level)
-        assertEquals("context_limit", failure.stringAttribute("failure_type"))
     }
 
     @Test
-    fun contextLimitWithoutRecoveryIsATerminalDebugFailure() = runTest {
+    fun contextLimitWithoutRecoveryIsATerminalFailure() = runTest {
         val provider = OverflowThenCompleteProvider()
-        val debugRecorder = RecordingDebugRecorder()
         val request = request(
             sessionId = AgentSessionId("terminal-overflow-session"),
             messages = longHistory(),
@@ -559,22 +544,17 @@ class ContextManagementRuntimeIntegrationTest {
         val events = runner(
             provider = provider,
             persistence = InMemoryAgentPersistence(),
-            debugRecorder = debugRecorder,
         ).run(request).toList()
 
         assertEquals(
             saien.magrathea.core.AgentFailureCode.CONTEXT_LIMIT,
             events.filterIsInstance<AgentEvent.Failed>().single().code,
         )
-        val failure = debugRecorder.records.single { it.event == "provider.failed" }
-        assertEquals(saien.magrathea.core.MagratheaDebugLevel.ERROR, failure.level)
-        assertEquals("context_limit", failure.stringAttribute("failure_type"))
     }
 
     @Test
     fun contextLimitAfterOutput_doesNotRetryOrDuplicatePartialAnswer() = runTest {
         val provider = PartialThenOverflowProvider()
-        val debugRecorder = RecordingDebugRecorder()
         val request = request(
             sessionId = AgentSessionId("post-output-overflow-session"),
             messages = longHistory(),
@@ -584,7 +564,6 @@ class ContextManagementRuntimeIntegrationTest {
         val events = runner(
             provider = provider,
             persistence = InMemoryAgentPersistence(),
-            debugRecorder = debugRecorder,
         ).run(request).toList()
 
         assertEquals(1, provider.requests.size)
@@ -600,10 +579,6 @@ class ContextManagementRuntimeIntegrationTest {
                 .distinctBy(AgentMessage::id)
                 .size,
         )
-        val failure = debugRecorder.records.single { it.event == "provider.failed" }
-        assertEquals(saien.magrathea.core.MagratheaDebugLevel.ERROR, failure.level)
-        assertEquals("protocol", failure.stringAttribute("failure_type"))
-        assertEquals(true, failure.booleanAttribute("protocol_error"))
     }
 
     private fun runner(
@@ -612,7 +587,6 @@ class ContextManagementRuntimeIntegrationTest {
         contextManager: saien.magrathea.core.ContextManager? = null,
         tracer: MagratheaTracer = NoopMagratheaTracer,
         retryPolicy: RetryPolicy = saien.magrathea.core.NoopRetryPolicy,
-        debugRecorder: MagratheaDebugRecorder = NoopMagratheaDebugRecorder,
     ) = DefaultAgentRunner(
         providerRegistry = InMemoryProviderRegistry(listOf(provider)),
         toolRegistry = InMemoryToolRegistry(),
@@ -620,7 +594,6 @@ class ContextManagementRuntimeIntegrationTest {
         contextManager = contextManager,
         tracer = tracer,
         retryPolicy = retryPolicy,
-        debugRecorder = debugRecorder,
     )
 
     private fun request(

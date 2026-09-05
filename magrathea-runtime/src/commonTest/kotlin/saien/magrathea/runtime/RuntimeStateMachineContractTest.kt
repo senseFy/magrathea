@@ -180,17 +180,23 @@ class RuntimeStateMachineContractTest {
             null,
         )
         val provider = RecordingCompleteProvider()
+        val sink = RecordingTraceSink()
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
             toolRegistry = InMemoryToolRegistry(listOf(tool)),
             persistence = persistence,
+            tracer = sink.tracer(),
         )
 
         val events = runner.resume(sessionId).toList()
 
         assertTrue(provider.requests.isEmpty())
         assertEquals(0, tool.executionCount)
-        assertEquals(1, events.filterIsInstance<AgentEvent.RecoveryBlocked>().size)
+        val blocked = events.filterIsInstance<AgentEvent.RecoveryBlocked>().single()
+        val execution = sink.spans.single { it.name == RuntimeTraceNames.AGENT_EXECUTION }
+        assertEquals(saien.magrathea.core.TraceStatus.UNSET, execution.status)
+        assertEquals("recovery_blocked", execution.stringAttribute("magrathea.outcome"))
+        assertEquals(blocked.reason.name, execution.stringAttribute("magrathea.recovery.block_reason"))
     }
 
     @Test

@@ -1443,8 +1443,9 @@ public final class saien/magrathea/core/CredentialRef$Companion {
 }
 
 public final class saien/magrathea/core/DefaultMagratheaTracer : saien/magrathea/core/MagratheaTracer {
-	public fun <init> (Lsaien/magrathea/core/MagratheaTraceSink;Lsaien/magrathea/core/EpochClock;Lsaien/magrathea/core/MonotonicClock;Lsaien/magrathea/core/IdGenerator;)V
-	public synthetic fun <init> (Lsaien/magrathea/core/MagratheaTraceSink;Lsaien/magrathea/core/EpochClock;Lsaien/magrathea/core/MonotonicClock;Lsaien/magrathea/core/IdGenerator;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lsaien/magrathea/core/MagratheaTraceSink;Lsaien/magrathea/core/EpochClock;Lsaien/magrathea/core/MonotonicClock;Lsaien/magrathea/core/IdGenerator;Lsaien/magrathea/core/TraceRecordingLimits;)V
+	public synthetic fun <init> (Lsaien/magrathea/core/MagratheaTraceSink;Lsaien/magrathea/core/EpochClock;Lsaien/magrathea/core/MonotonicClock;Lsaien/magrathea/core/IdGenerator;Lsaien/magrathea/core/TraceRecordingLimits;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getDroppedSpanCount ()J
 	public fun startSpan (Ljava/lang/String;Lsaien/magrathea/core/TraceContext;Ljava/util/Map;)Lsaien/magrathea/core/MagratheaTraceSpan;
 }
 
@@ -1515,90 +1516,6 @@ public final synthetic class saien/magrathea/core/JsonPart$$serializer : kotlinx
 
 public final class saien/magrathea/core/JsonPart$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
-}
-
-public final class saien/magrathea/core/MagratheaDebugLevel : java/lang/Enum {
-	public static final field DEBUG Lsaien/magrathea/core/MagratheaDebugLevel;
-	public static final field ERROR Lsaien/magrathea/core/MagratheaDebugLevel;
-	public static final field INFO Lsaien/magrathea/core/MagratheaDebugLevel;
-	public static final field WARN Lsaien/magrathea/core/MagratheaDebugLevel;
-	public static fun getEntries ()Lkotlin/enums/EnumEntries;
-	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/core/MagratheaDebugLevel;
-	public static fun values ()[Lsaien/magrathea/core/MagratheaDebugLevel;
-}
-
-public final class saien/magrathea/core/MagratheaDebugRecord {
-	public fun <init> (Lsaien/magrathea/core/MagratheaDebugLevel;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/core/TraceContext;Ljava/util/Map;)V
-	public synthetic fun <init> (Lsaien/magrathea/core/MagratheaDebugLevel;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/core/TraceContext;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun component1 ()Lsaien/magrathea/core/MagratheaDebugLevel;
-	public final fun component2 ()Ljava/lang/String;
-	public final fun component3 ()Ljava/lang/String;
-	public final fun component4 ()Ljava/lang/String;
-	public final fun component5 ()Lsaien/magrathea/core/TraceContext;
-	public final fun component6 ()Ljava/util/Map;
-	public final fun copy (Lsaien/magrathea/core/MagratheaDebugLevel;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/core/TraceContext;Ljava/util/Map;)Lsaien/magrathea/core/MagratheaDebugRecord;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/MagratheaDebugRecord;Lsaien/magrathea/core/MagratheaDebugLevel;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/core/TraceContext;Ljava/util/Map;ILjava/lang/Object;)Lsaien/magrathea/core/MagratheaDebugRecord;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getAttributes ()Ljava/util/Map;
-	public final fun getComponent ()Ljava/lang/String;
-	public final fun getEvent ()Ljava/lang/String;
-	public final fun getLevel ()Lsaien/magrathea/core/MagratheaDebugLevel;
-	public final fun getSessionId ()Ljava/lang/String;
-	public final fun getTraceContext ()Lsaien/magrathea/core/TraceContext;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public abstract interface class saien/magrathea/core/MagratheaDebugRecorder {
-	public abstract fun getEnabled ()Z
-	public abstract fun record (Lsaien/magrathea/core/MagratheaDebugRecord;)V
-}
-
-public abstract interface class saien/magrathea/core/MagratheaDebugValue {
-}
-
-public final class saien/magrathea/core/MagratheaDebugValue$BooleanValue : saien/magrathea/core/MagratheaDebugValue {
-	public fun <init> (Z)V
-	public final fun component1 ()Z
-	public final fun copy (Z)Lsaien/magrathea/core/MagratheaDebugValue$BooleanValue;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/MagratheaDebugValue$BooleanValue;ZILjava/lang/Object;)Lsaien/magrathea/core/MagratheaDebugValue$BooleanValue;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getValue ()Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class saien/magrathea/core/MagratheaDebugValue$DoubleValue : saien/magrathea/core/MagratheaDebugValue {
-	public fun <init> (D)V
-	public final fun component1 ()D
-	public final fun copy (D)Lsaien/magrathea/core/MagratheaDebugValue$DoubleValue;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/MagratheaDebugValue$DoubleValue;DILjava/lang/Object;)Lsaien/magrathea/core/MagratheaDebugValue$DoubleValue;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getValue ()D
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class saien/magrathea/core/MagratheaDebugValue$LongValue : saien/magrathea/core/MagratheaDebugValue {
-	public fun <init> (J)V
-	public final fun component1 ()J
-	public final fun copy (J)Lsaien/magrathea/core/MagratheaDebugValue$LongValue;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/MagratheaDebugValue$LongValue;JILjava/lang/Object;)Lsaien/magrathea/core/MagratheaDebugValue$LongValue;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getValue ()J
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class saien/magrathea/core/MagratheaDebugValue$StringValue : saien/magrathea/core/MagratheaDebugValue {
-	public fun <init> (Ljava/lang/String;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;)Lsaien/magrathea/core/MagratheaDebugValue$StringValue;
-	public static synthetic fun copy$default (Lsaien/magrathea/core/MagratheaDebugValue$StringValue;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/core/MagratheaDebugValue$StringValue;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getValue ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
 }
 
 public final class saien/magrathea/core/MagratheaSdk {
@@ -1762,12 +1679,6 @@ public final class saien/magrathea/core/ModelInputModality$Companion {
 
 public abstract interface class saien/magrathea/core/MonotonicClock {
 	public abstract fun nowMillis ()J
-}
-
-public final class saien/magrathea/core/NoopMagratheaDebugRecorder : saien/magrathea/core/MagratheaDebugRecorder {
-	public static final field INSTANCE Lsaien/magrathea/core/NoopMagratheaDebugRecorder;
-	public fun getEnabled ()Z
-	public fun record (Lsaien/magrathea/core/MagratheaDebugRecord;)V
 }
 
 public final class saien/magrathea/core/NoopMagratheaTraceSpan : saien/magrathea/core/MagratheaTraceSpan {
@@ -3053,6 +2964,37 @@ public final class saien/magrathea/core/TraceEvent {
 	public final fun getAttributes ()Ljava/util/Map;
 	public final fun getName ()Ljava/lang/String;
 	public final fun getOffsetMillis ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/core/TraceRecordingLimits {
+	public fun <init> ()V
+	public fun <init> (IIIIIIIIII)V
+	public synthetic fun <init> (IIIIIIIIIIILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component10 ()I
+	public final fun component2 ()I
+	public final fun component3 ()I
+	public final fun component4 ()I
+	public final fun component5 ()I
+	public final fun component6 ()I
+	public final fun component7 ()I
+	public final fun component8 ()I
+	public final fun component9 ()I
+	public final fun copy (IIIIIIIIII)Lsaien/magrathea/core/TraceRecordingLimits;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/TraceRecordingLimits;IIIIIIIIIIILjava/lang/Object;)Lsaien/magrathea/core/TraceRecordingLimits;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getActiveSpans ()I
+	public final fun getAttributes ()I
+	public final fun getEventAttributes ()I
+	public final fun getEvents ()I
+	public final fun getIdChars ()I
+	public final fun getKeyChars ()I
+	public final fun getNameChars ()I
+	public final fun getStartsPerSecond ()I
+	public final fun getTotalTextChars ()I
+	public final fun getValueChars ()I
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

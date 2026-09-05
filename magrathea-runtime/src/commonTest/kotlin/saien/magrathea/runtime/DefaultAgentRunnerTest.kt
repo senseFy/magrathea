@@ -533,44 +533,15 @@ class DefaultAgentRunnerTest {
         assertTrue(events.any { it is AgentEvent.Completed })
     }
 
-    @Test
-    fun debugRecorderShouldStayWithinContractEvents() = runTest {
-        val recorder = RecordingDebugRecorder()
-        val runner = DefaultAgentRunner(
-            providerRegistry = InMemoryProviderRegistry(listOf(FakeEchoProvider())),
-            toolRegistry = InMemoryToolRegistry(),
-            persistence = InMemoryAgentPersistence(),
-            debugRecorder = recorder,
-        )
-
-        runner.run(
-            AgentRequest(
-                messages = listOf(AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("hello")))),
-                model = ModelDescriptor(provider = "fake", model = "fake-model"),
-            )
-        ).toList()
-
-        assertEquals(
-            setOf(
-                "provider.request.messages",
-                "provider.request.config",
-                "provider.selected",
-                "provider.chunk",
-                "provider.message.merged",
-                "agent.state.after_chunk",
-            ),
-            recorder.records.map { it.event }.toSet(),
-        )
-    }
 
     @Test
-    fun debugRecorderClassifiesProviderFailureWithoutExceptionMessage() = runTest {
-        val recorder = RecordingDebugRecorder()
+    fun tracingClassifiesProviderFailureWithoutExceptionMessage() = runTest {
+        val sink = RecordingTraceSink()
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(ProtocolFailingProvider())),
             toolRegistry = InMemoryToolRegistry(),
             persistence = InMemoryAgentPersistence(),
-            debugRecorder = recorder,
+            tracer = sink.tracer(),
         )
 
         runner.run(
@@ -582,47 +553,13 @@ class DefaultAgentRunnerTest {
             ),
         ).toList()
 
-        val failure = recorder.records.single { it.event == "provider.failed" }
-        assertEquals("protocol-fail", failure.attributes["provider"]?.let { value ->
-            (value as saien.magrathea.core.MagratheaDebugValue.StringValue).value
-        })
-        assertEquals("protocol", failure.stringAttribute("failure_type"))
-        assertTrue(failure.stringAttribute("run_id")?.isNotBlank() == true)
-        assertEquals(0L, failure.longAttribute("turn"))
-        assertTrue(failure.stringAttribute("provider_request_id")?.isNotBlank() == true)
-        assertEquals(0L, failure.longAttribute("provider_attempt"))
-        assertEquals("model", failure.stringAttribute("provider_purpose"))
-        assertNull(failure.traceContext)
-        assertFalse(recorder.records.toString().contains("PRIVATE-PROVIDER-BODY"))
+        val span = sink.spans.single { it.name == RuntimeTraceNames.PROVIDER_REQUEST }
+        val failure = span.events.single { it.name == "magrathea.provider.failure" }
+        assertEquals("protocol", (failure.attributes["type"] as saien.magrathea.core.TraceValue.StringValue).value)
+        assertEquals("protocol-fail", span.stringAttribute("magrathea.provider.key"))
+        assertFalse(sink.spans.toString().contains("PRIVATE-PROVIDER-BODY"))
     }
 
-    @Test
-    fun throwingDebugRecorderCannotChangeAgentResult() = runTest {
-        val recorder = object : saien.magrathea.core.MagratheaDebugRecorder {
-            override val enabled: Boolean = true
-
-            override fun record(record: saien.magrathea.core.MagratheaDebugRecord) {
-                error("debug destination unavailable")
-            }
-        }
-        val runner = DefaultAgentRunner(
-            providerRegistry = InMemoryProviderRegistry(listOf(FakeEchoProvider())),
-            toolRegistry = InMemoryToolRegistry(),
-            persistence = InMemoryAgentPersistence(),
-            debugRecorder = recorder,
-        )
-
-        val events = runner.run(
-            AgentRequest(
-                messages = listOf(
-                    AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("hello"))),
-                ),
-                model = ModelDescriptor(provider = "fake", model = "fake-model"),
-            ),
-        ).toList()
-
-        assertTrue(events.last() is AgentEvent.Completed)
-    }
 
     @Test
     fun toolResultsShouldPreserveDisplayTextAndMetadataInState() = runTest {
@@ -808,13 +745,13 @@ class DefaultAgentRunnerTest {
     }
 
     @Test
-    fun debugRecorderShouldSummarizeAttachmentsWithoutDataUrls() = runTest {
-        val recorder = RecordingDebugRecorder()
+    fun tracingDoesNotRetainAttachmentData() = runTest {
+        val sink = RecordingTraceSink()
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(FakeEchoProvider())),
             toolRegistry = InMemoryToolRegistry(),
             persistence = InMemoryAgentPersistence(),
-            debugRecorder = recorder,
+            tracer = sink.tracer(),
         )
 
         runner.run(
@@ -829,9 +766,9 @@ class DefaultAgentRunnerTest {
             )
         ).toList()
 
-        val debugPayload = recorder.records.joinToString("\n")
+        val debugPayload = sink.spans.joinToString("\n")
 
-        assertTrue(debugPayload.contains("attachment_count=LongValue(value=1)"))
+        assertTrue(debugPayload.contains("message_count=LongValue(value=1)"))
         assertFalse(debugPayload.contains("IMAGE_DATA"))
     }
 

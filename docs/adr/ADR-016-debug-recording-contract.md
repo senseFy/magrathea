@@ -1,9 +1,12 @@
 # ADR-016: Debug Recording Contract
 
-- Status: Accepted
+- Status: Superseded by bounded completed-span recording in ADR-015
 - Date: 2026-08-26
 
-## Decision
+The debug recorder API and its per-chunk path have been removed. This document records the historical
+contract; provider attempt summaries now belong to completed spans.
+
+## Historical decision
 
 Debug recording is separate from agent events and tracing. Magrathea exposes
 `MagratheaDebugRecorder`; hosts decide whether records are enabled, stored, retained, or exported.

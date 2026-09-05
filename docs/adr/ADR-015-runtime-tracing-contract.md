@@ -11,7 +11,7 @@ Tracing replaces telemetry as Magrathea's only structured observability path.
 - Core defines generic tracing primitives and coroutine context propagation.
 - Runtime defines Agent span topology and semantic attributes.
 - Hosts provide buffering, persistence, export, retention, and lifecycle.
-- Debug recording remains separate.
+- Completed spans are the only diagnostic output; provider attempts use fixed incremental summaries.
 - The implementation removes the telemetry API without a compatibility layer or dual writes.
 
 The tracer provides in-process parent/child tracing. It does not provide storage, transport, a
@@ -315,3 +315,19 @@ Adding an optional bounded attribute or event is compatible. Changing a span nam
 type or meaning, or the content-free boundary requires an ADR update. Sinks ignore unknown keys and
 events. Durable formats, remote propagation, sampling, and debug bundles require separate versioned
 contracts.
+
+## Bounded recording
+
+`DefaultMagratheaTracer` admits at most 64 active recordings and 128 starts per monotonic second
+by default. A span retains at most 24 attributes, eight events (four attributes each), 2,048 UTF-16
+text units in total, and bounded names, keys, values and identifiers. Saturation or contention drops
+recording without blocking; producers do not perform JSON encoding or I/O. Ending a span atomically
+detaches its event/attribute state and releases admission even when the sink fails. Ordinary sink
+exceptions are ignored; cancellation and direct/wrapped fatal errors propagate.
+
+Each physical provider attempt records request facts, incremental content counts, stream completion,
+first-event and first-text timing, typed failure shape and correctly accumulated request usage.
+Final text/reasoning values replace the current part's delta counts rather than being counted twice.
+No diagnostic operation scans message history or retains prompt, response, reasoning or Tool content.
+Root execution outcomes are `completed` (OK), `failed` (ERROR), and `cancelled`, `interrupted` or
+`recovery_blocked` (UNSET). All Runtime spans carry their session identity independently of ancestry.

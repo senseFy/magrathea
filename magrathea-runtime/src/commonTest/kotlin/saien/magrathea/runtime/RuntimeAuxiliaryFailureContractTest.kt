@@ -5,8 +5,6 @@ import kotlin.test.assertSame
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import saien.magrathea.core.AgentSessionId
-import saien.magrathea.core.MagratheaDebugRecord
-import saien.magrathea.core.MagratheaDebugRecorder
 import saien.magrathea.core.MagratheaTraceSpan
 import saien.magrathea.core.MagratheaTracer
 import saien.magrathea.core.TraceContext
@@ -54,28 +52,6 @@ class RuntimeAuxiliaryFailureContractTest {
         assertSame(fatal, escaped)
     }
 
-    @Test
-    fun wrappedFatalFromDebugRecorderEscapesExactly() = runTest {
-        val fatal = TestFatalError(Any())
-        val debugging = RuntimeDebugging(
-            object : MagratheaDebugRecorder {
-                override val enabled: Boolean = true
-
-                override fun record(record: MagratheaDebugRecord) {
-                    throw TestRecoverableException(fatal)
-                }
-            },
-        )
-
-        val escaped = runCatching {
-            debugging.record(
-                sessionId = AgentSessionId("fatal-debug-session"),
-                event = "fatal-debug-event",
-            )
-        }.exceptionOrNull()
-
-        assertSame(fatal, escaped)
-    }
 
     @Test
     fun tracingCancellationIsNeverTreatedAsFailOpenObservability() {
@@ -97,26 +73,4 @@ class RuntimeAuxiliaryFailureContractTest {
         assertSame(cancellation, escaped)
     }
 
-    @Test
-    fun debugCancellationIsNeverTreatedAsFailOpenObservability() = runTest {
-        val cancellation = CancellationException("debug cancelled")
-        val debugging = RuntimeDebugging(
-            object : MagratheaDebugRecorder {
-                override val enabled: Boolean = true
-
-                override fun record(record: MagratheaDebugRecord) {
-                    throw cancellation
-                }
-            },
-        )
-
-        val escaped = runCatching {
-            debugging.record(
-                sessionId = AgentSessionId("cancelled-debug-session"),
-                event = "cancelled-debug-event",
-            )
-        }.exceptionOrNull()
-
-        assertSame(cancellation, escaped)
-    }
 }

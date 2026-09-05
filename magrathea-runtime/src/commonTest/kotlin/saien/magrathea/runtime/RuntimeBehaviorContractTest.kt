@@ -429,7 +429,7 @@ class RuntimeBehaviorContractTest {
     }
 
     @Test
-    fun runtimeDebugEventsDoNotExposeMessageEndpointOrToolPayload() = runTest {
+    fun runtimeTracesDoNotExposeMessageEndpointOrToolPayload() = runTest {
         val userCanary = "USER_CONTENT_CANARY"
         val endpointCanary = "endpoint-canary"
         val argumentCanary = "TOOL_ARGUMENT_CANARY"
@@ -470,6 +470,7 @@ class RuntimeBehaviorContractTest {
         val request = request(
             provider = provider.key,
             text = userCanary,
+            sessionId = AgentSessionId("trace-privacy-session"),
             tools = listOf(tool.definition),
             maxTurns = 2,
         ).copy(
@@ -479,11 +480,11 @@ class RuntimeBehaviorContractTest {
             ),
         )
 
-        val recorder = RecordingDebugRecorder()
-        runner(listOf(provider), tools = listOf(tool), debugRecorder = recorder)
+        val sink = RecordingTraceSink()
+        runner(listOf(provider), tools = listOf(tool), tracer = sink.tracer())
             .run(request)
             .toList()
-        val debug = recorder.records.joinToString("|") { it.attributes.toString() }
+        val debug = sink.spans.toString()
 
         assertFalse(debug.contains(userCanary))
         assertFalse(debug.contains(endpointCanary))
@@ -531,8 +532,7 @@ class RuntimeBehaviorContractTest {
         interceptors: List<AgentInterceptor> = emptyList(),
         approvalGateway: ToolApprovalGateway? = null,
         followUpMessageProvider: FollowUpMessageProvider = FollowUpMessageProvider { emptyList() },
-        debugRecorder: saien.magrathea.core.MagratheaDebugRecorder =
-            saien.magrathea.core.NoopMagratheaDebugRecorder,
+        tracer: saien.magrathea.core.MagratheaTracer = saien.magrathea.core.NoopMagratheaTracer,
     ) = DefaultAgentRunner(
         providerRegistry = InMemoryProviderRegistry(providers),
         toolRegistry = InMemoryToolRegistry(tools),
@@ -540,7 +540,7 @@ class RuntimeBehaviorContractTest {
         interceptors = interceptors,
         approvalGateway = approvalGateway,
         followUpMessageProvider = followUpMessageProvider,
-        debugRecorder = debugRecorder,
+        tracer = tracer,
     )
 
     private fun request(

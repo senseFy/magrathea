@@ -72,14 +72,10 @@ import saien.magrathea.core.CredentialProvider
 import saien.magrathea.core.FollowUpMessageProvider
 import saien.magrathea.core.IdGenerator
 import saien.magrathea.core.InlineToolImageSource
-import saien.magrathea.core.MagratheaDebugLevel
-import saien.magrathea.core.MagratheaDebugRecorder
-import saien.magrathea.core.MagratheaDebugValue
 import saien.magrathea.core.MagratheaSdk
 import saien.magrathea.core.MagratheaTracer
 import saien.magrathea.core.MediaReference
 import saien.magrathea.core.MessageRole
-import saien.magrathea.core.NoopMagratheaDebugRecorder
 import saien.magrathea.core.NoopMagratheaTracer
 import saien.magrathea.core.NoopRetryPolicy
 import saien.magrathea.core.ProviderTimeoutConfig
@@ -177,7 +173,6 @@ class DefaultAgentRunner(
     private val retryPolicy: RetryPolicy = NoopRetryPolicy,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
     tracer: MagratheaTracer = NoopMagratheaTracer,
-    debugRecorder: MagratheaDebugRecorder = NoopMagratheaDebugRecorder,
     private val idGenerator: IdGenerator = SystemIdGenerator,
 ) : AgentRunner {
     private val activeRuns = LinkedHashMap<String, ActiveRun>()
@@ -190,7 +185,6 @@ class DefaultAgentRunner(
         ContextSummarizer(::summarizeContext),
     )
     private val tracing = RuntimeTracing(tracer)
-    private val debugging = RuntimeDebugging(debugRecorder)
 
     override fun run(request: AgentRequest): Flow<AgentEvent> = traceExecutionFlow(
         operation = "run",
@@ -478,13 +472,26 @@ class DefaultAgentRunner(
                             "magrathea.usage.reasoning_tokens" to traceState.usage?.reasoningTokens,
                         )
                         when (val event = terminal) {
-                            is AgentEvent.Completed,
-                            is AgentEvent.RecoveryBlocked,
-                            -> span.endSuccess(*finalAttributes)
-                            is AgentEvent.Failed -> span.endFailure(
-                                failureCode = event.code,
-                                phase = "runtime",
-                                *finalAttributes,
+                            is AgentEvent.Completed -> span.end(
+                                TraceStatus.OK,
+                                traceAttributes("magrathea.outcome" to "completed", *finalAttributes),
+                            )
+                            is AgentEvent.RecoveryBlocked -> span.end(
+                                TraceStatus.UNSET,
+                                traceAttributes(
+                                    "magrathea.outcome" to "recovery_blocked",
+                                    "magrathea.recovery.block_reason" to event.reason.name,
+                                    *finalAttributes,
+                                ),
+                            )
+                            is AgentEvent.Failed -> span.end(
+                                TraceStatus.ERROR,
+                                traceAttributes(
+                                    "magrathea.outcome" to "failed",
+                                    "magrathea.error.code" to event.code.name,
+                                    "magrathea.error.phase" to "runtime",
+                                    *finalAttributes,
+                                ),
                             )
                             is AgentEvent.Cancelled -> span.endCancelled(*finalAttributes)
                             is AgentEvent.Interrupted -> span.endInterrupted(
@@ -1714,20 +1721,7 @@ class DefaultAgentRunner(
                     "magrathea.provider.invocation_intent" to invocation.intent.traceValue(),
                 ),
             )
-            val debugCorrelation = RuntimeDebugCorrelation(
-                runId = runId,
-                turn = turn,
-                providerRequestId = invocation.invocation.requestId,
-                providerAttempt = retryAttempt,
-                providerPurpose = "model",
-                traceContext = providerSpan.context,
-            )
-            recordProviderRequestDebug(
-                sessionId = request.sessionId,
-                provider = provider,
-                request = providerRequest,
-                correlation = debugCorrelation,
-            )
+            val summary = ProviderTraceSummary(providerSpan, providerRequest)
             var requestFinished = false
             fun finishProviderRequest(
                 status: TraceStatus,
@@ -1737,6 +1731,7 @@ class DefaultAgentRunner(
             ) {
                 if (requestFinished) return
                 requestFinished = true
+                summary.finish()
                 providerSpan.end(
                     status,
                     traceAttributes(
@@ -1748,29 +1743,16 @@ class DefaultAgentRunner(
                 )
                 if (usageObserved) traceState.observeUsage(turnUsage)
             }
-            suspend fun recordProviderFailure(
-                failure: Throwable,
-                level: MagratheaDebugLevel,
-            ) = recordProviderFailureDebug(
-                sessionId = request.sessionId,
-                provider = provider,
-                failure = failure,
-                level = level,
-                correlation = debugCorrelation,
-            )
             suspend fun finishAndRethrowProviderFailure(
                 primaryFailure: Throwable,
                 status: TraceStatus,
                 outcome: String,
                 failureCode: AgentFailureCode?,
                 phase: String? = null,
-                debugLevel: MagratheaDebugLevel? = null,
             ): Nothing {
                 val failures = CleanupFailureAccumulator().apply { record(primaryFailure) }
+                failures.capture { summary.failure(primaryFailure) }
                 failures.capture { finishProviderRequest(status, outcome, failureCode, phase) }
-                if (debugLevel != null) {
-                    failures.capture { recordProviderFailure(primaryFailure, debugLevel) }
-                }
                 throw checkNotNull(failures.failureOrNull())
             }
             try {
@@ -1799,6 +1781,7 @@ class DefaultAgentRunner(
                                 providerChunkObserved = true
                                 providerSpan.addEvent(RuntimeTraceEvents.PROVIDER_FIRST_EVENT)
                             }
+                            summary.observe(chunk)
                             chunk.usageObservation()?.let { observation ->
                                 usageObserved = true
                                 turnUsage = if (observation.authoritative) {
@@ -1819,13 +1802,6 @@ class DefaultAgentRunner(
                                     ),
                                 )
                             }
-                            debugging.record(
-                                request.sessionId,
-                                event = "provider.chunk",
-                                correlation = debugCorrelation,
-                            ) {
-                                chunk.debugAttributes()
-                            }
                             mergedAssistant = handleChunk(
                                 request,
                                 state,
@@ -1834,14 +1810,6 @@ class DefaultAgentRunner(
                                 chunk,
                                 emit,
                             )
-                            debugging.record(
-                                request.sessionId,
-                                event = "provider.message.merged",
-                                correlation = debugCorrelation,
-                            ) {
-                                mergedAssistant?.debugAttributes()
-                                    ?: debugAttributes("present" to false)
-                            }
                             mergedAssistant?.let { message ->
                                 updateState(
                                     state.copy(
@@ -1851,13 +1819,6 @@ class DefaultAgentRunner(
                                         stopReason = message.stopReason,
                                     ),
                                 )
-                                debugging.record(
-                                    request.sessionId,
-                                    event = "agent.state.after_chunk",
-                                    correlation = debugCorrelation,
-                                ) {
-                                    state.messages.debugAttributes()
-                                }
                             }
                             if (chunkCompletes) {
                                 providerSpan.addEvent(RuntimeTraceEvents.PROVIDER_TERMINAL_EVENT)
@@ -1924,7 +1885,6 @@ class DefaultAgentRunner(
                     outcome = "failure",
                     failureCode = AgentFailureCode.TIMEOUT,
                     phase = "provider.transport",
-                    debugLevel = MagratheaDebugLevel.ERROR,
                 )
             } catch (cancelled: CancellationException) {
                 finishAndRethrowProviderFailure(
@@ -1941,13 +1901,14 @@ class DefaultAgentRunner(
                         outcome = "failure",
                         failureCode = t.toAgentFailureCode(),
                         phase = t.providerTracePhase(),
-                        debugLevel = MagratheaDebugLevel.ERROR,
                     )
                 }
+                val protocolViolation = t is ProviderContextLimitException && providerChunkObserved
+                summary.failure(t, protocolViolation)
                 finishProviderRequest(
                     TraceStatus.ERROR,
                     "failure",
-                    t.toAgentFailureCode(),
+                    if (protocolViolation) AgentFailureCode.PROVIDER_PROTOCOL else t.toAgentFailureCode(),
                     t.providerTracePhase(),
                 )
                 val invocationInvalidated = t is ProviderInvocationInvalidatedException
@@ -1962,29 +1923,17 @@ class DefaultAgentRunner(
                             "Provider reported a context limit after emitting output",
                             t,
                         )
-                        recordProviderFailure(protocolFailure, MagratheaDebugLevel.ERROR)
                         throw protocolFailure
                     }
-                    recordProviderFailure(
-                        t,
-                        if (contextLimitRecoveryAvailable) {
-                            MagratheaDebugLevel.WARN
-                        } else {
-                            MagratheaDebugLevel.ERROR
-                        },
-                    )
                     throw t
                 }
                 if (providerChunkObserved) {
-                    recordProviderFailure(t, MagratheaDebugLevel.ERROR)
                     throw t.asProviderInterruptionSignal(ProviderInterruptionPhase.AFTER_FIRST_EVENT) ?: t
                 }
                 if (!t.isRecoverableProviderFailure()) {
-                    recordProviderFailure(t, MagratheaDebugLevel.ERROR)
                     throw t
                 }
                 if (retryAttempt >= request.engine.runtime.maxProviderRetries) {
-                    recordProviderFailure(t, MagratheaDebugLevel.ERROR)
                     throw requireNotNull(
                         t.asProviderInterruptionSignal(ProviderInterruptionPhase.BEFORE_FIRST_EVENT),
                     )
@@ -1993,21 +1942,16 @@ class DefaultAgentRunner(
                 val policyFailure = t.providerFailureCause() ?: t
                 val shouldRetry = try {
                     retryPolicy.shouldRetry(retryOrdinal, policyFailure)
-                } catch (cancelled: CancellationException) {
-                    cancelled.rethrowFatalError()
-                    throw cancelled
                 } catch (policyError: Throwable) {
-                    rethrowWithCleanup(policyError) {
-                        recordProviderFailure(t, MagratheaDebugLevel.ERROR)
-                    }
+                    policyError.rethrowFatalError()
+                    throw policyError
                 }
                 if (!shouldRetry) {
-                    recordProviderFailure(t, MagratheaDebugLevel.ERROR)
                     throw requireNotNull(
                         t.asProviderInterruptionSignal(ProviderInterruptionPhase.BEFORE_FIRST_EVENT),
                     )
                 }
-                recordProviderFailure(t, MagratheaDebugLevel.WARN)
+
                 val requiresFreshInvocation =
                     provider.invocationResumeMode == ProviderInvocationResumeMode.NEW_ATTEMPT ||
                         invocationInvalidated
@@ -2556,20 +2500,7 @@ class DefaultAgentRunner(
                     "magrathea.provider.invocation_intent" to invocation.intent.traceValue(),
                 ),
             )
-            val debugCorrelation = RuntimeDebugCorrelation(
-                runId = lifecycle.runId,
-                turn = request.turn,
-                providerRequestId = invocation.invocation.requestId,
-                providerAttempt = retryAttempt,
-                providerPurpose = "context_summary",
-                traceContext = providerSpan.context,
-            )
-            recordProviderRequestDebug(
-                sessionId = request.sessionId,
-                provider = provider,
-                request = providerRequest,
-                correlation = debugCorrelation,
-            )
+            val summary = ProviderTraceSummary(providerSpan, providerRequest)
             var requestFinished = false
             fun finishSummaryRequest(
                 status: TraceStatus,
@@ -2579,6 +2510,7 @@ class DefaultAgentRunner(
             ) {
                 if (requestFinished) return
                 requestFinished = true
+                summary.finish()
                 providerSpan.end(
                     status,
                     traceAttributes(
@@ -2589,29 +2521,16 @@ class DefaultAgentRunner(
                     ) + usage.takeIf { usageObserved }?.traceAttributes().orEmpty(),
                 )
             }
-            suspend fun recordProviderFailure(
-                failure: Throwable,
-                level: MagratheaDebugLevel,
-            ) = recordProviderFailureDebug(
-                sessionId = request.sessionId,
-                provider = provider,
-                failure = failure,
-                level = level,
-                correlation = debugCorrelation,
-            )
             suspend fun finishAndRethrowSummaryFailure(
                 primaryFailure: Throwable,
                 status: TraceStatus,
                 outcome: String,
                 failureCode: AgentFailureCode?,
                 phase: String? = null,
-                debugLevel: MagratheaDebugLevel? = null,
             ): Nothing {
                 val failures = CleanupFailureAccumulator().apply { record(primaryFailure) }
+                failures.capture { summary.failure(primaryFailure) }
                 failures.capture { finishSummaryRequest(status, outcome, failureCode, phase) }
-                if (debugLevel != null) {
-                    failures.capture { recordProviderFailure(primaryFailure, debugLevel) }
-                }
                 throw checkNotNull(failures.failureOrNull())
             }
             try {
@@ -2631,6 +2550,7 @@ class DefaultAgentRunner(
                                 chunkObserved = true
                                 providerSpan.addEvent(RuntimeTraceEvents.PROVIDER_FIRST_EVENT)
                             }
+                            summary.observe(chunk)
                             val chunkCompletes = chunk.events.last() is ProviderEvent.Completed
                             chunk.usageObservation()?.let { observation ->
                                 usageObserved = true
@@ -2641,22 +2561,7 @@ class DefaultAgentRunner(
                                 }
                                 usageAccounting?.observe(invocation.invocation.requestId, usage)
                             }
-                            debugging.record(
-                                request.sessionId,
-                                event = "provider.chunk",
-                                correlation = debugCorrelation,
-                            ) {
-                                chunk.debugAttributes()
-                            }
                             summaryMessage = assembler.apply(summaryMessage, chunk.events)
-                            debugging.record(
-                                request.sessionId,
-                                event = "provider.message.merged",
-                                correlation = debugCorrelation,
-                            ) {
-                                summaryMessage?.debugAttributes()
-                                    ?: debugAttributes("present" to false)
-                            }
                             if (chunkCompletes) {
                                 providerSpan.addEvent(RuntimeTraceEvents.PROVIDER_TERMINAL_EVENT)
                             }
@@ -2697,7 +2602,6 @@ class DefaultAgentRunner(
                     outcome = "failure",
                     failureCode = AgentFailureCode.TIMEOUT,
                     phase = "provider.transport",
-                    debugLevel = MagratheaDebugLevel.ERROR,
                 )
             } catch (cancelled: CancellationException) {
                 finishAndRethrowSummaryFailure(
@@ -2714,9 +2618,9 @@ class DefaultAgentRunner(
                         outcome = "failure",
                         failureCode = failure.toAgentFailureCode(),
                         phase = failure.providerTracePhase(),
-                        debugLevel = MagratheaDebugLevel.ERROR,
                     )
                 }
+                summary.failure(failure)
                 finishSummaryRequest(
                     TraceStatus.ERROR,
                     "failure",
@@ -2729,17 +2633,14 @@ class DefaultAgentRunner(
                     lifecycle.invalidate(invocation.invocation.requestId)
                 }
                 if (chunkObserved) {
-                    recordProviderFailure(failure, MagratheaDebugLevel.ERROR)
                     throw failure.asProviderInterruptionSignal(
                         ProviderInterruptionPhase.AFTER_FIRST_EVENT,
                     ) ?: failure
                 }
                 if (!failure.isRecoverableProviderFailure()) {
-                    recordProviderFailure(failure, MagratheaDebugLevel.ERROR)
                     throw failure
                 }
                 if (retryAttempt >= lifecycle.maxProviderRetries) {
-                    recordProviderFailure(failure, MagratheaDebugLevel.ERROR)
                     throw failure.asProviderInterruptionSignal(
                         ProviderInterruptionPhase.BEFORE_FIRST_EVENT,
                     ) ?: failure
@@ -2748,21 +2649,16 @@ class DefaultAgentRunner(
                 val policyFailure = failure.providerFailureCause() ?: failure
                 val shouldRetry = try {
                     retryPolicy.shouldRetry(retryOrdinal, policyFailure)
-                } catch (cancelled: CancellationException) {
-                    cancelled.rethrowFatalError()
-                    throw cancelled
                 } catch (policyError: Throwable) {
-                    rethrowWithCleanup(policyError) {
-                        recordProviderFailure(failure, MagratheaDebugLevel.ERROR)
-                    }
+                    policyError.rethrowFatalError()
+                    throw policyError
                 }
                 if (!shouldRetry) {
-                    recordProviderFailure(failure, MagratheaDebugLevel.ERROR)
                     throw failure.asProviderInterruptionSignal(
                         ProviderInterruptionPhase.BEFORE_FIRST_EVENT,
                     ) ?: failure
                 }
-                recordProviderFailure(failure, MagratheaDebugLevel.WARN)
+
                 val requiresFreshInvocation =
                     provider.invocationResumeMode == ProviderInvocationResumeMode.NEW_ATTEMPT ||
                         invocationInvalidated
@@ -2795,59 +2691,6 @@ class DefaultAgentRunner(
 
     private suspend fun resolveProviderConfig(request: AgentRequest): ResolvedProviderConfig {
         return resolveProviderConfig(request.model.provider, request.engine.provider)
-    }
-
-    private suspend fun recordProviderRequestDebug(
-        sessionId: AgentSessionId,
-        provider: ProviderAdapter,
-        request: ProviderRequest,
-        correlation: RuntimeDebugCorrelation,
-    ) {
-        debugging.record(
-            sessionId,
-            event = "provider.request.messages",
-            correlation = correlation,
-        ) {
-            request.messages.debugAttributes()
-        }
-        debugging.record(
-            sessionId,
-            event = "provider.request.config",
-            correlation = correlation,
-        ) {
-            debugAttributes(
-                "streaming" to request.model.supportsStreaming,
-                "custom_endpoint" to (request.endpoint != null),
-                "tool_count" to request.tools.size,
-            )
-        }
-        debugging.record(
-            sessionId,
-            event = "provider.selected",
-            correlation = correlation,
-        ) {
-            debugAttributes(
-                "provider" to provider.key,
-                "model" to request.model.model,
-            )
-        }
-    }
-
-    private suspend fun recordProviderFailureDebug(
-        sessionId: AgentSessionId,
-        provider: ProviderAdapter,
-        failure: Throwable,
-        level: MagratheaDebugLevel,
-        correlation: RuntimeDebugCorrelation,
-    ) {
-        debugging.record(
-            sessionId,
-            event = "provider.failed",
-            level = level,
-            correlation = correlation,
-        ) {
-            failure.debugFailureAttributes(provider.key)
-        }
     }
 
     private suspend fun resolveProviderConfig(
@@ -3563,76 +3406,7 @@ private val CONTEXT_SUMMARY_SYSTEM_PROMPT = """
     Return only the summary in plain text.
 """.trimIndent()
 
-private fun List<AgentMessage>.debugAttributes() = debugAttributes(
-    "message_count" to size,
-    *MessageRole.entries.map { role ->
-        "${role.name.lowercase()}_count" to count { it.role == role }
-    }.toTypedArray(),
-    "text_chars" to sumOf { message ->
-        message.parts.filterIsInstance<TextPart>().sumOf { it.text.length }
-    },
-    "reasoning_chars" to sumOf { message ->
-        message.parts.filterIsInstance<ReasoningPart>().sumOf { it.text.length }
-    },
-    "attachment_count" to sumOf { it.parts.count { part -> part is AttachmentPart } },
-    "tool_call_count" to sumOf { it.parts.count { part -> part is ToolCallPart } },
-    "tool_result_count" to sumOf { it.parts.count { part -> part is ToolResultPart } },
-    "metadata_key_count" to flatMap { it.metadata.keys }.distinct().size,
-)
-
-private fun AgentMessage.debugAttributes() = debugAttributes(
-    "present" to true,
-    "role" to role.name.lowercase(),
-    "part_count" to parts.size,
-    "text_chars" to parts.filterIsInstance<TextPart>().sumOf { it.text.length },
-    "reasoning_chars" to parts.filterIsInstance<ReasoningPart>().sumOf { it.text.length },
-    "attachment_count" to parts.count { it is AttachmentPart },
-    "tool_call_count" to parts.count { it is ToolCallPart },
-    "tool_result_count" to parts.count { it is ToolResultPart },
-    "stop_reason" to (stopReason?.name ?: "none"),
-    "metadata_key_count" to metadata.size,
-)
-
-private fun ProviderChunk.debugAttributes() = debugAttributes(
-    "event_count" to events.size,
-    "event_types" to events.map(ProviderEvent::debugType).distinct().joinToString(","),
-    "completed" to (events.lastOrNull() is ProviderEvent.Completed),
-    "usage_present" to events.any {
-        it is ProviderEvent.UsageDelta || (it is ProviderEvent.Completed && it.usage != null)
-    },
-)
-
-private fun ProviderEvent.debugType(): String = when (this) {
-    is ProviderEvent.TextStart -> "text_start"
-    is ProviderEvent.TextDelta -> "text_delta"
-    is ProviderEvent.TextEnd -> "text_end"
-    is ProviderEvent.ReasoningStart -> "reasoning_start"
-    is ProviderEvent.ReasoningDelta -> "reasoning_delta"
-    is ProviderEvent.ReasoningEnd -> "reasoning_end"
-    is ProviderEvent.ToolCallStart -> "tool_call_start"
-    is ProviderEvent.ToolCallDelta -> "tool_call_delta"
-    is ProviderEvent.ToolCallEnd -> "tool_call_end"
-    is ProviderEvent.UsageDelta -> "usage_delta"
-    is ProviderEvent.Completed -> "completed"
-}
-
-private fun Throwable.debugFailureAttributes(provider: String): Map<String, MagratheaDebugValue> {
-    val failure = providerFailureCause() ?: this
-    return debugAttributes(
-        "provider" to provider,
-        "failure_type" to failure.debugFailureType(),
-        "code" to if (failure is TimeoutCancellationException) {
-            AgentFailureCode.TIMEOUT.name
-        } else {
-            failure.toAgentFailureCode().name
-        },
-        "protocol_error" to (failure is ProviderProtocolException),
-        "http_status" to (failure as? ProviderHttpException)?.statusCode,
-        "retryable" to (failure as? ProviderException)?.retryable,
-    )
-}
-
-private fun Throwable.debugFailureType(): String = when (this) {
+internal fun Throwable.providerTraceFailureType(): String = when (this) {
     is TimeoutCancellationException,
     is ProviderTimeoutException,
     -> "timeout"
@@ -3859,7 +3633,7 @@ private fun Throwable.isRecoverableProviderFailure(): Boolean = when (this) {
     else -> false
 }
 
-private fun Throwable.providerFailureCause(): ProviderException? = when (this) {
+internal fun Throwable.providerFailureCause(): ProviderException? = when (this) {
     is ProviderInterruptionSignal -> failure.providerFailureCause()
     is ProviderInvocationInvalidatedException -> failure
     is ProviderException -> this

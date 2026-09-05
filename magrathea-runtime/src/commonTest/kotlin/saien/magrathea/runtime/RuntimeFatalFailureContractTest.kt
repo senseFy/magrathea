@@ -15,8 +15,6 @@ import saien.magrathea.core.AgentPersistenceRecord
 import saien.magrathea.core.AgentRequest
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
-import saien.magrathea.core.MagratheaDebugRecord
-import saien.magrathea.core.MagratheaDebugRecorder
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.RetryPolicy
@@ -65,9 +63,8 @@ class RuntimeFatalFailureContractTest {
     }
 
     @Test
-    fun retryPolicyFatalKeepsPriorityOverFatalDebugCleanup() = runTest {
+    fun wrappedRetryPolicyFatalEscapesExactly() = runTest {
         val policyFatal = TestFatalError(Any())
-        val debugFatal = TestFatalError(Any())
         val provider = AlwaysFailingProvider()
         val runner = DefaultAgentRunner(
             providerRegistry = InMemoryProviderRegistry(listOf(provider)),
@@ -79,13 +76,6 @@ class RuntimeFatalFailureContractTest {
 
                 override suspend fun backoffDelayMs(attempt: Int, error: Throwable): Long = 0L
             },
-            debugRecorder = object : MagratheaDebugRecorder {
-                override val enabled: Boolean = true
-
-                override fun record(record: MagratheaDebugRecord) {
-                    if (record.event == "provider.failed") throw debugFatal
-                }
-            },
         )
 
         val escaped = runCatching {
@@ -93,7 +83,6 @@ class RuntimeFatalFailureContractTest {
         }.exceptionOrNull()
 
         assertSame(policyFatal, escaped)
-        assertTrue(policyFatal.suppressedExceptions.any { failure -> failure === debugFatal })
     }
 
     private suspend fun assertProviderFailureContract(
