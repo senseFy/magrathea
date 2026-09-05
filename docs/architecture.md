@@ -49,9 +49,9 @@ one or more Provider adapters:
 
 ```kotlin
 dependencies {
-    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.9") // x-release-please-version
-    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.9") // x-release-please-version
-    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.9") // x-release-please-version
+    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.11") // x-release-please-version
+    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.11") // x-release-please-version
+    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.11") // x-release-please-version
 }
 ```
 
