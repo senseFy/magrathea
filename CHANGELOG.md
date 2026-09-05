@@ -5,8 +5,6 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
-## 0.1.0-alpha.10 — 2026-09-05
-
 ### Changed
 
 - Trace recording now bounds active spans, admission rate, attributes, events and retained text at
@@ -36,6 +34,11 @@ Notable changes to Magrathea are documented here. The project follows
   other failures preserved as suppressed context.
 - Failed managed-session shutdown prevents destructive persistence deletion or clearing; manager
   close still attempts every independent cleanup and replays the same result to later callers.
+
+## 0.1.0-alpha.10 — 2026-09-05
+
+Not published. Candidate verification failed before publication; its reviewed changes were returned
+to `Unreleased` for inclusion in the next release.
 
 ## 0.1.0-alpha.9 — 2026-09-04
 
