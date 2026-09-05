@@ -23,12 +23,14 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.withTimeout
 import saien.magrathea.core.EpochClock
 import saien.magrathea.core.IdGenerator
@@ -380,8 +382,12 @@ class GatewayKtorRoutesTest {
     }
 
     @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
     fun resolveReportsExpiredTerminalReplayWithoutRepeatingProviderWork() = testApplication {
+        val scheduler = TestCoroutineScheduler()
         val fixture = HttpFixture(
+            scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(scheduler)),
+            clock = EpochClock { scheduler.currentTime },
             coordinatorConfig = GatewayCoordinatorConfig(
                 terminalRetentionMillis = 25,
                 idempotencyRetentionMillis = 5_000,
@@ -396,11 +402,13 @@ class GatewayKtorRoutesTest {
         }
         assertEquals(HttpStatusCode.Created, created.status)
         val descriptor = codec.decodeDescriptor(created.bodyAsText())
+        scheduler.runCurrent()
         val replay = client.get("/v3/streams/${descriptor.streamId}/events?afterSequence=-1") {
             readHeaders("user-a")
         }
         assertIs<GatewayEvent.Completed>(parseSse(replay.bodyAsText()).last().event)
-        delay(500)
+        scheduler.advanceTimeBy(25)
+        scheduler.runCurrent()
 
         val expired = client.get("/v3/streams") {
             readHeaders("user-a")
@@ -593,8 +601,8 @@ class GatewayKtorRoutesTest {
         quotaAllowed: Boolean = true,
         clock: EpochClock = saien.magrathea.core.SystemEpochClock,
         coordinatorConfig: GatewayCoordinatorConfig = GatewayCoordinatorConfig(),
+        private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     ) : AutoCloseable {
-        private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         var providerCalls = 0
         private var nextId = 0
         private val provider = object : ProviderAdapter {
