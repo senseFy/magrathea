@@ -5,6 +5,29 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+### Changed
+
+- Runtime propagates direct and wrapped fatal errors to the host instead of converting them into
+  Agent failures, retries, or fail-open results. Ordinary exceptions retain their typed failure
+  behavior, while cancellation remains cooperative control flow, including in tracing and debug
+  integrations.
+
+### Fixed
+
+- Managed sessions no longer remain falsely active after a fatal error or cancellation ends their
+  collector without a terminal event. Late `ACTIVE` recovery observations cannot revive a settled
+  execution or prevent its cleanup.
+- Unavailable or inconsistent managed-session recovery reads block fresh execution instead of
+  treating an existing checkpoint as absent. Hosts can retry `inspectRecovery` or explicitly cancel;
+  failed cancellation commits also keep pending recovery fenced until it can be resolved.
+- Presentation-only session events no longer discard otherwise valid recovery observations;
+  changes to execution results still invalidate older observations even if their values later match.
+- Tool permit release and Runtime cleanup failures no longer mask an earlier fatal error or
+  cancellation. Independent cleanup steps are attempted, with fatal failures taking priority and
+  other failures preserved as suppressed context.
+- Failed managed-session shutdown prevents destructive persistence deletion or clearing; manager
+  close still attempts every independent cleanup and replays the same result to later callers.
+
 ## 0.1.0-alpha.9 — 2026-09-04
 
 ### Added

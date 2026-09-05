@@ -220,8 +220,10 @@ class DefaultAgentRunner(
                     persistence.load(request.sessionId)
                 }?.snapshot?.state
             } catch (cancelled: CancellationException) {
+                cancelled.rethrowFatalError()
                 throw cancelled
-            } catch (_: Throwable) {
+            } catch (failure: Exception) {
+                failure.rethrowFatalError()
                 emitAll(resumeFailureFlow(request.sessionId, AgentFailureCode.STORAGE))
                 return@flow
             }
@@ -253,6 +255,7 @@ class DefaultAgentRunner(
                 ),
             )
         } catch (cancelled: CancellationException) {
+            cancelled.rethrowFatalError()
             if (!delegatedToRun) {
                 traceState.stopped(stopController.stopIntent)
                 persistPreflightRunStop(request, runId, stopController.stopIntent)
@@ -291,8 +294,10 @@ class DefaultAgentRunner(
                     persistence.load(sessionId)
                 }
             } catch (cancelled: CancellationException) {
+                cancelled.rethrowFatalError()
                 throw cancelled
-            } catch (_: Throwable) {
+            } catch (failure: Exception) {
+                failure.rethrowFatalError()
                 emitAll(resumeFailureFlow(sessionId, AgentFailureCode.STORAGE))
                 return@flow
             } ?: run {
@@ -388,6 +393,7 @@ class DefaultAgentRunner(
                 ),
             )
         } catch (cancelled: CancellationException) {
+            cancelled.rethrowFatalError()
             if (!delegatedToRun) {
                 traceState.stopped(stopController.stopIntent)
                 persistPreflightExistingStop(sessionId, stopController.stopIntent)
@@ -460,8 +466,10 @@ class DefaultAgentRunner(
                         } ?: collectUpstream()
                     } catch (failure: Throwable) {
                         thrown = failure
-                        throw failure
-                    } finally {
+                    }
+                    val completionFailures = CleanupFailureAccumulator()
+                    thrown?.let(completionFailures::record)
+                    completionFailures.capture {
                         val finalAttributes = arrayOf<Pair<String, Any?>>(
                             "magrathea.agent.run_id" to traceState.runId?.value,
                             "magrathea.agent.turn" to traceState.turn,
@@ -504,6 +512,7 @@ class DefaultAgentRunner(
                             }
                         }
                     }
+                    completionFailures.failureOrNull()?.let { failure -> throw failure }
                 } catch (failure: Throwable) {
                     completionFailure = failure
                     throw failure
@@ -603,20 +612,31 @@ class DefaultAgentRunner(
                 "magrathea.agent.operation" to operation,
             ),
         )
-        return try {
-            val result = span.context?.let { context ->
-                withMagratheaTraceContext(context) { block(traceState) }
-            } ?: block(traceState)
+        val outcome = try {
+            Result.success(
+                span.context?.let { context ->
+                    withMagratheaTraceContext(context) { block(traceState) }
+                } ?: block(traceState),
+            )
+        } catch (failure: Throwable) {
+            Result.failure(failure)
+        }
+        val failure = outcome.exceptionOrNull()
+        if (failure == null) {
+            val result = outcome.getOrThrow()
             val runId = traceState.runId ?: (result as? AgentRecoveryInfo)?.runId
             span.endSuccess("magrathea.agent.run_id" to runId?.value)
-            result
-        } catch (cancelled: CancellationException) {
-            span.endCancelled()
-            throw cancelled
-        } catch (failure: Throwable) {
-            span.endFailure(failure.toAgentFailureCode(), "runtime")
-            throw failure
+            return result
         }
+        val failures = CleanupFailureAccumulator().apply { record(failure) }
+        failures.capture {
+            if (failure is CancellationException && failure.fatalErrorOrNull() == null) {
+                span.endCancelled()
+            } else {
+                span.endFailure(failure.toAgentFailureCode(), "runtime")
+            }
+        }
+        throw checkNotNull(failures.failureOrNull())
     }
 
     private fun recoveryInfo(record: AgentPersistenceRecord): AgentRecoveryInfo {
@@ -769,8 +789,10 @@ class DefaultAgentRunner(
                 )
             }
         } catch (cancelled: CancellationException) {
+            cancelled.rethrowFatalError()
             currentCoroutineContext().ensureActive()
-        } catch (_: Throwable) {
+        } catch (failure: Exception) {
+            failure.rethrowFatalError()
             // The committed terminal state remains authoritative when cleanup is unavailable.
         }
     }
@@ -779,11 +801,15 @@ class DefaultAgentRunner(
         sessionId: AgentSessionId,
         stopIntent: StopIntent,
     ) = withContext(NonCancellable) {
-        when (stopIntent) {
-            StopIntent.INTERRUPT -> runCatching { markOrphanInterrupted(sessionId) }
-            StopIntent.ACTIVE,
-            StopIntent.CANCEL,
-            -> runCatching { markPersistedCancelled(sessionId) }
+        try {
+            when (stopIntent) {
+                StopIntent.INTERRUPT -> markOrphanInterrupted(sessionId)
+                StopIntent.ACTIVE,
+                StopIntent.CANCEL,
+                -> markPersistedCancelled(sessionId)
+            }
+        } catch (failure: Exception) {
+            failure.rethrowFatalError()
         }
         Unit
     }
@@ -793,11 +819,14 @@ class DefaultAgentRunner(
         runId: AgentRunId,
         stopIntent: StopIntent,
     ) = withContext(NonCancellable) {
-        val previousState = runCatching {
+        val previousState = try {
             measureStoreOperation(request.sessionId, "load") {
                 persistence.load(request.sessionId)
             }?.snapshot?.state
-        }.getOrNull()
+        } catch (failure: Exception) {
+            failure.rethrowFatalError()
+            null
+        }
         val checkpointState = AgentStateSnapshot(
             messages = request.messages,
             status = AgentStatus.RUNNING,
@@ -812,7 +841,7 @@ class DefaultAgentRunner(
             cursor = AgentResumeCursor(0, AgentResumePhase.TURN_PREPARING),
             state = checkpointState,
         )
-        runCatching {
+        try {
             if (stopIntent == StopIntent.INTERRUPT) {
                 val interruptedState = checkpointState.copy(
                     status = AgentStatus.INTERRUPTED,
@@ -836,6 +865,8 @@ class DefaultAgentRunner(
                     recoveryCheckpoint = checkpoint,
                 )
             }
+        } catch (failure: Exception) {
+            failure.rethrowFatalError()
         }
         Unit
     }
@@ -1162,17 +1193,21 @@ class DefaultAgentRunner(
                                 )
                                 result
                             } catch (cancelled: CancellationException) {
-                                contextSpan.endCancelled()
-                                throw cancelled
+                                rethrowWithCleanup(cancelled) { contextSpan.endCancelled() }
                             } catch (failure: Throwable) {
-                                contextSpan.endFailure(
-                                    failure.toAgentFailureCode(),
-                                    "context.prepare",
-                                )
-                                if (preparationReason == ContextPreparationReason.OVERFLOW_RECOVERY) {
-                                    throw AgentRuntimeFailure(AgentFailureCode.CONTEXT_LIMIT, failure)
+                                val primaryFailure = if (
+                                    preparationReason == ContextPreparationReason.OVERFLOW_RECOVERY
+                                ) {
+                                    AgentRuntimeFailure(AgentFailureCode.CONTEXT_LIMIT, failure)
+                                } else {
+                                    failure
                                 }
-                                throw failure
+                                rethrowWithCleanup(primaryFailure) {
+                                    contextSpan.endFailure(
+                                        failure.toAgentFailureCode(),
+                                        "context.prepare",
+                                    )
+                                }
                             } finally {
                                 observedSummaryUsage = summaryAccounting.cumulativeUsageOrNull()
                                 observedSummaryUsage?.let { usage ->
@@ -1405,11 +1440,11 @@ class DefaultAgentRunner(
                                 withMagratheaTraceContext(context) { executeTurn() }
                             } ?: executeTurn()
                         } catch (cancelled: CancellationException) {
-                            turnSpan.endCancelled()
-                            throw cancelled
+                            rethrowWithCleanup(cancelled) { turnSpan.endCancelled() }
                         } catch (failure: Throwable) {
-                            turnSpan.endFailure(failure.toAgentFailureCode(), "runtime")
-                            throw failure
+                            rethrowWithCleanup(failure) {
+                                turnSpan.endFailure(failure.toAgentFailureCode(), "runtime")
+                            }
                         }
                         turnSpan.endSuccess()
                         when (turnAction) {
@@ -1433,6 +1468,7 @@ class DefaultAgentRunner(
                 throw AgentRuntimeFailure(AgentFailureCode.TIMEOUT)
             }
         } catch (cancelled: CancellationException) {
+            cancelled.rethrowFatalError()
             if (!terminalStatePersisted) {
                 when (stopController.stopIntent) {
                     StopIntent.ACTIVE,
@@ -1451,7 +1487,8 @@ class DefaultAgentRunner(
                                     recoveryCheckpoint = safeCheckpoint,
                                 )
                             }
-                        } catch (_: AgentRuntimeFailure) {
+                        } catch (failure: AgentRuntimeFailure) {
+                            failure.rethrowFatalError()
                             // The explicit cancellation remains authoritative for the active flow.
                         }
                         trySend(AgentEvent.Cancelled(request.sessionId))
@@ -1469,14 +1506,19 @@ class DefaultAgentRunner(
                             ),
                             stopReason = StopReason.INTERRUPTED,
                         )
-                        withContext(NonCancellable) {
-                            commitState(
-                                activeRequest,
-                                runId,
-                                interruptedState,
-                                safeCheckpoint,
-                                interruption,
-                            )
+                        try {
+                            withContext(NonCancellable) {
+                                commitState(
+                                    activeRequest,
+                                    runId,
+                                    interruptedState,
+                                    safeCheckpoint,
+                                    interruption,
+                                )
+                            }
+                        } catch (failure: Exception) {
+                            failure.rethrowFatalError()
+                            throw failure
                         }
                         trySend(
                             AgentEvent.Interrupted(
@@ -1492,6 +1534,7 @@ class DefaultAgentRunner(
             traceState.stopped(stopController.stopIntent)
             throw cancelled
         } catch (t: Throwable) {
+            t.rethrowFatalError()
             val interruptedAtEpochMs = SystemEpochClock.nowEpochMs()
             val providerInterruption = t.toProviderInterruptionOrNull(interruptedAtEpochMs)
             if (providerInterruption != null) {
@@ -1514,8 +1557,10 @@ class DefaultAgentRunner(
                         interruption,
                     )
                 } catch (cancelled: CancellationException) {
+                    cancelled.rethrowFatalError()
                     throw cancelled
-                } catch (_: Throwable) {
+                } catch (failure: Exception) {
+                    failure.rethrowFatalError()
                     send(AgentEvent.Failed(request.sessionId, AgentFailureCode.STORAGE))
                     return@channelFlow
                 }
@@ -1542,12 +1587,15 @@ class DefaultAgentRunner(
                     recoveryCheckpoint = safeCheckpoint,
                 )
             } catch (cancelled: CancellationException) {
+                cancelled.rethrowFatalError()
                 throw cancelled
             } catch (failure: AgentRuntimeFailure) {
+                failure.rethrowFatalError()
                 if (failure.code == AgentFailureCode.STORAGE) {
                     failureCode = AgentFailureCode.STORAGE
                 }
-            } catch (_: Throwable) {
+            } catch (failure: Exception) {
+                failure.rethrowFatalError()
                 failureCode = AgentFailureCode.STORAGE
             }
             send(AgentEvent.Failed(request.sessionId, failureCode))
@@ -1710,6 +1758,21 @@ class DefaultAgentRunner(
                 level = level,
                 correlation = debugCorrelation,
             )
+            suspend fun finishAndRethrowProviderFailure(
+                primaryFailure: Throwable,
+                status: TraceStatus,
+                outcome: String,
+                failureCode: AgentFailureCode?,
+                phase: String? = null,
+                debugLevel: MagratheaDebugLevel? = null,
+            ): Nothing {
+                val failures = CleanupFailureAccumulator().apply { record(primaryFailure) }
+                failures.capture { finishProviderRequest(status, outcome, failureCode, phase) }
+                if (debugLevel != null) {
+                    failures.capture { recordProviderFailure(primaryFailure, debugLevel) }
+                }
+                throw checkNotNull(failures.failureOrNull())
+            }
             try {
                 var mergedAssistant: AgentMessage? = null
                 try {
@@ -1812,6 +1875,7 @@ class DefaultAgentRunner(
                         throw ProviderProtocolException("Provider flow completed without a Completed event")
                     }
                 } catch (failure: Throwable) {
+                    failure.rethrowFatalError()
                     if (!providerTerminalObserved || !failure.isRecoverableProviderFailure()) {
                         throw failure
                     }
@@ -1854,18 +1918,32 @@ class DefaultAgentRunner(
                     invocation.invocation,
                 )
             } catch (timeout: TimeoutCancellationException) {
-                finishProviderRequest(
-                    TraceStatus.ERROR,
-                    "failure",
-                    AgentFailureCode.TIMEOUT,
-                    "provider.transport",
+                finishAndRethrowProviderFailure(
+                    primaryFailure = timeout,
+                    status = TraceStatus.ERROR,
+                    outcome = "failure",
+                    failureCode = AgentFailureCode.TIMEOUT,
+                    phase = "provider.transport",
+                    debugLevel = MagratheaDebugLevel.ERROR,
                 )
-                recordProviderFailure(timeout, MagratheaDebugLevel.ERROR)
-                throw timeout
             } catch (cancelled: CancellationException) {
-                finishProviderRequest(TraceStatus.UNSET, "cancelled", failureCode = null)
-                throw cancelled
+                finishAndRethrowProviderFailure(
+                    primaryFailure = cancelled,
+                    status = TraceStatus.UNSET,
+                    outcome = "cancelled",
+                    failureCode = null,
+                )
             } catch (t: Throwable) {
+                if (t.fatalErrorOrNull() != null) {
+                    finishAndRethrowProviderFailure(
+                        primaryFailure = t,
+                        status = TraceStatus.ERROR,
+                        outcome = "failure",
+                        failureCode = t.toAgentFailureCode(),
+                        phase = t.providerTracePhase(),
+                        debugLevel = MagratheaDebugLevel.ERROR,
+                    )
+                }
                 finishProviderRequest(
                     TraceStatus.ERROR,
                     "failure",
@@ -1916,10 +1994,12 @@ class DefaultAgentRunner(
                 val shouldRetry = try {
                     retryPolicy.shouldRetry(retryOrdinal, policyFailure)
                 } catch (cancelled: CancellationException) {
+                    cancelled.rethrowFatalError()
                     throw cancelled
                 } catch (policyError: Throwable) {
-                    recordProviderFailure(t, MagratheaDebugLevel.ERROR)
-                    throw policyError
+                    rethrowWithCleanup(policyError) {
+                        recordProviderFailure(t, MagratheaDebugLevel.ERROR)
+                    }
                 }
                 if (!shouldRetry) {
                     recordProviderFailure(t, MagratheaDebugLevel.ERROR)
@@ -2069,19 +2149,21 @@ class DefaultAgentRunner(
                 )
                 result
             } catch (cancelled: CancellationException) {
-                toolSpan.endCancelled(
-                    "magrathea.tool.executor_started" to executionStarted,
-                    "magrathea.tool.result_error" to true,
-                )
-                throw cancelled
+                rethrowWithCleanup(cancelled) {
+                    toolSpan.endCancelled(
+                        "magrathea.tool.executor_started" to executionStarted,
+                        "magrathea.tool.result_error" to true,
+                    )
+                }
             } catch (failure: Throwable) {
-                toolSpan.endFailure(
-                    failure.toAgentFailureCode(),
-                    "tool.execute",
-                    "magrathea.tool.executor_started" to executionStarted,
-                    "magrathea.tool.result_error" to true,
-                )
-                throw failure
+                rethrowWithCleanup(failure) {
+                    toolSpan.endFailure(
+                        failure.toAgentFailureCode(),
+                        "tool.execute",
+                        "magrathea.tool.executor_started" to executionStarted,
+                        "magrathea.tool.result_error" to true,
+                    )
+                }
             }
         }
 
@@ -2206,14 +2288,17 @@ class DefaultAgentRunner(
             val timeoutMs = definition.timeoutMs ?: request.engine.runtime.defaultToolTimeoutMillis
             val executionPermit = executor.executionPermit(executionRequest)
             executionPermit.acquire()
-            val executionResult = try {
+            val executionOutcome = runCatching {
                 startPersistenceInProgress = true
                 onExecutionStarted()
                 startPersistenceInProgress = false
                 withTimeoutOrNull(timeoutMs) { executor.execute(executionRequest) }
-            } finally {
-                executionPermit.release()
             }
+            val executionFailures = CleanupFailureAccumulator()
+            executionOutcome.exceptionOrNull()?.let(executionFailures::record)
+            executionFailures.capture { executionPermit.release() }
+            executionFailures.failureOrNull()?.let { failure -> throw failure }
+            val executionResult = executionOutcome.getOrThrow()
             var result = executionResult
                 ?.withRuntimeMediaReferences(executionId)
                 ?: return rejectToolCall(toolCall, "Tool execution timed out")
@@ -2229,8 +2314,10 @@ class DefaultAgentRunner(
                 }
             }
         } catch (cancelled: CancellationException) {
+            cancelled.rethrowFatalError()
             throw cancelled
         } catch (failure: Throwable) {
+            failure.rethrowFatalError()
             // A journal write is a Runtime boundary failure, not a Tool failure result.
             if (startPersistenceInProgress) throw failure
             rejectToolCall(toolCall, "Tool execution failed")
@@ -2314,8 +2401,10 @@ class DefaultAgentRunner(
                 )
             }
         } catch (cancelled: CancellationException) {
+            cancelled.rethrowFatalError()
             throw cancelled
-        } catch (failure: Throwable) {
+        } catch (failure: Exception) {
+            failure.rethrowFatalError()
             throw AgentRuntimeFailure(AgentFailureCode.STORAGE, failure)
         }
     }
@@ -2332,19 +2421,30 @@ class DefaultAgentRunner(
                 "magrathea.store.operation" to operation,
             ),
         )
-        return try {
-            val result = span.context?.let { context ->
-                withMagratheaTraceContext(context) { block() }
-            } ?: block()
-            span.endSuccess()
-            result
-        } catch (cancelled: CancellationException) {
-            span.endCancelled()
-            throw cancelled
+        val outcome = try {
+            Result.success(
+                span.context?.let { context ->
+                    withMagratheaTraceContext(context) { block() }
+                } ?: block(),
+            )
         } catch (failure: Throwable) {
-            span.endFailure(AgentFailureCode.STORAGE, "persistence.$operation")
-            throw failure
+            Result.failure(failure)
         }
+        val failure = outcome.exceptionOrNull()
+        if (failure == null) {
+            val result = outcome.getOrThrow()
+            span.endSuccess()
+            return result
+        }
+        val failures = CleanupFailureAccumulator().apply { record(failure) }
+        failures.capture {
+            if (failure is CancellationException && failure.fatalErrorOrNull() == null) {
+                span.endCancelled()
+            } else {
+                span.endFailure(AgentFailureCode.STORAGE, "persistence.$operation")
+            }
+        }
+        throw checkNotNull(failures.failureOrNull())
     }
 
     private fun validateResumeState(
@@ -2355,8 +2455,10 @@ class DefaultAgentRunner(
             validateRuntimePayloads(request, state)
             null
         } catch (failure: AgentRuntimeFailure) {
+            failure.rethrowFatalError()
             failure.code
-        } catch (_: Throwable) {
+        } catch (failure: Exception) {
+            failure.rethrowFatalError()
             AgentFailureCode.INTERNAL
         }
     }
@@ -2497,6 +2599,21 @@ class DefaultAgentRunner(
                 level = level,
                 correlation = debugCorrelation,
             )
+            suspend fun finishAndRethrowSummaryFailure(
+                primaryFailure: Throwable,
+                status: TraceStatus,
+                outcome: String,
+                failureCode: AgentFailureCode?,
+                phase: String? = null,
+                debugLevel: MagratheaDebugLevel? = null,
+            ): Nothing {
+                val failures = CleanupFailureAccumulator().apply { record(primaryFailure) }
+                failures.capture { finishSummaryRequest(status, outcome, failureCode, phase) }
+                if (debugLevel != null) {
+                    failures.capture { recordProviderFailure(primaryFailure, debugLevel) }
+                }
+                throw checkNotNull(failures.failureOrNull())
+            }
             try {
                 try {
                     val collectProvider: suspend () -> Unit = {
@@ -2553,6 +2670,7 @@ class DefaultAgentRunner(
                         throw ProviderProtocolException("Context summarizer did not complete")
                     }
                 } catch (failure: Throwable) {
+                    failure.rethrowFatalError()
                     if (!terminalObserved || !failure.isRecoverableProviderFailure()) {
                         throw failure
                     }
@@ -2573,18 +2691,32 @@ class DefaultAgentRunner(
                 lifecycle.complete(invocation.invocation.requestId)
                 return ContextSummaryResult(summary = summary, usage = usage)
             } catch (timeout: TimeoutCancellationException) {
-                finishSummaryRequest(
-                    TraceStatus.ERROR,
-                    "failure",
-                    AgentFailureCode.TIMEOUT,
-                    "provider.transport",
+                finishAndRethrowSummaryFailure(
+                    primaryFailure = timeout,
+                    status = TraceStatus.ERROR,
+                    outcome = "failure",
+                    failureCode = AgentFailureCode.TIMEOUT,
+                    phase = "provider.transport",
+                    debugLevel = MagratheaDebugLevel.ERROR,
                 )
-                recordProviderFailure(timeout, MagratheaDebugLevel.ERROR)
-                throw timeout
             } catch (cancelled: CancellationException) {
-                finishSummaryRequest(TraceStatus.UNSET, "cancelled", failureCode = null)
-                throw cancelled
+                finishAndRethrowSummaryFailure(
+                    primaryFailure = cancelled,
+                    status = TraceStatus.UNSET,
+                    outcome = "cancelled",
+                    failureCode = null,
+                )
             } catch (failure: Throwable) {
+                if (failure.fatalErrorOrNull() != null) {
+                    finishAndRethrowSummaryFailure(
+                        primaryFailure = failure,
+                        status = TraceStatus.ERROR,
+                        outcome = "failure",
+                        failureCode = failure.toAgentFailureCode(),
+                        phase = failure.providerTracePhase(),
+                        debugLevel = MagratheaDebugLevel.ERROR,
+                    )
+                }
                 finishSummaryRequest(
                     TraceStatus.ERROR,
                     "failure",
@@ -2617,10 +2749,12 @@ class DefaultAgentRunner(
                 val shouldRetry = try {
                     retryPolicy.shouldRetry(retryOrdinal, policyFailure)
                 } catch (cancelled: CancellationException) {
+                    cancelled.rethrowFatalError()
                     throw cancelled
                 } catch (policyError: Throwable) {
-                    recordProviderFailure(failure, MagratheaDebugLevel.ERROR)
-                    throw policyError
+                    rethrowWithCleanup(policyError) {
+                        recordProviderFailure(failure, MagratheaDebugLevel.ERROR)
+                    }
                 }
                 if (!shouldRetry) {
                     recordProviderFailure(failure, MagratheaDebugLevel.ERROR)
@@ -2736,8 +2870,10 @@ class DefaultAgentRunner(
         val credential = try {
             resolver.resolve(ref)
         } catch (cancelled: CancellationException) {
+            cancelled.rethrowFatalError()
             throw cancelled
-        } catch (failure: Throwable) {
+        } catch (failure: Exception) {
+            failure.rethrowFatalError()
             throw AgentRuntimeFailure(AgentFailureCode.CREDENTIAL_UNAVAILABLE, failure)
         }
         return ResolvedProviderConfig(
@@ -3610,6 +3746,10 @@ private suspend fun collectProviderWithProgressTimeouts(
             }
             channel.close()
         } catch (cancelled: CancellationException) {
+            cancelled.fatalErrorOrNull()?.let { fatal ->
+                channel.close(fatal)
+                throw fatal
+            }
             channel.cancel(cancelled)
             throw cancelled
         } catch (failure: Throwable) {

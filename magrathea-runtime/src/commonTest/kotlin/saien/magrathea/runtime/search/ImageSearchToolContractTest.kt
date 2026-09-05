@@ -6,6 +6,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
@@ -26,6 +27,7 @@ import saien.magrathea.core.ToolRecoveryPolicy
 import saien.magrathea.core.ToolResultAudience
 import saien.magrathea.core.ToolResultImageContent
 import saien.magrathea.core.citations
+import saien.magrathea.runtime.TestFatalError
 
 class ImageSearchToolContractTest {
     @Test
@@ -243,6 +245,23 @@ class ImageSearchToolContractTest {
             backend = ImageSearchBackend { throw CancellationException("cancel") },
         )
         assertFailsWith<CancellationException> { cancelled.execute(executionRequest("valid")) }
+    }
+
+    @Test
+    fun wrappedFatalBackendFailureEscapesExactly() = runTest {
+        val fatal = TestFatalError(Any())
+        val tool = ImageSearchTool(
+            backend = ImageSearchBackend {
+                throw ImageSearchBackendException(
+                    ImageSearchFailureCode.UNAVAILABLE,
+                    cause = fatal,
+                )
+            },
+        )
+
+        val escaped = runCatching { tool.execute(executionRequest("valid")) }.exceptionOrNull()
+
+        assertSame(fatal, escaped)
     }
 
     private fun executionRequest(

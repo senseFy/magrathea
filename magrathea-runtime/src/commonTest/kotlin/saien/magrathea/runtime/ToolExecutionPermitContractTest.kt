@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
@@ -172,6 +173,62 @@ class ToolExecutionPermitContractTest {
         val succeeding = permittedTool("after_failure", permit, ::successfulResult)
         val succeedingResult = runSingleTool(succeeding, StandardTestDispatcher(testScheduler))
         assertFalse(succeedingResult.isError)
+    }
+
+    @Test
+    fun permitReleaseFailureCannotMaskExecutorFatal() = runTest {
+        val fatal = TestFatalError(Any())
+        val releaseFailure = IllegalStateException("release failed")
+        val permit = object : ToolExecutionPermit {
+            override suspend fun acquire() = Unit
+
+            override fun release() {
+                throw releaseFailure
+            }
+        }
+        val tool = permittedTool("fatal_with_release_failure", permit) {
+            throw fatal
+        }
+        val provider = ToolThenDoneProvider(listOf(tool.definition))
+
+        val escaped = runCatching {
+            runner(
+                provider = provider,
+                tools = listOf(tool),
+                dispatcher = StandardTestDispatcher(testScheduler),
+            ).run(request(provider, listOf(tool))).toList()
+        }.exceptionOrNull()
+
+        assertSame(fatal, escaped)
+        assertTrue(fatal.suppressedExceptions.any { failure -> failure === releaseFailure })
+    }
+
+    @Test
+    fun permitReleaseFailureCannotReplaceExecutorCancellation() = runTest {
+        val cancellation = kotlinx.coroutines.CancellationException("executor cancelled")
+        val releaseFailure = IllegalStateException("release failed")
+        val permit = object : ToolExecutionPermit {
+            override suspend fun acquire() = Unit
+
+            override fun release() {
+                throw releaseFailure
+            }
+        }
+        val tool = permittedTool("cancelled_with_release_failure", permit) {
+            throw cancellation
+        }
+        val provider = ToolThenDoneProvider(listOf(tool.definition))
+
+        val escaped = runCatching {
+            runner(
+                provider = provider,
+                tools = listOf(tool),
+                dispatcher = StandardTestDispatcher(testScheduler),
+            ).run(request(provider, listOf(tool))).toList()
+        }.exceptionOrNull()
+
+        val observed = assertIs<kotlinx.coroutines.CancellationException>(escaped)
+        assertEquals(cancellation.message, observed.message)
     }
 
     @Test

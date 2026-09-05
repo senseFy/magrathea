@@ -8,6 +8,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
+import saien.magrathea.runtime.rethrowFatalError
 import saien.magrathea.core.ToolDefinition
 import saien.magrathea.core.ToolExecutionPermit
 import saien.magrathea.core.ToolExecutionRequest
@@ -189,10 +190,13 @@ class WebSearchTool(
         val response = try {
             backend.search(backendRequest)
         } catch (cancelled: CancellationException) {
+            cancelled.rethrowFatalError()
             throw cancelled
         } catch (failure: WebSearchBackendException) {
+            failure.rethrowFatalError()
             return failure(request, failure.code)
-        } catch (_: Throwable) {
+        } catch (failure: Exception) {
+            failure.rethrowFatalError()
             return failure(request, WebSearchFailureCode.UNAVAILABLE)
         }
         val normalized = response.results.normalized(policy)

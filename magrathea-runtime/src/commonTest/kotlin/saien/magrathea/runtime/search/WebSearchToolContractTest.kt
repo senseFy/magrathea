@@ -18,6 +18,7 @@ import saien.magrathea.core.ToolExecutionRequest
 import saien.magrathea.core.ToolRecoveryPolicy
 import saien.magrathea.core.UnlimitedToolExecutionPermit
 import saien.magrathea.core.citations
+import saien.magrathea.runtime.TestFatalError
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -246,6 +247,23 @@ class WebSearchToolContractTest {
             backend = WebSearchBackend { throw CancellationException("cancel") },
         )
         assertFailsWith<CancellationException> { cancelled.execute(executionRequest("valid")) }
+    }
+
+    @Test
+    fun wrappedFatalBackendFailureEscapesExactly() = runTest {
+        val fatal = TestFatalError(Any())
+        val tool = WebSearchTool(
+            backend = WebSearchBackend {
+                throw WebSearchBackendException(
+                    WebSearchFailureCode.UNAVAILABLE,
+                    cause = fatal,
+                )
+            },
+        )
+
+        val escaped = runCatching { tool.execute(executionRequest("valid")) }.exceptionOrNull()
+
+        assertSame(fatal, escaped)
     }
 
     private fun executionRequest(

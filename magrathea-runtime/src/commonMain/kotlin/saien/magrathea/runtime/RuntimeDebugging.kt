@@ -1,5 +1,6 @@
 package saien.magrathea.runtime
 
+import kotlinx.coroutines.CancellationException
 import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.MagratheaDebugLevel
@@ -30,7 +31,11 @@ internal class RuntimeDebugging(
     ) {
         val enabled = try {
             recorder.enabled
-        } catch (_: Throwable) {
+        } catch (cancelled: CancellationException) {
+            cancelled.rethrowFatalError()
+            throw cancelled
+        } catch (failure: Exception) {
+            failure.rethrowFatalError()
             false
         }
         if (!enabled) return
@@ -43,12 +48,20 @@ internal class RuntimeDebugging(
                 traceContext = correlation.traceContext ?: currentMagratheaTraceContext(),
                 attributes = correlation.debugAttributes() + attributes(),
             )
-        } catch (_: Throwable) {
+        } catch (cancelled: CancellationException) {
+            cancelled.rethrowFatalError()
+            throw cancelled
+        } catch (failure: Exception) {
+            failure.rethrowFatalError()
             return
         }
         try {
             recorder.record(record)
-        } catch (_: Throwable) {
+        } catch (cancelled: CancellationException) {
+            cancelled.rethrowFatalError()
+            throw cancelled
+        } catch (failure: Exception) {
+            failure.rethrowFatalError()
             // Debug recording cannot affect Runtime behavior.
         }
     }

@@ -35,7 +35,7 @@ Commands are serialized per session:
 - `start` admits a fresh run only from new, inactive, or terminal state;
 - `resume` admits work only from resumable state;
 - successful `interrupt` and `cancel` return only after the manager-owned collector has settled;
-- resumable or recovery-blocked state must be resumed or cancelled before a new run;
+- resumable or recovery-blocked state must be resolved before a new run;
 - `replaceIdleRequest` preserves canonical messages and cannot replace recoverable state;
 - `delete` and `clear` first revoke old canonical lifetimes, then attempt persisted-state removal;
 - manager `close` rejects new admission immediately, interrupts live execution, and joins owned
@@ -49,6 +49,50 @@ so hosts do not infer lifetime state from `STORAGE` or `INVALID_STATE` alone.
 
 The manager owns its `SupervisorJob`. Caller cancellation cannot transfer ownership of an admitted
 run or strand an opening/deleting gate. A lease released from a cancelled caller still detaches.
+
+A fatal `Error`, direct or wrapped by an adapter exception, is never published as a product
+`Failed` event. Before it escapes the manager-owned collector, the execution completion is settled
+and durable recovery is inspected. Cancellation without a terminal event follows the same settlement
+path, including cancellation from tracing before Runner admission; it remains cancellation rather
+than becoming a product failure.
+
+Execution ownership and recovery knowledge are separate facts. Settlement releases ownership and
+updates the projection in one transition, even when the recovery read throws. A matching recovery
+result becomes `RESUMABLE` or `RECOVERY_BLOCKED`. Only a successful read establishing that no record
+exists permits falling back to the preceding new, inactive, or terminal result; obsolete pending
+recovery instead becomes `NEW`. An unavailable or inconsistent read does not establish absence and
+cannot authorize a fresh run.
+
+An unconfirmed result with no local execution projects as `RECOVERY_BLOCKED` with `recovery == null`.
+This differs from a confirmed blocked recovery, whose `recovery` contains the Runner's metadata.
+`awaitIdle` only joins local execution; it does not promise that `start` or `resume` is allowed.
+Hosts may retry `inspectRecovery` to establish absence, a terminal result, or a recoverable record;
+continued uncertainty reports `AgentSessionErrorCode.STORAGE` and preserves the admission fence.
+Explicit `cancel` can also resolve the pending work, but does not publish successful cancellation
+ahead of a required checkpoint-removal commit. Neither inspection nor settlement starts Provider
+work automatically.
+
+An `ACTIVE` inspection is an observation, not execution ownership. It never creates a new owner or
+replaces a confirmed recovery result. Async observations are accepted only for the same execution
+generation and semantic result version; public revisions describe projection changes rather than
+deciding whose cleanup may finish. Equal-value copies and presentation-only events do not advance
+the result version, while a changed result that later returns to its former value still invalidates
+an older observation. Control and terminal results carry execution provenance, so a historical
+result cannot win the current attempt's terminal race. Closed and deleted lifetimes remain fenced.
+
+The internal model uses an explicit `UNKNOWN` resolution and exposes only one-way snapshot
+projection; public phases are not converted back into internal result knowledge. Pure transitions
+handle admission, events, recovery, cancellation planning, and settlement. The manager performs
+locking, Runner/storage calls, publication, and completion delivery around those transitions.
+Cancellation planning produces the chosen result and any required persistence commit without
+performing either effect. Domain failure data drives failure resolution; `lastEvent` is diagnostic
+presentation and never decides the execution outcome.
+
+`delete` and `clear` attempt every independent runtime shutdown before deciding their result;
+destructive storage removal runs only after those lifetimes have settled successfully. Manager
+`close` attempts every independent shutdown and teardown step. Cleanup reports the first fatal
+`Error` in any cause chain ahead of ordinary failures, which remain attached as suppressed context;
+concurrent and later close callers observe the same close outcome.
 
 Collection admission is synchronous at the `AgentRunner` boundary. Once `start` or `resume`
 returns, `interrupt` and `cancel` can address that run even when no business event has been emitted

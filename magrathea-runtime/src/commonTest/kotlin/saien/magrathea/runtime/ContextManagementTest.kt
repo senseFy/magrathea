@@ -576,6 +576,23 @@ class ContextManagementTest {
     }
 
     @Test
+    fun wrappedFatalSummaryFailureEscapesExactly() = runTest {
+        val fatal = TestFatalError(Any())
+        val manager = TokenAwareContextManager {
+            throw TestRecoverableException(fatal)
+        }
+        val messages = (1..5).map { index ->
+            message("u$index", MessageRole.USER, "turn-$index ${"x".repeat(220)}")
+        }
+
+        val escaped = runCatching {
+            manager.prepare(preparation(request(messages)))
+        }.exceptionOrNull()
+
+        assertSame(fatal, escaped)
+    }
+
+    @Test
     fun overflowRecoveryWithoutSafeCut_reportsFailedOpen() = runTest {
         val manager = TokenAwareContextManager { ContextSummaryResult("unused") }
         val onlyMessage = listOf(message("u1", MessageRole.USER, "single"))

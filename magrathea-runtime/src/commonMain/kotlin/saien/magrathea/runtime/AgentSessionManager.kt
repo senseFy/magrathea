@@ -28,6 +28,7 @@ import kotlinx.coroutines.withContext
 import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentFailureCode
 import saien.magrathea.core.AgentPersistence
+import saien.magrathea.core.AgentPersistenceRecord
 import saien.magrathea.core.AgentRecoveryDisposition
 import saien.magrathea.core.AgentRecoveryInfo
 import saien.magrathea.core.AgentRequest
@@ -44,6 +45,7 @@ enum class AgentSessionPhase {
     INACTIVE,
     ACTIVE,
     RESUMABLE,
+    /** Recovery is blocked or not yet established; a null recovery payload means inspect again. */
     RECOVERY_BLOCKED,
     TERMINAL,
     CLOSED,
@@ -142,6 +144,7 @@ interface AgentSessionLease {
     @Throws(AgentSessionException::class, CancellationException::class)
     suspend fun replaceIdleRequest(request: AgentRequest)
 
+    /** Joins local execution only; unresolved recovery can still prohibit starting another run. */
     @Throws(AgentSessionException::class, CancellationException::class)
     suspend fun awaitIdle()
 
@@ -275,9 +278,14 @@ class DefaultAgentSessionManager(
             val claimed = checkNotNull(deletion)
             val outcome = withContext(NonCancellable) {
                 runCatching {
-                    claimed.operationsSettled.await()
-                    runtime?.shutdown(SessionShutdown.DELETE)
-                    storageOperation { persistence.deleteSession(sessionId) }
+                    val failures = CleanupFailureAccumulator()
+                    failures.capture { claimed.operationsSettled.await() }
+                    failures.capture { runtime?.shutdown(SessionShutdown.DELETE) }
+                    val shutdownFailure = failures.failureOrNull()
+                    if (shutdownFailure == null) {
+                        failures.capture { storageOperation { persistence.deleteSession(sessionId) } }
+                    }
+                    (shutdownFailure ?: failures.failureOrNull())?.let { failure -> throw failure }
                 }.also {
                     mutex.withLock {
                         if (slots[sessionId.value] === claimed) slots.remove(sessionId.value)
@@ -330,27 +338,18 @@ class DefaultAgentSessionManager(
             val gate = checkNotNull(clearGate)
             val outcome = withContext(NonCancellable) {
                 runCatching {
-                    var failure: Throwable? = null
+                    val failures = CleanupFailureAccumulator()
                     operationGates.forEach { gate ->
-                        try {
-                            gate.await()
-                        } catch (error: Throwable) {
-                            if (failure == null) failure = error
-                        }
+                        failures.capture { gate.await() }
                     }
                     runtimes.forEach { runtime ->
-                        try {
-                            runtime.shutdown(SessionShutdown.DELETE)
-                        } catch (error: Throwable) {
-                            if (failure == null) failure = error
-                        }
+                        failures.capture { runtime.shutdown(SessionShutdown.DELETE) }
                     }
-                    try {
-                        storageOperation { persistence.clear() }
-                    } catch (error: Throwable) {
-                        if (failure == null) failure = error
+                    val shutdownFailure = failures.failureOrNull()
+                    if (shutdownFailure == null) {
+                        failures.capture { storageOperation { persistence.clear() } }
                     }
-                    failure?.let { throw it }
+                    (shutdownFailure ?: failures.failureOrNull())?.let { failure -> throw failure }
                 }.also {
                     mutex.withLock {
                         if (clearing === gate) {
@@ -398,28 +397,22 @@ class DefaultAgentSessionManager(
 
         withContext(NonCancellable) {
             val outcome = runCatching {
-                var failure: Throwable? = null
+                val failures = CleanupFailureAccumulator()
                 pending.forEach { gate ->
-                    try {
-                        gate.await()
-                    } catch (error: Throwable) {
-                        if (failure == null) failure = error
-                    }
+                    failures.capture { gate.await() }
                 }
                 runtimes.forEach { runtime ->
-                    try {
-                        runtime.shutdown(SessionShutdown.INTERRUPT)
-                    } catch (error: Throwable) {
-                        if (failure == null) failure = error
+                    failures.capture { runtime.shutdown(SessionShutdown.INTERRUPT) }
+                }
+                failures.capture {
+                    mutex.withLock {
+                        slots.clear()
+                        clearing = null
+                        mutableLiveSessionIds.value = emptySet()
                     }
                 }
-                mutex.withLock {
-                    slots.clear()
-                    clearing = null
-                    mutableLiveSessionIds.value = emptySet()
-                }
-                managerJob.cancelAndJoin()
-                failure?.let { throw it }
+                failures.capture { managerJob.cancelAndJoin() }
+                failures.failureOrNull()?.let { failure -> throw failure }
                 Unit
             }
             closeCompletion.complete(outcome)
@@ -491,13 +484,12 @@ class DefaultAgentSessionManager(
                     onDisposable = { settled -> scope.launchDispose(settled) },
                 )
             } catch (failure: Throwable) {
-                withContext(NonCancellable) {
+                rethrowWithCleanup(failure) {
                     mutex.withLock {
                         if (slots[sessionId.value] === claimed) slots.remove(sessionId.value)
                     }
                     claimed.settled.complete(Unit)
                 }
-                throw failure
             }
 
             val installed = withContext(NonCancellable) {
@@ -517,8 +509,10 @@ class DefaultAgentSessionManager(
                         slots.remove(sessionId.value)
                     }
                 }
-                if (!didInstall) runtime.shutdown(SessionShutdown.NONE)
+                val failures = CleanupFailureAccumulator()
+                if (!didInstall) failures.capture { runtime.shutdown(SessionShutdown.NONE) }
                 claimed.settled.complete(Unit)
+                failures.failureOrNull()?.let { failure -> throw failure }
                 didInstall
             }
             if (installed) {
@@ -812,21 +806,25 @@ private class ManagedAgentSession(
     private val scope = CoroutineScope(sessionJob + dispatcher)
     private val commandMutex = Mutex()
     private val stateMutex = Mutex()
-    private val mutableState = MutableStateFlow(seed.toRuntimeSnapshot(sessionId))
+    private var machine = SessionMachine(sessionId, seed.toSessionResult())
+    private val mutableState = MutableStateFlow(machine.snapshot(revision = 0L))
     private val mutableEvents = MutableSharedFlow<AgentEvent>(
         extraBufferCapacity = EVENT_BUFFER_CAPACITY,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
-    private var activeExecution: ActiveExecution? = null
-    private var nextExecutionToken = 0L
-    private var closed = false
-    private var closeCode = AgentSessionErrorCode.CLOSED
 
     val state: StateFlow<AgentSessionRuntimeSnapshot> = mutableState.asStateFlow()
     val events: SharedFlow<AgentEvent> = mutableEvents.asSharedFlow()
 
-    suspend fun isDisposable(): Boolean = stateMutex.withLock {
-        activeExecution == null && mutableState.value.phase != AgentSessionPhase.ACTIVE
+    suspend fun isDisposable(): Boolean = stateMutex.withLock { machine.execution == null }
+
+    /** Publish a pure transition; public revisions do not participate in domain decisions. */
+    private fun transitionLocked(next: SessionMachine) {
+        val current = mutableState.value
+        val projection = next.snapshot(current.revision)
+        val published = if (projection != current) projection.copy(revision = nextRevision(current)) else current
+        machine = next
+        mutableState.value = published
     }
 
     suspend fun start(request: AgentRequest) {
@@ -844,13 +842,12 @@ private class ManagedAgentSession(
     }
 
     suspend fun interrupt(): AgentRecoveryInfo = commandMutex.withLock {
-        ensureOpen()
-        val observed = stateMutex.withLock { activeExecution to mutableState.value }
-        if (observed.first == null || observed.second.phase != AgentSessionPhase.ACTIVE) {
-            throw AgentSessionException(
-                AgentSessionErrorCode.INVALID_STATE,
-                "Agent session ${sessionId.value} is not active",
-            )
+        val attempt = stateMutex.withLock {
+            machine.requireOpen()
+            if (!machine.isExecuting) {
+                throw AgentSessionException(AgentSessionErrorCode.INVALID_STATE, "Agent session is not active")
+            }
+            checkNotNull(machine.execution)
         }
         var controlSucceeded = false
         try {
@@ -858,174 +855,67 @@ private class ManagedAgentSession(
             controlSucceeded = true
             requireOwnRecovery(recovery)
             val authoritative = stateMutex.withLock {
-                val current = mutableState.value
-                if (
-                    current.phase == AgentSessionPhase.TERMINAL &&
-                    current.state?.status?.let(NON_CANCELLED_TERMINAL_STATUSES::contains) == true
-                ) {
-                    current.toRecoveryInfo()
-                } else {
-                    if (recovery.disposition == AgentRecoveryDisposition.NOT_FOUND) {
-                        throw AgentSessionException(
-                            AgentSessionErrorCode.INVALID_STATE,
-                            "Runner lost active Agent session ${sessionId.value} while interrupting",
-                        )
-                    }
-                    publishRecoveryLocked(recovery)
-                    recovery
-                }
+                transitionLocked(machine.interrupted(attempt, recovery))
+                machine.recoveryInfo()
             }
             onDisposable(this)
             authoritative
         } finally {
-            if (controlSucceeded) awaitExecutionSettled(observed.first)
+            if (controlSucceeded) awaitExecutionSettled(attempt)
         }
     }
 
     suspend fun inspectRecovery(): AgentRecoveryInfo = commandMutex.withLock {
-        ensureOpen()
-        val observed = stateMutex.withLock { mutableState.value }
-        observed.localRecoveryInfo()?.let { return@withLock it }
-        val recovery = controlOperation { runner.inspectRecovery(sessionId) }
-        requireOwnRecovery(recovery)
-        stateMutex.withLock {
-            if (mutableState.value.revision == observed.revision) {
-                publishRecoveryLocked(recovery)
-                recovery
-            } else {
-                mutableState.value.toRecoveryInfo()
+        val observed = stateMutex.withLock {
+            machine.requireOpen()
+            machine
+        }
+        if (observed.result.isConfirmed) return@withLock observed.recoveryInfo()
+        if (observed.execution == null) {
+            val observation = observePersistence()
+            stateMutex.withLock {
+                transitionLocked(machine.observePersistence(observed, observation))
+                machine.recoveryInfo()
+            }
+        } else {
+            val recovery = controlOperation { runner.inspectRecovery(sessionId) }
+            requireOwnRecovery(recovery)
+            stateMutex.withLock {
+                transitionLocked(machine.observeRunner(observed, recovery))
+                machine.recoveryInfo()
             }
         }
     }
 
     suspend fun cancel() = commandMutex.withLock {
-        ensureOpen()
-        val observed = stateMutex.withLock { activeExecution to mutableState.value }
-        val before = observed.second
-        if (!before.phase.hasPendingExecution) {
-            throw AgentSessionException(
-                AgentSessionErrorCode.INVALID_STATE,
-                "Agent session ${sessionId.value} has no pending execution",
-            )
+        val before = stateMutex.withLock {
+            machine.requireOpen()
+            if (!machine.hasPendingWork) {
+                throw AgentSessionException(AgentSessionErrorCode.INVALID_STATE, "Agent session has no pending execution")
+            }
+            machine
         }
         var controlSucceeded = false
         try {
             controlOperation { runner.cancel(sessionId) }
             controlSucceeded = true
-            // Runner control may settle before a terminal event already handed to the managed
-            // collector is reduced. Drain that collector before choosing the canonical winner.
-            awaitExecutionSettled(observed.first)
+            // Drain terminal events already handed to the collector before choosing a winner.
+            awaitExecutionSettled(before.execution)
             val persisted = storageOperation { persistence.load(sessionId) }
             if (persisted != null && persisted.snapshot.sessionId != sessionId) {
-                throw AgentSessionException(
-                    AgentSessionErrorCode.STORAGE,
-                    "Persistence returned a different Agent session for ${sessionId.value}",
-                )
+                throw AgentSessionException(AgentSessionErrorCode.STORAGE, "Persistence returned a different Agent session")
             }
-            val after = stateMutex.withLock { mutableState.value }
-            val terminalWinner = after.takeIf { snapshot ->
-                snapshot.phase == AgentSessionPhase.TERMINAL &&
-                    snapshot.state?.status?.let(NON_CANCELLED_TERMINAL_STATUSES::contains) == true
+            val plan = stateMutex.withLock {
+                machine.planCancellation(before, persisted, saien.magrathea.core.SystemEpochClock.nowEpochMs())
             }
-            if (terminalWinner != null) {
-                onDisposable(this)
-                return@withLock
+            stateMutex.withLock { transitionLocked(machine.prepareCancellation(plan)) }
+            plan.commit?.let { snapshot ->
+                storageOperation { persistence.commit(snapshot, checkpoint = null) }
             }
-
-            val knownRunId = after.runId ?: before.runId
-            val matchingRecord = persisted?.takeIf { record ->
-                knownRunId?.let { record.snapshot.runId == it }
-                    ?: (before.request != null && record.snapshot.request == before.request)
-            }
-            val persistedTerminalWinner = matchingRecord?.takeIf { record ->
-                knownRunId != null &&
-                    record.snapshot.runId == knownRunId &&
-                    record.snapshot.state.status in NON_CANCELLED_TERMINAL_STATUSES
-            }
-            if (persistedTerminalWinner != null) {
-                stateMutex.withLock {
-                    val current = mutableState.value
-                    if (
-                        current.phase != AgentSessionPhase.TERMINAL ||
-                        current.state?.status !in NON_CANCELLED_TERMINAL_STATUSES
-                    ) {
-                        val snapshot = persistedTerminalWinner.snapshot
-                        mutableState.value = current.copy(
-                            revision = nextRevision(current),
-                            request = snapshot.request,
-                            runId = snapshot.runId,
-                            state = snapshot.state,
-                            phase = AgentSessionPhase.TERMINAL,
-                            recovery = null,
-                            failure = null,
-                            lastEvent = if (snapshot.state.status == AgentStatus.COMPLETED) {
-                                AgentEvent.Completed(sessionId, snapshot.state)
-                            } else {
-                                null
-                            },
-                        )
-                    }
-                }
-                onDisposable(this)
-                return@withLock
-            }
-            val baseState = when (before.phase) {
-                AgentSessionPhase.RESUMABLE,
-                AgentSessionPhase.RECOVERY_BLOCKED,
-                -> before.recovery?.state
-                    ?: before.state
-                    ?: matchingRecord?.checkpoint?.state
-                    ?: matchingRecord?.snapshot?.state
-                AgentSessionPhase.ACTIVE -> matchingRecord?.snapshot?.state
-                    ?.takeIf { it.status == AgentStatus.CANCELLED }
-                    ?: after.state
-                    ?: before.state
-                    ?: matchingRecord?.snapshot?.state
-                else -> before.state ?: after.state ?: matchingRecord?.snapshot?.state
-            }
-            val cancelledState = (baseState ?: AgentStateSnapshot(
-                messages = before.request?.messages.orEmpty(),
-            )).copy(
-                status = AgentStatus.CANCELLED,
-                stopReason = saien.magrathea.core.StopReason.CANCELLED,
-            )
-            val canonicalRequest = (before.request
-                ?: after.request
-                ?: matchingRecord?.snapshot?.request)
-                ?.copy(messages = cancelledState.messages)
-            stateMutex.withLock {
-                val current = mutableState.value
-                mutableState.value = current.copy(
-                    revision = nextRevision(current),
-                    request = canonicalRequest ?: current.request,
-                    runId = matchingRecord?.snapshot?.runId ?: current.runId,
-                    state = cancelledState,
-                    phase = AgentSessionPhase.TERMINAL,
-                    recovery = null,
-                    failure = null,
-                    lastEvent = AgentEvent.Cancelled(sessionId),
-                )
-            }
-            matchingRecord?.let { record ->
-                val normalizedRequest = canonicalRequest ?: record.snapshot.request
-                if (
-                    record.checkpoint != null ||
-                    record.snapshot.request != normalizedRequest ||
-                    record.snapshot.state != cancelledState ||
-                    record.snapshot.interruption != null
-                ) {
-                    val normalized = record.snapshot.copy(
-                        request = normalizedRequest,
-                        state = cancelledState,
-                        interruption = null,
-                        updatedAtEpochMs = saien.magrathea.core.SystemEpochClock.nowEpochMs(),
-                    )
-                    storageOperation { persistence.commit(normalized, checkpoint = null) }
-                }
-            }
+            stateMutex.withLock { transitionLocked(machine.completeCancellation(plan)) }
             onDisposable(this)
         } finally {
-            if (controlSucceeded) awaitExecutionSettled(observed.first)
+            if (controlSucceeded) awaitExecutionSettled(before.execution)
         }
     }
 
@@ -1034,15 +924,9 @@ private class ManagedAgentSession(
         if (request.sessionId != sessionId) {
             throw AgentSessionException(AgentSessionErrorCode.INVALID_STATE)
         }
-        val current = stateMutex.withLock { mutableState.value }
-        val execution = stateMutex.withLock { activeExecution }
-        if (
-            execution != null ||
-            current.phase == AgentSessionPhase.ACTIVE ||
-            current.phase == AgentSessionPhase.RESUMABLE ||
-            current.phase == AgentSessionPhase.RECOVERY_BLOCKED
-        ) {
-            throw AgentSessionException(AgentSessionErrorCode.BUSY)
+        val current = stateMutex.withLock {
+            machine.requireAdmission(resume = false)
+            machine.result
         }
         if (current.state != null && current.state.messages != request.messages) {
             throw AgentSessionException(
@@ -1074,18 +958,12 @@ private class ManagedAgentSession(
                 )
             }
         }
-        stateMutex.withLock {
-            val latest = mutableState.value
-            mutableState.value = latest.copy(
-                revision = nextRevision(latest),
-                request = request,
-            )
-        }
+        stateMutex.withLock { transitionLocked(machine.replaceRequest(request)) }
     }
 
     suspend fun awaitIdle() {
         while (true) {
-            val completion = stateMutex.withLock { activeExecution?.completion } ?: return
+            val completion = stateMutex.withLock { machine.execution?.completion } ?: return
             completion.await()
         }
     }
@@ -1098,49 +976,36 @@ private class ManagedAgentSession(
         var ownsShutdown = false
         var controlFailure: Throwable? = null
         commandMutex.withLock {
-            if (!closed) {
+            val controlPending = stateMutex.withLock {
+                if (machine.lifecycle != SessionLifecycle.OPEN) return@withLock false
                 ownsShutdown = true
-                closed = true
-                closeCode = if (mode == SessionShutdown.DELETE) {
-                    AgentSessionErrorCode.DELETED
-                } else {
-                    AgentSessionErrorCode.CLOSED
+                val pending = when (mode) {
+                    SessionShutdown.NONE -> false
+                    SessionShutdown.INTERRUPT -> machine.isExecuting
+                    SessionShutdown.DELETE -> machine.hasPendingWork
                 }
-                val controlPendingExecution = stateMutex.withLock {
-                    val current = mutableState.value
-                    val shouldControl = when (mode) {
-                        SessionShutdown.NONE -> false
-                        SessionShutdown.INTERRUPT -> current.phase == AgentSessionPhase.ACTIVE
-                        SessionShutdown.DELETE -> current.phase.hasPendingExecution
+                transitionLocked(machine.close(deleted = mode == SessionShutdown.DELETE))
+                pending
+            }
+            try {
+                if (controlPending) {
+                    when (mode) {
+                        SessionShutdown.NONE -> Unit
+                        SessionShutdown.INTERRUPT -> controlOperation { runner.interrupt(sessionId) }
+                        SessionShutdown.DELETE -> controlOperation { runner.cancel(sessionId) }
                     }
-                    mutableState.value = current.copy(
-                        revision = nextRevision(current),
-                        phase = if (mode == SessionShutdown.DELETE) {
-                            AgentSessionPhase.DELETED
-                        } else {
-                            AgentSessionPhase.CLOSED
-                        },
-                    )
-                    shouldControl
                 }
-                try {
-                    if (controlPendingExecution) {
-                        when (mode) {
-                            SessionShutdown.NONE -> Unit
-                            SessionShutdown.INTERRUPT ->
-                                controlOperation { runner.interrupt(sessionId) }
-                            SessionShutdown.DELETE ->
-                                controlOperation { runner.cancel(sessionId) }
-                        }
-                    }
-                } catch (error: Throwable) {
-                    controlFailure = error
-                }
+            } catch (error: Throwable) {
+                controlFailure = error
             }
         }
         if (ownsShutdown) {
-            withContext(NonCancellable) { sessionJob.cancelAndJoin() }
-            controlFailure?.let { throw it }
+            withContext(NonCancellable) {
+                val failures = CleanupFailureAccumulator()
+                controlFailure?.let(failures::record)
+                failures.capture { sessionJob.cancelAndJoin() }
+                failures.failureOrNull()?.let { failure -> throw failure }
+            }
         }
     }
 
@@ -1150,73 +1015,11 @@ private class ManagedAgentSession(
         source: suspend () -> Flow<AgentEvent>,
     ) {
         commandMutex.withLock {
-            ensureOpen()
             val execution = stateMutex.withLock {
-                val current = mutableState.value
-                if (activeExecution != null) {
-                    throw AgentSessionException(AgentSessionErrorCode.BUSY)
-                }
-                if (resume && current.phase != AgentSessionPhase.RESUMABLE) {
-                    throw AgentSessionException(
-                        if (current.phase == AgentSessionPhase.ACTIVE) {
-                            AgentSessionErrorCode.BUSY
-                        } else {
-                            AgentSessionErrorCode.INVALID_STATE
-                        },
-                        "Agent session ${sessionId.value} is not resumable",
-                    )
-                }
-                if (!resume && current.phase.hasPendingExecution) {
-                    throw AgentSessionException(
-                        AgentSessionErrorCode.BUSY,
-                        "Agent session ${sessionId.value} must be resumed or cancelled first",
-                    )
-                }
-                val effectiveRequest = request ?: current.request ?: throw AgentSessionException(
-                    AgentSessionErrorCode.NOT_FOUND,
-                    "Agent session ${sessionId.value} has no persisted request",
-                )
-                check(nextExecutionToken != Long.MAX_VALUE) {
-                    "Agent session execution tokens are exhausted"
-                }
-                val created = ActiveExecution(
-                    token = ++nextExecutionToken,
-                    completion = CompletableDeferred(),
-                )
-                val previousState = current.state
-                activeExecution = created
-                val provisionalState = if (resume && previousState != null) {
-                    previousState.copy(
-                        messages = effectiveRequest.messages,
-                        status = AgentStatus.RUNNING,
-                        stopReason = null,
-                    )
-                } else {
-                    AgentStateSnapshot(
-                        messages = effectiveRequest.messages,
-                        status = AgentStatus.RUNNING,
-                        usage = previousState?.usage ?: saien.magrathea.core.TokenUsage(),
-                        latestRequestUsage = previousState?.latestRequestUsage
-                            ?: saien.magrathea.core.TokenUsage(),
-                        contextManagement = previousState?.contextManagement
-                            ?: saien.magrathea.core.ContextManagementState(),
-                    )
-                }
-                mutableState.value = current.copy(
-                    revision = nextRevision(current),
-                    request = effectiveRequest,
-                    runId = current.runId.takeIf { resume },
-                    state = provisionalState,
-                    phase = AgentSessionPhase.ACTIVE,
-                    recovery = null,
-                    failure = null,
-                    lastEvent = null,
-                )
-                created
+                transitionLocked(machine.begin(request, resume))
+                checkNotNull(machine.execution)
             }
-            scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                execute(execution, source)
-            }
+            scope.launch(start = CoroutineStart.UNDISPATCHED) { execute(execution, source) }
         }
     }
 
@@ -1225,7 +1028,7 @@ private class ManagedAgentSession(
         source: suspend () -> Flow<AgentEvent>,
     ) {
         var terminalSeen = false
-        var cancelled = false
+        var primaryFailure: Throwable? = null
         try {
             source().collect { event ->
                 if (event.sessionId() != sessionId) {
@@ -1234,7 +1037,7 @@ private class ManagedAgentSession(
                         "Runner emitted an event for a different Agent session",
                     )
                 }
-                if (publishEvent(event)) mutableEvents.tryEmit(event)
+                if (publishEvent(execution, event)) mutableEvents.tryEmit(event)
                 if (event.isTerminal()) {
                     terminalSeen = true
                     throw TerminalEventCollected()
@@ -1243,140 +1046,93 @@ private class ManagedAgentSession(
         } catch (_: TerminalEventCollected) {
             // A canonical terminal event ends the managed collection immediately.
         } catch (cancellation: CancellationException) {
-            cancelled = true
+            val fatal = cancellation.fatalErrorOrNull()
+            primaryFailure = fatal ?: cancellation
+            if (fatal != null) throw fatal
             throw cancellation
-        } catch (_: Throwable) {
-            val failure = AgentEvent.Failed(sessionId, AgentFailureCode.INTERNAL)
-            if (publishEvent(failure)) mutableEvents.tryEmit(failure)
+        } catch (failure: Throwable) {
+            failure.fatalErrorOrNull()?.let { fatal ->
+                primaryFailure = fatal
+                throw fatal
+            }
+            publishUnexpectedFailure(execution)
             terminalSeen = true
         } finally {
             withContext(NonCancellable) {
-                if (!terminalSeen && !cancelled && sessionJob.isActive) {
-                    val failure = AgentEvent.Failed(sessionId, AgentFailureCode.INTERNAL)
-                    if (publishEvent(failure)) mutableEvents.tryEmit(failure)
-                    terminalSeen = true
+                val failures = CleanupFailureAccumulator()
+                primaryFailure?.let(failures::record)
+                if (!terminalSeen && primaryFailure == null && sessionJob.isActive) {
+                    failures.capture {
+                        publishUnexpectedFailure(execution)
+                        terminalSeen = true
+                    }
                 }
-                if (terminalSeen) refreshAfterExecution(execution.token)
-                stateMutex.withLock {
-                    if (activeExecution?.token == execution.token) activeExecution = null
-                }
+                failures.capture { settleExecution(execution, refreshTerminal = terminalSeen) }
                 execution.completion.complete(Unit)
-                onDisposable(this@ManagedAgentSession)
+                failures.capture { onDisposable(this@ManagedAgentSession) }
+                failures.failureOrNull()?.let { failure -> throw failure }
             }
         }
     }
 
-    private suspend fun publishEvent(event: AgentEvent): Boolean = stateMutex.withLock {
-        val current = mutableState.value
-        if (
-            current.phase == AgentSessionPhase.CLOSED ||
-            current.phase == AgentSessionPhase.DELETED
-        ) {
-            return@withLock false
+    private suspend fun publishUnexpectedFailure(execution: ActiveExecution) {
+        val event = stateMutex.withLock {
+            val next = machine.recordUnexpectedFailure(execution) ?: return@withLock null
+            transitionLocked(next)
+            next.result.lastEvent
         }
-        val nextState = reduceState(current.state, current.request, event)
-        mutableState.value = current.copy(
-            revision = nextRevision(current),
-            runId = when (event) {
-                is AgentEvent.Started -> event.runId
-                is AgentEvent.CheckpointSaved -> event.checkpoint.runId
-                is AgentEvent.Interrupted -> event.runId
-                is AgentEvent.RecoveryBlocked -> event.runId
-                else -> current.runId
-            },
-            state = nextState,
-            phase = event.toSessionPhase(),
-            recovery = when (event) {
-                is AgentEvent.Interrupted -> AgentRecoveryInfo(
-                    sessionId = sessionId,
-                    runId = event.runId,
-                    disposition = AgentRecoveryDisposition.RESUMABLE,
-                    status = event.state.status,
-                    state = event.state,
-                    interruption = event.interruption,
-                )
-                is AgentEvent.RecoveryBlocked -> AgentRecoveryInfo(
-                    sessionId = sessionId,
-                    runId = event.runId,
-                    disposition = AgentRecoveryDisposition.BLOCKED,
-                    status = nextState?.status,
-                    state = nextState,
-                    blockedReason = event.reason,
-                )
-                else -> if (event.isTerminal()) null else current.recovery
-            },
-            failure = (event as? AgentEvent.Failed)?.code,
-            lastEvent = event,
-        )
+        event?.let { mutableEvents.tryEmit(it) }
+    }
+
+    private suspend fun publishEvent(execution: ActiveExecution, event: AgentEvent): Boolean = stateMutex.withLock {
+        val next = machine.recordEvent(execution, event) ?: return@withLock false
+        transitionLocked(next)
         true
     }
 
-    private fun publishRecoveryLocked(recovery: AgentRecoveryInfo) {
-        val current = mutableState.value
-        mutableState.value = current.copy(
-            revision = nextRevision(current),
-            runId = recovery.runId ?: current.runId,
-            state = recovery.state ?: current.state,
-            phase = recovery.toSessionPhase(current.phase),
-            recovery = recovery,
-            failure = null,
-        )
+    private suspend fun settleExecution(execution: ActiveExecution, refreshTerminal: Boolean) {
+        val observed = stateMutex.withLock { machine }
+        var observation: RecoveryObservation = RecoveryObservation.Unavailable
+        try {
+            if (observed.lifecycle == SessionLifecycle.OPEN && (refreshTerminal || !observed.result.isConfirmed)) {
+                observation = observePersistence()
+            }
+        } finally {
+            stateMutex.withLock { transitionLocked(machine.settle(execution, observed, observation)) }
+        }
     }
 
-    private suspend fun refreshAfterExecution(token: Long) {
-        val observed = stateMutex.withLock {
-            mutableState.value.takeIf {
-                activeExecution?.token == token &&
-                    it.phase != AgentSessionPhase.CLOSED &&
-                    it.phase != AgentSessionPhase.DELETED
-            }
-        } ?: return
-        val record = runCatching { persistence.load(sessionId) }.getOrNull() ?: return
-        if (record.snapshot.sessionId != sessionId) return
-        if (observed.runId == null || record.snapshot.runId != observed.runId) return
-
-        val recovery = if (record.snapshot.state.status in RECOVERABLE_STORED_STATUSES) {
-            runCatching { runner.inspectRecovery(sessionId) }.getOrNull()
-                ?.takeIf { info ->
-                    info.sessionId == sessionId &&
-                        info.runId == record.snapshot.runId &&
-                        info.disposition != AgentRecoveryDisposition.ACTIVE
+    private suspend fun observePersistence(): RecoveryObservation = try {
+        val record = persistence.load(sessionId)
+        when {
+            record == null -> RecoveryObservation.Absent
+            record.snapshot.sessionId != sessionId -> RecoveryObservation.Unavailable
+            record.snapshot.state.status !in RECOVERABLE_STORED_STATUSES && record.checkpoint == null ->
+                RecoveryObservation.Present(record, recovery = null)
+            else -> {
+                val recovery = runner.inspectRecovery(sessionId)
+                if (
+                    recovery.sessionId == sessionId &&
+                    recovery.runId == record.snapshot.runId &&
+                    recovery.disposition in PENDING_RECOVERY_DISPOSITIONS
+                ) {
+                    RecoveryObservation.Present(record, recovery)
+                } else {
+                    RecoveryObservation.Unavailable
                 }
-        } else {
-            null
-        }
-        stateMutex.withLock {
-            val current = mutableState.value
-            if (
-                activeExecution?.token != token ||
-                current.phase == AgentSessionPhase.CLOSED ||
-                current.phase == AgentSessionPhase.DELETED ||
-                current.revision != observed.revision
-            ) {
-                return@withLock
             }
-            mutableState.value = current.copy(
-                revision = nextRevision(current),
-                request = record.snapshot.request,
-                runId = record.snapshot.runId,
-                state = recovery?.state ?: record.snapshot.state,
-                phase = recovery?.toSessionPhase(record.snapshot.state.toSessionPhase())
-                    ?: record.snapshot.state.toSessionPhase(),
-                recovery = recovery,
-            )
         }
+    } catch (failure: Exception) {
+        failure.rethrowFatalError()
+        if (failure is CancellationException) throw failure
+        RecoveryObservation.Unavailable
     }
 
-    private fun ensureOpen() {
-        if (closed) throw AgentSessionException(closeCode)
-    }
+    private fun ensureOpen() = machine.requireOpen()
 
     private fun requireOwnRecovery(recovery: AgentRecoveryInfo) {
         if (recovery.sessionId != sessionId) {
-            throw AgentSessionException(
-                AgentSessionErrorCode.INVALID_STATE,
-                "Runner inspected a different Agent session",
-            )
+            throw AgentSessionException(AgentSessionErrorCode.INVALID_STATE, "Runner inspected a different Agent session")
         }
     }
 }
@@ -1477,11 +1233,6 @@ private class DeletingSlot(
         get() = settlement
 }
 
-private data class ActiveExecution(
-    val token: Long,
-    val completion: CompletableDeferred<Unit>,
-)
-
 private enum class OpenMode {
     CREATE,
     RESTORE,
@@ -1493,157 +1244,13 @@ private enum class SessionShutdown {
     DELETE,
 }
 
-private fun SessionSeed?.toRuntimeSnapshot(sessionId: AgentSessionId): AgentSessionRuntimeSnapshot {
-    val seed = this ?: return AgentSessionRuntimeSnapshot(
-        revision = 0L,
-        sessionId = sessionId,
-    )
-    val state = seed.recovery?.state ?: seed.snapshot.state
-    return AgentSessionRuntimeSnapshot(
-        revision = 0L,
-        sessionId = sessionId,
-        request = seed.snapshot.request,
-        runId = seed.recovery?.runId ?: seed.snapshot.runId,
-        state = state,
-        phase = seed.recovery?.toSessionPhase(seed.snapshot.state.toSessionPhase())
-            ?: seed.snapshot.state.toSessionPhase(),
-        recovery = seed.recovery,
-    )
-}
+private fun SessionSeed?.toSessionResult(): SessionResult =
+    this?.let { SessionResult.fromStored(it.snapshot, it.recovery) } ?: SessionResult()
 
-private fun AgentStateSnapshot.toSessionPhase(): AgentSessionPhase = when (status) {
-    AgentStatus.IDLE -> AgentSessionPhase.INACTIVE
-    AgentStatus.RUNNING,
-    AgentStatus.WAITING_FOR_TOOLS,
-    -> AgentSessionPhase.ACTIVE
-    AgentStatus.INTERRUPTED -> AgentSessionPhase.RESUMABLE
-    AgentStatus.COMPLETED,
-    AgentStatus.FAILED,
-    AgentStatus.CANCELLED,
-    -> AgentSessionPhase.TERMINAL
-}
-
-private fun AgentRecoveryInfo.toSessionPhase(fallback: AgentSessionPhase): AgentSessionPhase =
-    when (disposition) {
-        AgentRecoveryDisposition.ACTIVE -> AgentSessionPhase.ACTIVE
-        AgentRecoveryDisposition.RESUMABLE -> AgentSessionPhase.RESUMABLE
-        AgentRecoveryDisposition.BLOCKED -> AgentSessionPhase.RECOVERY_BLOCKED
-        AgentRecoveryDisposition.TERMINAL -> AgentSessionPhase.TERMINAL
-        AgentRecoveryDisposition.NOT_FOUND -> fallback
-    }
-
-private val AgentSessionPhase.hasPendingExecution: Boolean
-    get() = this == AgentSessionPhase.ACTIVE ||
-        this == AgentSessionPhase.RESUMABLE ||
-        this == AgentSessionPhase.RECOVERY_BLOCKED
-
-private fun AgentSessionRuntimeSnapshot.localRecoveryInfo(): AgentRecoveryInfo? = when (phase) {
-    AgentSessionPhase.ACTIVE -> null
-    AgentSessionPhase.RESUMABLE,
-    AgentSessionPhase.RECOVERY_BLOCKED,
-    -> recovery ?: toRecoveryInfo()
-    AgentSessionPhase.NEW,
-    AgentSessionPhase.INACTIVE,
-    AgentSessionPhase.TERMINAL,
-    AgentSessionPhase.CLOSED,
-    AgentSessionPhase.DELETED,
-    -> toRecoveryInfo()
-}
-
-private fun AgentSessionRuntimeSnapshot.toRecoveryInfo(): AgentRecoveryInfo = AgentRecoveryInfo(
-    sessionId = sessionId,
-    runId = runId,
-    disposition = when (phase) {
-        AgentSessionPhase.ACTIVE -> AgentRecoveryDisposition.ACTIVE
-        AgentSessionPhase.RESUMABLE -> AgentRecoveryDisposition.RESUMABLE
-        AgentSessionPhase.RECOVERY_BLOCKED -> AgentRecoveryDisposition.BLOCKED
-        AgentSessionPhase.INACTIVE,
-        AgentSessionPhase.TERMINAL,
-        AgentSessionPhase.CLOSED,
-        -> AgentRecoveryDisposition.TERMINAL
-        AgentSessionPhase.NEW,
-        AgentSessionPhase.DELETED,
-        -> AgentRecoveryDisposition.NOT_FOUND
-    },
-    status = state?.status,
-    state = state,
-    cursor = recovery?.cursor,
-    interruption = recovery?.interruption,
-    blockedReason = recovery?.blockedReason,
+private val PENDING_RECOVERY_DISPOSITIONS = setOf(
+    AgentRecoveryDisposition.RESUMABLE, AgentRecoveryDisposition.BLOCKED,
 )
 
-private fun AgentEvent.toSessionPhase(): AgentSessionPhase = when (this) {
-    is AgentEvent.Started,
-    is AgentEvent.TurnStarted,
-    is AgentEvent.ContextTransformed,
-    is AgentEvent.MessageEmitted,
-    is AgentEvent.ToolRequested,
-    is AgentEvent.ToolCompleted,
-    is AgentEvent.RetryScheduled,
-    is AgentEvent.CheckpointSaved,
-    -> AgentSessionPhase.ACTIVE
-    is AgentEvent.Interrupted -> AgentSessionPhase.RESUMABLE
-    is AgentEvent.RecoveryBlocked -> AgentSessionPhase.RECOVERY_BLOCKED
-    is AgentEvent.Completed,
-    is AgentEvent.Failed,
-    is AgentEvent.Cancelled,
-    -> AgentSessionPhase.TERMINAL
-}
-
-private fun reduceState(
-    current: AgentStateSnapshot?,
-    request: AgentRequest?,
-    event: AgentEvent,
-): AgentStateSnapshot? {
-    val state = current ?: request?.let { AgentStateSnapshot(messages = it.messages) }
-    return when (event) {
-        is AgentEvent.Started -> state?.copy(status = AgentStatus.RUNNING)
-        is AgentEvent.TurnStarted -> state?.copy(turn = event.turn, status = AgentStatus.RUNNING)
-        is AgentEvent.ContextTransformed -> state
-        is AgentEvent.MessageEmitted -> state?.copy(
-            messages = state.messages.replaceOrAppend(event.message),
-            status = AgentStatus.RUNNING,
-        )
-        is AgentEvent.ToolRequested -> state?.copy(
-            pendingToolCalls = state.pendingToolCalls
-                .filterNot { call -> call.toolCallId == event.toolCall.toolCallId } + event.toolCall,
-            status = AgentStatus.WAITING_FOR_TOOLS,
-        )
-        is AgentEvent.ToolCompleted -> state?.copy(
-            pendingToolCalls = state.pendingToolCalls
-                .filterNot { call -> call.toolCallId == event.result.toolCallId },
-            status = if (
-                state.pendingToolCalls.any { call -> call.toolCallId != event.result.toolCallId }
-            ) {
-                AgentStatus.WAITING_FOR_TOOLS
-            } else {
-                AgentStatus.RUNNING
-            },
-        )
-        is AgentEvent.RetryScheduled -> state?.copy(
-            retryCount = if (state.retryCount == Int.MAX_VALUE) Int.MAX_VALUE else state.retryCount + 1,
-        )
-        is AgentEvent.CheckpointSaved -> event.checkpoint.state
-        is AgentEvent.Completed -> event.state
-        is AgentEvent.Failed -> state?.copy(
-            status = AgentStatus.FAILED,
-            stopReason = saien.magrathea.core.StopReason.ERROR,
-        )
-        is AgentEvent.Cancelled -> state?.copy(
-            status = AgentStatus.CANCELLED,
-            stopReason = saien.magrathea.core.StopReason.CANCELLED,
-        )
-        is AgentEvent.Interrupted -> event.state
-        is AgentEvent.RecoveryBlocked -> state
-    }
-}
-
-private fun List<saien.magrathea.core.AgentMessage>.replaceOrAppend(
-    message: saien.magrathea.core.AgentMessage,
-): List<saien.magrathea.core.AgentMessage> {
-    val index = indexOfFirst { item -> item.id == message.id }
-    return if (index < 0) this + message else toMutableList().also { it[index] = message }
-}
 
 private fun AgentEvent.sessionId(): AgentSessionId = when (this) {
     is AgentEvent.Started -> sessionId
@@ -1661,12 +1268,6 @@ private fun AgentEvent.sessionId(): AgentSessionId = when (this) {
     is AgentEvent.RecoveryBlocked -> sessionId
 }
 
-private fun AgentEvent.isTerminal(): Boolean =
-    this is AgentEvent.Completed ||
-        this is AgentEvent.Failed ||
-        this is AgentEvent.Cancelled ||
-        this is AgentEvent.Interrupted ||
-        this is AgentEvent.RecoveryBlocked
 
 private fun nextRevision(snapshot: AgentSessionRuntimeSnapshot): Long {
     check(snapshot.revision != Long.MAX_VALUE) { "Agent session revisions are exhausted" }
@@ -1685,26 +1286,32 @@ private fun requireSessionId(sessionId: AgentSessionId) {
 private suspend inline fun <T> storageOperation(crossinline operation: suspend () -> T): T = try {
     operation()
 } catch (cancelled: CancellationException) {
+    cancelled.rethrowFatalError()
     throw cancelled
 } catch (known: AgentSessionException) {
+    known.rethrowFatalError()
     throw known
-} catch (failure: Throwable) {
+} catch (failure: Exception) {
+    failure.rethrowFatalError()
     throw AgentSessionException(AgentSessionErrorCode.STORAGE, cause = failure)
 }
 
 private suspend inline fun <T> controlOperation(crossinline operation: suspend () -> T): T = try {
     operation()
 } catch (cancelled: CancellationException) {
+    cancelled.rethrowFatalError()
     throw cancelled
 } catch (known: AgentSessionException) {
+    known.rethrowFatalError()
     throw known
-} catch (failure: Throwable) {
+} catch (failure: Exception) {
+    failure.rethrowFatalError()
     throw AgentSessionException(AgentSessionErrorCode.INVALID_STATE, cause = failure)
 }
 
 private fun Throwable.withInvalidation(
     scope: AgentSessionInvalidationScope,
-): Throwable = when (this) {
+): Throwable = fatalErrorOrNull() ?: when (this) {
     is CancellationException -> this
     is AgentSessionException -> if (invalidationScope == scope) {
         this
@@ -1724,16 +1331,6 @@ private fun Throwable.withInvalidation(
     )
 }
 
-private val RECOVERABLE_STORED_STATUSES = setOf(
-    AgentStatus.RUNNING,
-    AgentStatus.WAITING_FOR_TOOLS,
-    AgentStatus.INTERRUPTED,
-)
-
-private val NON_CANCELLED_TERMINAL_STATUSES = setOf(
-    AgentStatus.COMPLETED,
-    AgentStatus.FAILED,
-)
 
 private const val RESTORE_READ_ATTEMPTS = 2
 private const val EVENT_BUFFER_CAPACITY = 64

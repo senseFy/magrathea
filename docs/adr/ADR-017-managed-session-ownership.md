@@ -29,6 +29,17 @@ Magrathea Runtime provides a process-local `AgentSessionManager` above `AgentRun
   the next serialized command observes a stable runtime rather than transient collector teardown.
 - A completed or failed result for the same run wins over cancellation when its terminal state was
   already observed or persisted before cancellation settled.
+- Internally, execution ownership, result knowledge, and lifecycle fences are separate facts in
+  one state model. Public phases and command admission derive from those facts; revisions are
+  observation versions, not execution authority.
+- Result knowledge includes an explicit unknown state. Public snapshots are one-way projections;
+  pure transitions own state decisions and cancellation plans, while the manager owns their I/O.
+- Semantic result versions fence asynchronous observations independently of diagnostic events and
+  object allocation. Domain failure data, not the last displayed event, determines failure outcomes.
+- Execution settlement always releases its owner. An unavailable recovery read is not absence:
+  an unconfirmed result blocks new work until inspection or explicit cancellation resolves it.
+- Recovery observations carry generation/result provenance. A delayed `ACTIVE` observation cannot
+  resurrect an owner, and a historical terminal result cannot win a current execution's control race.
 - Runner and persistence adapters do not synchronously re-enter their owning manager. Reverse
   lifecycle actions are scheduled after the adapter call returns.
 

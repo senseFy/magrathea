@@ -19,10 +19,12 @@ import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolExecutionRequest
 import saien.magrathea.core.ToolRecoveryPolicy
 import saien.magrathea.core.citations
+import saien.magrathea.runtime.TestFatalError
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class XSearchToolContractTest {
@@ -262,6 +264,25 @@ class XSearchToolContractTest {
         assertFailsWith<CancellationException> {
             cancelled.execute(executionRequest(buildJsonObject { put("query", "valid") }))
         }
+    }
+
+    @Test
+    fun wrappedFatalBackendFailureEscapesExactly() = runTest {
+        val fatal = TestFatalError(Any())
+        val tool = XSearchTool(
+            backend = XSearchBackend {
+                throw XSearchBackendException(
+                    XSearchFailureCode.UNAVAILABLE,
+                    cause = fatal,
+                )
+            },
+        )
+
+        val escaped = runCatching {
+            tool.execute(executionRequest(buildJsonObject { put("query", "valid") }))
+        }.exceptionOrNull()
+
+        assertSame(fatal, escaped)
     }
 
     private fun executionRequest(arguments: JsonObject): ToolExecutionRequest {

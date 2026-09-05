@@ -12,6 +12,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
@@ -483,6 +484,46 @@ class AgentSessionManagerContractTest {
             firstLease.release()
             secondLease.release()
         }
+    }
+
+    @Test
+    fun closeAttemptsEveryRuntimeAndGivesWrappedFatalCleanupPriority() = runTest {
+        val persistence = GatedAgentPersistence()
+        val runner = GatedAgentRunner()
+        val firstId = AgentSessionId("close-ordinary-failure")
+        val fatalId = AgentSessionId("close-fatal-failure")
+        val finalId = AgentSessionId("close-final-attempt")
+        val ordinary = IllegalStateException("synthetic ordinary cleanup failure")
+        val fatal = TestFatalError(Any())
+        val firstGate = runner.blockInterrupt(firstId, ordinary)
+        val fatalGate = runner.blockInterrupt(fatalId, TestRecoverableException(fatal))
+        firstGate.release.complete(Unit)
+        fatalGate.release.complete(Unit)
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = persistence,
+            dispatcher = StandardTestDispatcher(testScheduler),
+        )
+        val leases = listOf(firstId, fatalId, finalId).map { sessionId ->
+            persistence.seed(terminalSnapshot(sessionId))
+            runner.planRun(sessionId)
+            manager.acquire(sessionId).also { lease -> lease.start(request(sessionId)) }
+        }
+
+        val escaped = runCatching { manager.close() }.exceptionOrNull()
+
+        assertSame(fatal, escaped)
+        assertEquals(1, runner.interruptCalls(firstId))
+        assertEquals(1, runner.interruptCalls(fatalId))
+        assertEquals(1, runner.interruptCalls(finalId))
+        assertTrue(
+            fatal.suppressedExceptions.any { failure -> failure.cause === ordinary },
+        )
+        assertSame(
+            fatal,
+            runCatching { manager.close() }.exceptionOrNull(),
+        )
+        leases.forEach { lease -> lease.release() }
     }
 
     @Test
@@ -1253,7 +1294,10 @@ private class GatedAgentRunner : AgentRunner {
         plans[sessionId.value] = plan
     }
 
-    fun blockInterrupt(sessionId: AgentSessionId): OperationGate = OperationGate().also { gate ->
+    fun blockInterrupt(
+        sessionId: AgentSessionId,
+        failure: Throwable? = null,
+    ): OperationGate = OperationGate(failure).also { gate ->
         interruptGates[sessionId.value] = gate
     }
 

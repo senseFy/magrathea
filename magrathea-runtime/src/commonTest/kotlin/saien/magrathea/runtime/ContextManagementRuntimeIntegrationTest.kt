@@ -52,6 +52,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class ContextManagementRuntimeIntegrationTest {
@@ -115,6 +116,23 @@ class ContextManagementRuntimeIntegrationTest {
         assertEquals(2, provider.requests.size)
         assertTrue(events.any { it is AgentEvent.Completed })
         assertTrue(events.none { it is AgentEvent.Interrupted || it is AgentEvent.Failed })
+    }
+
+    @Test
+    fun wrappedFatalAfterCompletedContextSummaryEscapesExactly() = runTest {
+        val fatal = TestFatalError(Any())
+        val provider = TerminalSummaryThenFatalProvider(fatal)
+        val request = request(
+            sessionId = AgentSessionId("summary-late-fatal"),
+            messages = longHistory(),
+            contextWindowTokens = 220,
+        )
+
+        val escaped = runCatching {
+            runner(provider, InMemoryAgentPersistence()).run(request).toList()
+        }.exceptionOrNull()
+
+        assertSame(fatal, escaped)
     }
 
     @Test
@@ -687,6 +705,20 @@ class ContextManagementRuntimeIntegrationTest {
             if (request.isContextSummary()) {
                 emit(providerChunk(text = "completed summary", completed = true))
                 throw ProviderNetworkException("late disconnect")
+            }
+            emit(providerChunk(text = "answer", completed = true))
+        }
+    }
+
+    private class TerminalSummaryThenFatalProvider(
+        private val fatal: TestFatalError,
+    ) : ProviderAdapter {
+        override val key: String = PROVIDER
+
+        override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+            if (request.isContextSummary()) {
+                emit(providerChunk(text = "completed summary", completed = true))
+                throw ProviderNetworkException("late summary failure", fatal)
             }
             emit(providerChunk(text = "answer", completed = true))
         }

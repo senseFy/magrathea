@@ -1,5 +1,6 @@
 package saien.magrathea.runtime
 
+import kotlinx.coroutines.CancellationException
 import saien.magrathea.core.AgentFailureCode
 import saien.magrathea.core.MagratheaTraceSpan
 import saien.magrathea.core.MagratheaTracer
@@ -52,7 +53,11 @@ internal class RuntimeTracing(
     ): RuntimeTraceSpan {
         val span = try {
             tracer.startSpan(name, parent, attributes)
-        } catch (_: Throwable) {
+        } catch (cancelled: CancellationException) {
+            cancelled.rethrowFatalError()
+            throw cancelled
+        } catch (failure: Exception) {
+            failure.rethrowFatalError()
             NoopMagratheaTraceSpan
         }
         return RuntimeTraceSpan(span)
@@ -65,14 +70,22 @@ internal class RuntimeTraceSpan(
     val context: TraceContext?
         get() = try {
             span.context
-        } catch (_: Throwable) {
+        } catch (cancelled: CancellationException) {
+            cancelled.rethrowFatalError()
+            throw cancelled
+        } catch (failure: Exception) {
+            failure.rethrowFatalError()
             null
         }
 
     fun addEvent(name: String, attributes: Map<String, TraceValue> = emptyMap()) {
         try {
             span.addEvent(name, attributes)
-        } catch (_: Throwable) {
+        } catch (cancelled: CancellationException) {
+            cancelled.rethrowFatalError()
+            throw cancelled
+        } catch (failure: Exception) {
+            failure.rethrowFatalError()
             // Tracing cannot affect Runtime behavior.
         }
     }
@@ -80,7 +93,11 @@ internal class RuntimeTraceSpan(
     fun end(status: TraceStatus, attributes: Map<String, TraceValue>) {
         try {
             span.end(status, attributes)
-        } catch (_: Throwable) {
+        } catch (cancelled: CancellationException) {
+            cancelled.rethrowFatalError()
+            throw cancelled
+        } catch (failure: Exception) {
+            failure.rethrowFatalError()
             // Tracing cannot affect Runtime behavior.
         }
     }

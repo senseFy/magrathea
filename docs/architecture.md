@@ -25,6 +25,23 @@ Dependencies point inward:
 - Optional adapters translate external protocols into canonical Core contracts.
 - The application composition root selects implementations and owns their lifecycle.
 
+## Runtime failure classification
+
+Runtime boundaries classify failures by semantics rather than by catch breadth:
+
+- A `CancellationException` with no fatal cause remains cooperative control flow and is rethrown
+  unchanged.
+- An ordinary `Exception` may be translated into the boundary's typed failure code, retry, or
+  recovery result.
+- An `Error`, including one wrapped anywhere in an exception cause chain, is fatal. Runtime does
+  not convert it into an `AgentEvent.Failed`, interruption, retry, or session exception; the exact
+  `Error` escapes to the host's coroutine failure boundary.
+
+Mandatory cleanup runs before a failure leaves an owning boundary. Independent cleanup steps are
+all attempted. If cleanup discovers an `Error`, that fatal failure takes precedence; other
+failures are retained as suppressed context. This rule keeps ownership settlement deterministic
+without presenting a process-level failure as Agent output.
+
 ## Provider-neutral Runtime and chatbot facade
 
 Applications that need conversation state can compose Runtime with the optional Chatbot facade and

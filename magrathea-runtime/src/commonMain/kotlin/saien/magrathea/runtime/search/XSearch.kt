@@ -8,6 +8,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
+import saien.magrathea.runtime.rethrowFatalError
 import saien.magrathea.core.Citation
 import saien.magrathea.core.ToolDefinition
 import saien.magrathea.core.ToolExecutionRequest
@@ -181,10 +182,13 @@ class XSearchTool(
                 ),
             )
         } catch (cancelled: CancellationException) {
+            cancelled.rethrowFatalError()
             throw cancelled
         } catch (failure: XSearchBackendException) {
+            failure.rethrowFatalError()
             return failure(request, failure.code)
-        } catch (_: Throwable) {
+        } catch (failure: Exception) {
+            failure.rethrowFatalError()
             return failure(request, XSearchFailureCode.UNAVAILABLE)
         }
         val normalized = response.normalized(policy.maxCitationsInContext)

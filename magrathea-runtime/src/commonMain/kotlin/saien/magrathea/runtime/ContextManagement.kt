@@ -167,8 +167,10 @@ class TokenAwareContextManager(
                 ),
             )
         } catch (cancelled: CancellationException) {
+            cancelled.rethrowFatalError()
             throw cancelled
-        } catch (failure: Throwable) {
+        } catch (failure: Exception) {
+            failure.rethrowFatalError()
             if (request.reason == ContextPreparationReason.OVERFLOW_RECOVERY) throw failure
             return failedOpen(
                 projection = currentProjection,
