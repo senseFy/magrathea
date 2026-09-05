@@ -1,0 +1,45 @@
+name: Prepare Magrathea release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: magrathea-release-please
+  cancel-in-progress: false
+
+jobs:
+  release-pr:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Maintain the Release PR
+        id: release
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+        with:
+          skip-github-release: true
+      - name: Verify the bot-created PR
+        if: steps.release.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_PR: ${{ fromJSON(steps.release.outputs.pr).number }}
+        run: |
+          HEAD_REF=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$RELEASE_PR" --jq .head.ref)
+          HEAD_SHA=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$RELEASE_PR" --jq .head.sha)
+          EXISTING=$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/verify.yml/runs" \
+            -f event=workflow_dispatch -f "head_sha=$HEAD_SHA" \
+            --jq '.workflow_runs | length')
+          if [ "$EXISTING" -eq 0 ]; then
+            gh workflow run verify.yml --repo "$GITHUB_REPOSITORY" --ref "$HEAD_REF"
+          fi

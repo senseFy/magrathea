@@ -498,27 +498,10 @@ val verifyReleaseTagContract = tasks.register<Exec>("verifyReleaseTagContract") 
     )
 }
 
-val verifyPrepareReleaseContract = tasks.register<Exec>("verifyPrepareReleaseContract") {
+val verifyReleaseAutomationContract = tasks.register<Exec>("verifyReleaseAutomationContract") {
     group = "verification"
-    description = "Mutation-test the one-command release preparation entry point."
-    inputs.file("scripts/prepare-release")
-    inputs.file("scripts/release-version-files.txt")
-    inputs.file("scripts/verify-prepare-release-contract")
-    commandLine(
-        file("scripts/verify-prepare-release-contract").absolutePath,
-        rootDir.absolutePath,
-    )
-}
-
-val verifyReleaseCommandContract = tasks.register<Exec>("verifyReleaseCommandContract") {
-    group = "verification"
-    description = "Mutation-test the guarded one-command release orchestrator."
-    inputs.file("scripts/release")
-    inputs.file("scripts/verify-release-command-contract")
-    commandLine(
-        file("scripts/verify-release-command-contract").absolutePath,
-        rootDir.absolutePath,
-    )
+    description = "Verify release metadata, authorization, and recovery without remote writes."
+    commandLine("python3", file("scripts/test_release.py").absolutePath)
 }
 
 val normalizedSdkSbom = layout.buildDirectory.file("reports/supply-chain/magrathea-sbom.cdx.json")
@@ -593,8 +576,7 @@ val verifySdkQuick = tasks.register("verifySdkQuick") {
         verifyReleaseCandidateContract,
         verifySdkRollbackContract,
         verifyCiContract,
-        verifyPrepareReleaseContract,
-        verifyReleaseCommandContract,
+        verifyReleaseAutomationContract,
         verifyReleaseTagContract,
         verifySdkPublicationArtifactIsolation,
     )
@@ -1463,10 +1445,22 @@ val verifySdkDistribution = tasks.register("verifySdkDistribution") {
     dependsOn(verifySdkMavenDistribution, verifyWebSdkPackage, verifyWebTypeScriptConsumer)
 }
 
+val releaseNotes = layout.buildDirectory.file("release-notes/v${sdkVersion}.md")
+val generateReleaseNotes = tasks.register<Exec>("generateReleaseNotes") {
+    inputs.file("CHANGELOG.md")
+    inputs.file("scripts/release_notes.py")
+    inputs.property("version", sdkVersion)
+    outputs.file(releaseNotes)
+    commandLine(
+        "python3", file("scripts/release_notes.py").absolutePath,
+        "--version", sdkVersion, "--output", releaseNotes.get().asFile.absolutePath,
+    )
+}
+
 val sdkReleaseBundle = tasks.register<Zip>("assembleSdkReleaseBundle") {
     group = "distribution"
     description = "Assemble the verified Maven and Web SDK artifacts with release metadata."
-    dependsOn(verifySdkDistribution, assembleWebSdkPackage, verifySdkSupplyChain)
+    dependsOn(verifySdkDistribution, assembleWebSdkPackage, verifySdkSupplyChain, generateReleaseNotes)
     archiveFileName.set("Magrathea-${sdkVersion}-release-bundle.zip")
     destinationDirectory.set(layout.buildDirectory.dir("distributions"))
     from(sdkVerificationRepository) {
@@ -1479,7 +1473,7 @@ val sdkReleaseBundle = tasks.register<Zip>("assembleSdkReleaseBundle") {
     from("docs/known-issues.md") {
         into("docs")
     }
-    from("docs/releases/v${sdkVersion}.md") {
+    from(releaseNotes) {
         into("docs/releases")
     }
     from("docs/release-signing-key.asc") {

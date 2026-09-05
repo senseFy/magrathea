@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "scripts": {
+    "test": "node --test release-please.test.cjs"
+  },
+  "devDependencies": {
+    "release-please": "17.3.0"
+  }
+}

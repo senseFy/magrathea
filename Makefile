@@ -5,7 +5,6 @@ SHELL := /bin/bash
 GRADLE ?= ./gradlew
 GRADLE_ARGS ?=
 PUBLISH_ARGS ?=
-RELEASE_ARGS ?=
 RELEASE_VERSION ?=
 HOST_OS := $(shell uname -s)
 
@@ -13,7 +12,7 @@ HOST_OS := $(shell uname -s)
 	help tasks build test verify verify-linux verify-apple verify-web \
 	verify-release verify-android-device api-check api-dump \
 	verify-persistence-schemas verify-mcp-conformance publish-coordinates publish-local \
-	prepare-release release clean require-macos
+	release-status release-retry release-check clean require-macos
 
 help: ## Show the available commands.
 	@printf 'Magrathea development commands:\n\n'
@@ -22,7 +21,6 @@ help: ## Show the available commands.
 	@printf '  GRADLE_ARGS             Extra arguments appended to Gradle commands\n'
 	@printf '  PUBLISH_ARGS            Extra arguments passed to scripts/publish-sdk\n'
 	@printf '  RELEASE_VERSION         SemVer passed to the release commands\n'
-	@printf '  RELEASE_ARGS            Extra arguments passed to the selected release command\n'
 
 tasks: ## List the canonical Gradle verification tasks.
 	$(GRADLE) $(GRADLE_ARGS) tasks --group verification
@@ -69,13 +67,17 @@ publish-coordinates: ## Print the SDK coordinates without publishing artifacts.
 publish-local: ## Verify and publish the SDK to the local Maven repository.
 	./scripts/publish-sdk $(PUBLISH_ARGS)
 
-prepare-release: ## Prepare version metadata, notes, and the quick release gate.
-	@test -n "$(RELEASE_VERSION)" || { echo "Set RELEASE_VERSION, for example: make prepare-release RELEASE_VERSION=0.1.0-alpha.4" >&2; exit 2; }
-	./scripts/prepare-release "$(RELEASE_VERSION)" $(RELEASE_ARGS)
+release-check: ## Check release automation locally without builds or remote writes.
+	python3 scripts/test_release.py
+	./scripts/verify-ci-contract
+	npm ci --prefix tooling/release-please --ignore-scripts --no-audit --no-fund
+	npm test --prefix tooling/release-please
 
-release: ## Push, verify, and publish one prepared release.
-	@test -n "$(RELEASE_VERSION)" || { echo "Set RELEASE_VERSION, for example: make release RELEASE_VERSION=0.1.0-alpha.4" >&2; exit 2; }
-	./scripts/release "$(RELEASE_VERSION)" $(RELEASE_ARGS)
+release-status: ## Show the publication run for RELEASE_VERSION.
+	./scripts/release status "$(RELEASE_VERSION)"
+
+release-retry: ## Retry only failed jobs of the original publication run.
+	./scripts/release retry "$(RELEASE_VERSION)"
 
 clean: ## Remove Gradle build outputs.
 	$(GRADLE) $(GRADLE_ARGS) clean

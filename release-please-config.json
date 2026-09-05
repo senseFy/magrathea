@@ -1,0 +1,71 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "f18415bd353d6ab631d98f07dbda8f0f4c826250",
+  "packages": {
+    ".": {
+      "release-type": "java",
+      "skip-snapshot": true,
+      "versioning": "prerelease",
+      "prerelease": true,
+      "prerelease-type": "alpha",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true,
+      "include-component-in-tag": false,
+      "include-v-in-tag": true,
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": ".github/ISSUE_TEMPLATE/bug_report.yml"
+        },
+        {
+          "type": "generic",
+          "path": "README.md"
+        },
+        {
+          "type": "generic",
+          "path": "README.zh-CN.md"
+        },
+        {
+          "type": "generic",
+          "path": "SECURITY.md"
+        },
+        {
+          "type": "generic",
+          "path": "docs/README.md"
+        },
+        {
+          "type": "generic",
+          "path": "docs/architecture.md"
+        },
+        {
+          "type": "generic",
+          "path": "docs/mcp.md"
+        },
+        {
+          "type": "generic",
+          "path": "samples/jvm-chat/build.gradle.kts"
+        },
+        {
+          "type": "generic",
+          "path": "samples/web-chat/build.gradle.kts"
+        },
+        {
+          "type": "generic",
+          "path": "tooling/android-consumer/build.gradle.kts"
+        },
+        {
+          "type": "generic",
+          "path": "tooling/kmp-consumer/build.gradle.kts"
+        },
+        {
+          "type": "generic",
+          "path": "gradle.properties"
+        },
+        {
+          "type": "generic",
+          "path": "docs/publishing.md"
+        }
+      ]
+    }
+  }
+}

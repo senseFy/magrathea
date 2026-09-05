@@ -33,7 +33,7 @@
 | [Known issues](known-issues.md) | Alpha limitations and external gates |
 | [Publishing](publishing.md) | Coordinates, local publication, and registry configuration |
 | [Release process](release-process.md) | Maintainer gates, evidence, immutable release, and rollback |
-| [Release notes](releases/v0.1.0-alpha.10.md) | Current Alpha release notes |
+| [Release notes](https://github.com/senseFy/magrathea/releases/tag/v0.1.0-alpha.9) | Current Alpha release notes | <!-- x-release-please-version -->
 | [Android device baseline](android-device-baseline.md) | Recorded physical-device evidence |
 | [Performance baseline](performance-baseline.md) | Recorded Alpha.1 deterministic measurements |
 | [Architecture decisions](adr/README.md) | Accepted design decisions |

@@ -42,7 +42,7 @@ body:
     attributes:
       label: Version or commit
       description: Published version, tag, or full commit SHA where the problem occurs.
-      placeholder: 0.1.0-alpha.10 or a full commit SHA
+      placeholder: 0.1.0-alpha.9 or a full commit SHA # x-release-please-version
     validations:
       required: true
 

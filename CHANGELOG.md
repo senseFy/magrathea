@@ -5,40 +5,10 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
-### Changed
-
-- Trace recording now bounds active spans, admission rate, attributes, events and retained text at
-  construction. Completed handles release their event/attribute graphs; sink cancellation and
-  direct or wrapped fatal errors propagate.
-- Removed the debug recorder API and per-chunk debug path. Provider spans contain fixed incremental
-  request summaries, first-text timing and typed failures without retaining message histories.
-  Execution outcomes distinguish completed, failed, cancelled, interrupted and recovery blocked.
-
-- Runtime propagates direct and wrapped fatal errors to the host instead of converting them into
-  Agent failures, retries, or fail-open results. Ordinary exceptions retain their typed failure
-  behavior, while cancellation remains cooperative control flow, including in tracing
-  integrations.
-
-### Fixed
-
-- Managed sessions no longer remain falsely active after a fatal error or cancellation ends their
-  collector without a terminal event. Late `ACTIVE` recovery observations cannot revive a settled
-  execution or prevent its cleanup.
-- Unavailable or inconsistent managed-session recovery reads block fresh execution instead of
-  treating an existing checkpoint as absent. Hosts can retry `inspectRecovery` or explicitly cancel;
-  failed cancellation commits also keep pending recovery fenced until it can be resolved.
-- Presentation-only session events no longer discard otherwise valid recovery observations;
-  changes to execution results still invalidate older observations even if their values later match.
-- Tool permit release and Runtime cleanup failures no longer mask an earlier fatal error or
-  cancellation. Independent cleanup steps are attempted, with fatal failures taking priority and
-  other failures preserved as suppressed context.
-- Failed managed-session shutdown prevents destructive persistence deletion or clearing; manager
-  close still attempts every independent cleanup and replays the same result to later callers.
-
 ## 0.1.0-alpha.10 — 2026-09-05
 
-Not published. Candidate verification failed before publication; its reviewed changes were returned
-to `Unreleased` for inclusion in the next release.
+Not published. Candidate verification failed before publication; its reviewed changes are carried
+into the next release.
 
 ## 0.1.0-alpha.9 — 2026-09-04
 

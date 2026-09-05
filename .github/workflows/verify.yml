@@ -2,6 +2,7 @@ name: Verify Magrathea SDK
 
 on:
   pull_request:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
@@ -28,6 +29,10 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
+          if [ -z "$BASE_SHA" ]; then
+            git fetch --no-tags origin main
+            BASE_SHA=$(git rev-parse origin/main)
+          fi
           if [ -n "$BASE_SHA" ] && git cat-file -e "${BASE_SHA}:persistence/schema-ledger.json" 2>/dev/null; then
             git show "${BASE_SHA}:persistence/schema-ledger.json" > "$RUNNER_TEMP/persistence-schema-baseline.json"
             python3 scripts/verify_persistence_schemas.py \
@@ -47,6 +52,16 @@ jobs:
 
       - name: Set up Gradle build cache
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Set up release tooling
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.14.0"
+
+      - name: Verify Release Please configuration offline
+        run: |
+          npm ci --prefix tooling/release-please --ignore-scripts --no-audit --no-fund
+          npm test --prefix tooling/release-please
 
       - name: Run JVM and Android SDK gate
         run: ./gradlew verifySdkLinux --no-daemon --stacktrace
@@ -148,3 +163,19 @@ jobs:
 
       - name: Review dependency changes
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+
+  publish:
+    if: github.event_name == 'push'
+    needs: [linux-gate, apple-gate, web-gate]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
+    steps:
+      - name: Check out the verified commit
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Request publication of the merged Release PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/release request --commit "$GITHUB_SHA" --ci-run "$GITHUB_RUN_ID"

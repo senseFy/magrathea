@@ -18,7 +18,7 @@ WasmYarnRootExtension[rootProject].apply {
 }
 rootProject.extensions.getByType<NodeJsRootExtension>().versions.webpack.version = secureWebpackVersion
 
-val magratheaVersion = providers.gradleProperty("magrathea.version").orElse("0.1.0-alpha.10")
+val magratheaVersion = providers.gradleProperty("magrathea.version").orElse("0.1.0-alpha.9") // x-release-please-version
 providers.gradleProperty("magrathea.consumer.buildDir").orNull?.let { consumerBuildDirectory ->
     layout.buildDirectory.set(file(consumerBuildDirectory))
 }

@@ -10,6 +10,8 @@ root = ARGV.fetch(0)
 gradle_properties = File.read(File.join(root, "gradle.properties"))
 
 ACTION_PINS = {
+  "googleapis/release-please-action" => "5c625bfb5d1ff62eadeeb3772007f7f66fdcf071",
+  "actions/setup-node" => "49933ea5288caeca8642d1e84afbd3f7d6820020",
   "actions/checkout" => "df4cb1c069e1874edd31b4311f1884172cec0e10",
   "actions/setup-java" => "0f481fcb613427c0f801b606911222b5b6f3083a",
   "actions/upload-artifact" => "ea165f8d65b6e75b540449e92b4886f43607fa02",
@@ -127,6 +129,7 @@ end
 verify_path, verify = load_workflow(root, "verify.yml")
 nightly_path, nightly = load_workflow(root, "nightly.yml")
 release_path, release = load_workflow(root, "release.yml")
+please_path, please = load_workflow(root, "release-please.yml")
 
 verify_triggers = triggers(verify)
 verify_push = verify_triggers["push"]
@@ -192,7 +195,7 @@ release_inputs = triggers(release).dig("workflow_dispatch", "inputs") || {}
 version_input = release_inputs["version"]
 commit_input = release_inputs["commit"]
 fail_contract("release.yml must require explicit version and commit inputs") unless
-  release_inputs.keys.sort == %w[commit version] &&
+  release_inputs.keys.sort == %w[ci_run commit pull_request version] &&
     version_input.is_a?(Hash) &&
     version_input["required"] == true &&
     version_input["type"] == "string" &&
@@ -204,15 +207,14 @@ fail_contract("release.yml must require explicit version and commit inputs") unl
 end
 
 release_runs = run_commands(release)
-duplicate_authorization_guard = all_steps(release).find do |step|
-  step["name"] == "Reject a duplicate version authorization"
-end
-fail_contract("release.yml must reject a second workflow run for the same version") unless
-  duplicate_authorization_guard &&
-    duplicate_authorization_guard["run"].include?("actions/workflows/release.yml/runs") &&
-    duplicate_authorization_guard["run"].include?(".id < $GITHUB_RUN_ID") &&
-    duplicate_authorization_guard["run"].include?("display_title") &&
-    duplicate_authorization_guard["run"].include?("Re-run failed jobs")
+authorization = all_steps(release).find { |step| step["run"]&.include?("scripts/release validate") }
+fail_contract("release.yml must bind publication to its Release PR, commit, and CI run") unless
+  authorization && %w[--version --commit --pull-request --ci-run --run-id].all? { |arg| authorization["run"].include?(arg) }
+fail_contract("release.yml must check out the authorized commit") unless
+  all_steps(release).first.dig("with", "ref") == '${{ inputs.commit }}'
+fail_contract("release.yml must restore the original candidate on repeated preparation") unless
+  all_steps(release).any? { |step| step["uses"]&.start_with?("actions/download-artifact@") &&
+    step["if"].to_s.include?("candidate_exists == 'true'") }
 release_preparation = all_steps(release).find do |step|
   step["run"]&.include?("scripts/publish-sdk") &&
     step["run"]&.include?("--prepare-only") &&
@@ -230,17 +232,12 @@ fail_contract("release.yml preparation must receive repository signing material"
     release_preparation.dig("env", "MAGRATHEA_SIGNING_PASSWORD")&.include?("secrets.MAGRATHEA_SIGNING_PASSWORD")
 fail_contract("release.yml must retain preparation failure diagnostics") unless
   retains_failure_diagnostics?(release)
-fail_contract("release.yml must require successful CI for the exact commit") unless
-  release_runs.include?("actions/workflows/verify.yml/runs") &&
-    release_runs.include?("head_sha=$RELEASE_COMMIT") &&
-    release_runs.include?("status=success")
-fail_contract("release.yml must bind the requested version to source metadata") unless
-  release_runs.include?("REQUESTED_VERSION") &&
-    release_runs.include?("magrathea.version") &&
-    release_runs.include?("docs/releases/v$REQUESTED_VERSION.md")
-fail_contract("release.yml must bind workflow_dispatch to the explicitly authorized commit") unless
-  release_runs.include?("EXPECTED_COMMIT") &&
-    release_runs.include?('$RELEASE_COMMIT" != "$EXPECTED_COMMIT')
+fail_contract("release preparation must skip SDK assembly when a candidate exists") unless
+  release_preparation["if"].to_s.include?("candidate_exists != 'true'")
+fail_contract("release.yml must render notes from committed release metadata") unless
+  release_runs.include?("scripts/release_notes.py --check")
+fail_contract("release.yml must complete the Release Please lifecycle") unless
+  release_runs.include?("scripts/release complete")
 
 local_candidate_verification = all_steps(release).find do |step|
   step["run"]&.include?("scripts/verify-release-candidate")
@@ -260,15 +257,8 @@ fail_contract("release.yml must attest the outer candidate exactly once") unless
   }
 fail_contract("release.yml must not boot a simulator after exact-SHA CI") if
   release_runs.include?("simctl")
-non_guard_release_runs = all_steps(release)
-  .reject { |step| step == duplicate_authorization_guard }
-  .map { |step| step["run"] }
-  .compact
-  .join("\n")
-fail_contract("release.yml must not query or promote a candidate from another workflow run") if
-  non_guard_release_runs.include?("actions/workflows/release.yml/runs") ||
-    release_runs.include?("CANDIDATE_RUN_ID") ||
-    release.to_s.include?("promoted-candidate")
+fail_contract("release.yml must not promote a candidate from another workflow run") if
+  release_runs.include?("CANDIDATE_RUN_ID") || release.to_s.include?("promoted-candidate")
 
 release_jobs = release.fetch("jobs")
 candidate_runs = run_commands("jobs" => { "release-candidate" => release_jobs.fetch("release-candidate") })
@@ -356,6 +346,7 @@ fail_contract("release.yml must fetch full source history") unless
   verify_path => verify,
   nightly_path => nightly,
   release_path => release,
+  please_path => please,
 }.each do |path, workflow|
   uses = action_uses(workflow)
   fail_contract("#{File.basename(path)} must use the reviewed checkout commit") unless
@@ -382,6 +373,7 @@ end
   verify_path => verify,
   nightly_path => nightly,
   release_path => release,
+  please_path => please,
 }.each do |path, workflow|
   permissions = workflow.fetch("permissions", {})
   fail_contract("#{File.basename(path)} must keep contents read-only") unless permissions["contents"] == "read"
@@ -392,6 +384,7 @@ fail_contract("candidate preparation needs source/artifact read and provenance w
   candidate_permissions == {
     "contents" => "read",
     "actions" => "read",
+    "pull-requests" => "read",
     "id-token" => "write",
     "attestations" => "write",
   }
@@ -417,7 +410,17 @@ fail_contract("GitHub Release creation needs contents: write") unless
 fail_contract("remote consumer verification needs packages: read") unless
   github_release_permissions["packages"] == "read"
 fail_contract("GitHub Release job has unexpected permissions") unless
-  github_release_permissions.keys.sort == %w[actions contents packages].sort
+  github_release_permissions.keys.sort == %w[actions contents packages issues pull-requests].sort
 
-puts "MAGRATHEA_CI_CONTRACT_PASS workflows=3 release=single-run promotion=exact-byte shards=4"
+fail_contract("Release Please must only maintain PRs") unless
+  all_steps(please).any? { |step| step["uses"]&.start_with?("googleapis/release-please-action@") &&
+    step.dig("with", "skip-github-release") == true }
+fail_contract("bot PR verification must be explicitly dispatched") unless
+  triggers(verify).key?("workflow_dispatch") && run_commands(please).include?("gh workflow run verify.yml")
+fail_contract("publication request must follow the complete matrix on a main push") unless
+  verify.dig("jobs", "publish", "if") == "github.event_name == 'push'" &&
+    Array(verify.dig("jobs", "publish", "needs")).sort == %w[apple-gate linux-gate web-gate] &&
+    run_commands(verify).include?("scripts/release request")
+
+puts "MAGRATHEA_CI_CONTRACT_PASS workflows=4 release=single-run promotion=exact-byte shards=4"
 RUBY

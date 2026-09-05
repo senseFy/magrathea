@@ -68,18 +68,12 @@ focused module tests during normal edit/compile cycles.
 - Keep examples executable in shape and separate secret values from configuration.
 - Record release evidence only in the verification, known-issues, and release documents that own it.
 
-### Changelog discipline
+### Release changes
 
-Every user-visible behavior or contract change must update `CHANGELOG.md` under `Unreleased` in the
-same change or pull request. Use the appropriate `Added`, `Changed`, `Fixed`, or `Security`
-subsection and describe the consumer-visible outcome rather than implementation details. Internal
-refactors, tests, build-only maintenance, and documentation-only corrections may omit an entry when
-they do not change shipped behavior; mark the pull-request checklist item as not applicable and
-explain why.
-
-Implementation changes do not create dated release sections or change `magrathea.version`.
-`scripts/prepare-release` promotes the reviewed `Unreleased` content and generates release notes at
-release time.
+Use Conventional Commits in main-branch commits or squash PR titles: `feat:` for features,
+`fix:` for fixes, and `!` / `BREAKING CHANGE` for incompatible contracts. Describe the consumer
+impact and any migration steps. Release Please maintains the version and changelog in a Release PR;
+review that PR before merging. See [Release Process](docs/release-process.md).
 
 ## Pull requests and issues
 

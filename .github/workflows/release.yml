@@ -9,7 +9,15 @@ on:
         required: true
         type: string
       commit:
-        description: Exact verified 40-character commit SHA to release
+        description: Exact verified Release PR merge commit
+        required: true
+        type: string
+      pull_request:
+        description: Merged Release Please PR number
+        required: true
+        type: string
+      ci_run:
+        description: Verify workflow run for this exact main commit
         required: true
         type: string
 
@@ -27,6 +35,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      pull-requests: read
       id-token: write
       attestations: write
     outputs:
@@ -35,40 +44,11 @@ jobs:
       commit: ${{ steps.release.outputs.commit }}
       ci_run_id: ${{ steps.release.outputs.ci_run_id }}
     steps:
-      - name: Reject a duplicate version authorization
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REQUESTED_VERSION: ${{ inputs.version }}
-        run: |
-          if [[ ! "$REQUESTED_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
-            echo "$REQUESTED_VERSION is not a supported SemVer version." >&2
-            exit 1
-          fi
-          PRIOR_RELEASE_RUN_ID="$(
-            gh api \
-              --method GET \
-              "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/runs" \
-              -f event=workflow_dispatch \
-              -f per_page=100 \
-              --jq \
-              "[.workflow_runs[] |
-                select(.id < $GITHUB_RUN_ID and
-                  .display_title == \"Release Magrathea SDK $REQUESTED_VERSION\")] |
-               sort_by(.id) |
-               last |
-               .id // empty"
-          )"
-          if [[ -n "$PRIOR_RELEASE_RUN_ID" ]]; then
-            echo "Release $REQUESTED_VERSION already has workflow run $PRIOR_RELEASE_RUN_ID." >&2
-            echo "Reuse it or choose Re-run failed jobs; do not dispatch the version again." >&2
-            echo "https://github.com/$GITHUB_REPOSITORY/actions/runs/$PRIOR_RELEASE_RUN_ID" >&2
-            exit 1
-          fi
-
       - name: Check out source
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
+          ref: ${{ inputs.commit }}
 
       - name: Validate Gradle Wrapper
         uses: gradle/actions/wrapper-validation@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
@@ -86,74 +66,32 @@ jobs:
         id: release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REQUESTED_VERSION: ${{ inputs.version }}
-          EXPECTED_COMMIT: ${{ inputs.commit }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_COMMIT: ${{ inputs.commit }}
+          RELEASE_PR: ${{ inputs.pull_request }}
+          CI_RUN_ID: ${{ inputs.ci_run }}
         run: |
-          if [[ ! "$REQUESTED_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
-            echo "$REQUESTED_VERSION is not a supported SemVer version." >&2
-            exit 1
-          fi
-          CONFIGURED_VERSION="$(
-            awk -F= '$1 == "magrathea.version" {
-              print substr($0, index($0, "=") + 1)
-              exit
-            }' gradle.properties
-          )"
-          if [[ "$REQUESTED_VERSION" != "$CONFIGURED_VERSION" ]]; then
-            echo "Requested version $REQUESTED_VERSION does not match magrathea.version=$CONFIGURED_VERSION." >&2
-            exit 1
-          fi
-          RELEASE_DATE="$(
-            awk -v prefix="## $REQUESTED_VERSION — " '
-              index($0, prefix) == 1 {
-                print substr($0, length(prefix) + 1)
-                exit
-              }
-            ' CHANGELOG.md
-          )"
-          if [[ ! "$RELEASE_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
-            echo "CHANGELOG entry for $REQUESTED_VERSION has no release date." >&2
-            exit 1
-          fi
-          test -s "docs/releases/v$REQUESTED_VERSION.md"
-
-          RELEASE_COMMIT="$(git rev-parse HEAD)"
-          if [[ ! "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "$EXPECTED_COMMIT is not a full lowercase commit SHA." >&2
-            exit 1
-          fi
-          if [[ "$RELEASE_COMMIT" != "$EXPECTED_COMMIT" ]]; then
-            echo "Dispatched commit $RELEASE_COMMIT does not match authorized commit $EXPECTED_COMMIT." >&2
-            exit 1
-          fi
           git fetch --no-tags origin main
-          git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main
-          CI_RUN_ID="$(
-            gh api \
-              --method GET \
-              "repos/$GITHUB_REPOSITORY/actions/workflows/verify.yml/runs" \
-              -f "head_sha=$RELEASE_COMMIT" \
-              -f branch=main \
-              -f event=push \
-              -f status=success \
-              -f per_page=100 \
-              --jq \
-              "[.workflow_runs[] |
-                select(.head_sha == \"$RELEASE_COMMIT\" and .conclusion == \"success\")] |
-               sort_by([.run_number, .run_attempt]) |
-               last |
-               .id // empty"
-          )"
-          if [[ ! "$CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
-            echo "No successful Verify Magrathea SDK run exists for $RELEASE_COMMIT." >&2
-            exit 1
-          fi
-          echo "version=$REQUESTED_VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=v$REQUESTED_VERSION" >> "$GITHUB_OUTPUT"
-          echo "commit=$RELEASE_COMMIT" >> "$GITHUB_OUTPUT"
-          echo "ci_run_id=$CI_RUN_ID" >> "$GITHUB_OUTPUT"
+          git merge-base --is-ancestor HEAD origin/main
+          scripts/release validate \
+            --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT" \
+            --pull-request "$RELEASE_PR" --ci-run "$CI_RUN_ID" --run-id "$GITHUB_RUN_ID"
+          {
+            echo "version=$RELEASE_VERSION"
+            echo "tag=v$RELEASE_VERSION"
+            echo "commit=$RELEASE_COMMIT"
+            echo "ci_run_id=$CI_RUN_ID"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore the existing immutable candidate
+        if: steps.release.outputs.candidate_exists == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: magrathea-release-candidate
+          path: build/distributions
 
       - name: Build and verify the immutable release candidate
+        if: steps.release.outputs.candidate_exists != 'true'
         timeout-minutes: 110
         env:
           MAGRATHEA_SIGNING_KEY: ${{ secrets.MAGRATHEA_SIGNING_KEY }}
@@ -200,6 +138,7 @@ jobs:
             **/build/test-results/**
 
       - name: Upload the immutable release candidate
+        if: steps.release.outputs.candidate_exists != 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: magrathea-release-candidate
@@ -448,8 +387,10 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
-      actions: read
+      actions: write
       packages: read
+      issues: write
+      pull-requests: write
     steps:
       - name: Check out the verified release commit
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -520,6 +461,8 @@ jobs:
           RELEASE_VERSION: ${{ needs.prepare-publish.outputs.version }}
           RELEASE_TAG: ${{ needs.prepare-publish.outputs.tag }}
         run: |
+          python3 scripts/release_notes.py --check --version "$RELEASE_VERSION"
+          python3 scripts/release_notes.py --output "$RUNNER_TEMP/release-notes.md"
           BUNDLE="release-assets/distributions/Magrathea-$RELEASE_VERSION-release-bundle.zip"
           CHECKSUM="$BUNDLE.sha256"
           COORDINATES="release-assets/distributions/Magrathea-$RELEASE_VERSION-maven-coordinates.txt"
@@ -570,7 +513,7 @@ jobs:
             gh release edit "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --title "Magrathea $RELEASE_VERSION" \
-              --notes-file "docs/releases/$RELEASE_TAG.md" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
               --prerelease="$IS_PRERELEASE"
           else
             RELEASE_FLAGS=()
@@ -582,9 +525,19 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --title "Magrathea $RELEASE_VERSION" \
-              --notes-file "docs/releases/$RELEASE_TAG.md" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
               "${RELEASE_FLAGS[@]}"
           fi
+
+      - name: Complete the Release Please lifecycle
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_COMMIT: ${{ inputs.commit }}
+          RELEASE_PR: ${{ inputs.pull_request }}
+        run: |
+          scripts/release complete \
+            --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT" --pull-request "$RELEASE_PR"
 
       - name: Summarize completed release
         env:

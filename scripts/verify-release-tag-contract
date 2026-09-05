@@ -20,9 +20,10 @@ expect_rejected() {
 
 rm -rf "$FIXTURE"
 mkdir -p "$FIXTURE/scripts" "$FIXTURE/docs/releases"
-cp "$ROOT_DIR/scripts/verify-release-tag" "$FIXTURE/scripts/verify-release-tag"
+cp "$ROOT_DIR/scripts/verify-release-tag" "$ROOT_DIR/scripts/release_notes.py" "$FIXTURE/scripts/"
+printf '{".":"0.1.0-alpha.1"}\n' > "$FIXTURE/.release-please-manifest.json"
 printf 'magrathea.version=0.1.0-alpha.1\n' > "$FIXTURE/gradle.properties"
-printf '# Changelog\n\n## 0.1.0-alpha.1 — 2026-07-26\n' > "$FIXTURE/CHANGELOG.md"
+printf '# Changelog\n\n## 0.1.0-alpha.1 — 2026-07-26\n\nRelease changes.\n' > "$FIXTURE/CHANGELOG.md"
 printf '# Release\n' > "$FIXTURE/docs/releases/v0.1.0-alpha.1.md"
 
 git -C "$FIXTURE" init -q -b main
@@ -42,15 +43,16 @@ expect_rejected "does not match magrathea.version" \
   "$FIXTURE/scripts/verify-release-tag" v0.1.0-alpha.1
 git -C "$FIXTURE" restore gradle.properties
 
-rm "$FIXTURE/docs/releases/v0.1.0-alpha.1.md"
-expect_rejected "missing release notes" \
+printf '# Changelog\n' > "$FIXTURE/CHANGELOG.md"
+expect_rejected "expected one dated CHANGELOG entry" \
   "$FIXTURE/scripts/verify-release-tag" v0.1.0-alpha.1
-git -C "$FIXTURE" restore docs/releases/v0.1.0-alpha.1.md
+git -C "$FIXTURE" restore CHANGELOG.md
 
 git -C "$FIXTURE" tag v0.1.0-alpha.2
 printf 'magrathea.version=0.1.0-alpha.2\n' > "$FIXTURE/gradle.properties"
-printf '\n## 0.1.0-alpha.2 — 2026-07-27\n' >> "$FIXTURE/CHANGELOG.md"
+printf '\n## 0.1.0-alpha.2 — 2026-07-27\n\nRelease changes.\n' >> "$FIXTURE/CHANGELOG.md"
 printf '# Release\n' > "$FIXTURE/docs/releases/v0.1.0-alpha.2.md"
+printf '{".":"0.1.0-alpha.2"}\n' > "$FIXTURE/.release-please-manifest.json"
 git -C "$FIXTURE" add .
 git -C "$FIXTURE" commit -q -m "lightweight fixture"
 git -C "$FIXTURE" tag -f v0.1.0-alpha.2 >/dev/null

@@ -1,620 +1,193 @@
 #!/usr/bin/env python3
-"""Finish a prepared Magrathea release through one guarded command."""
-
-from __future__ import annotations
+"""Coordinate merged Release PRs and immutable publication runs."""
 
 import argparse
-from dataclasses import dataclass
 import json
-from pathlib import Path
+import os
 import re
-import shutil
 import subprocess
 import sys
 import time
-from typing import NoReturn, Optional, Sequence
+
+from release_notes import ROOT, check_metadata
 
 
-SEMVER = re.compile(
-    r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
-    r"(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$"
-)
-ACTIVE_STATUSES = {"queued", "in_progress", "waiting", "requested", "pending"}
-DISCOVERY_TIMEOUT_SECONDS = 120
-DISCOVERY_POLL_SECONDS = 3
-WATCH_REFRESH_SECONDS = 10
+class GitHub:
+    def __init__(self, repo=None):
+        self.repo = repo or os.environ.get('GITHUB_REPOSITORY', 'senseFy/magrathea')
+
+    def api(self, path, method='GET', data=None, missing=False):
+        command = ['gh', 'api', '--method', method, f'repos/{self.repo}/{path}']
+        if data is not None:
+            command += ['--input', '-']
+        result = subprocess.run(command, input=json.dumps(data) if data is not None else None,
+                                text=True, capture_output=True)
+        if result.returncode:
+            if missing and 'HTTP 404' in result.stderr:
+                return None
+            raise ValueError(result.stderr.strip())
+        return json.loads(result.stdout) if result.stdout.strip() else None
+
+    def runs(self, version):
+        runs, page = [], 1
+        while True:
+            batch = self.api(f'actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100&page={page}')['workflow_runs']
+            runs += [r for r in batch if r['display_title'] == f'Release Magrathea SDK {version}']
+            if len(batch) < 100:
+                return sorted(runs, key=lambda r: r['id'])
+            page += 1
 
 
-@dataclass(frozen=True)
-class WorkflowRun:
-    database_id: int
-    status: str
-    conclusion: str
-    head_sha: str
-    url: str
-    created_at: str
-    display_title: str
-
-    @property
-    def successful(self) -> bool:
-        return self.status == "completed" and self.conclusion == "success"
-
-    @property
-    def active(self) -> bool:
-        return self.status in ACTIVE_STATUSES
+def release_pr(gh, number, commit=None):
+    pr = gh.api(f'pulls/{number}')
+    labels = {label['name'] for label in pr['labels']}
+    if (not pr['merged'] or pr['base']['ref'] != 'main'
+            or pr['base']['repo']['full_name'].lower() != gh.repo.lower()
+            or pr['head']['repo']['full_name'].lower() != gh.repo.lower()
+            or pr['head']['ref'] != 'release-please--branches--main'
+            or not labels.intersection({'autorelease: pending', 'autorelease: tagged'})):
+        raise ValueError('expected a merged, pending/tagged Release Please PR on main')
+    if commit and pr['merge_commit_sha'] != commit:
+        raise ValueError('Release PR merge commit differs from the authorized commit')
+    return pr
 
 
-def fail(message: str) -> NoReturn:
-    print(f"release failed: {message}", file=sys.stderr)
-    raise SystemExit(2)
+def require_ci(gh, run_id, commit, wait=False):
+    for attempt in range(61 if wait else 1):
+        run = gh.api(f'actions/runs/{run_id}')
+        if (run['head_sha'] != commit or run['head_branch'] != 'main'
+                or run['event'] != 'push' or run['path'] != '.github/workflows/verify.yml'):
+            raise ValueError('CI run is not the authorized main push and exact commit')
+        if run['status'] == 'completed':
+            if run['conclusion'] != 'success':
+                raise ValueError('exact-commit verification did not succeed')
+            return
+        if wait and attempt < 60:
+            time.sleep(2)
+    raise ValueError('exact-commit verification has not completed')
 
 
-def run(
-    root: Path,
-    command: Sequence[str],
-    *,
-    capture: bool = False,
-    check: bool = True,
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        command,
-        cwd=root,
-        check=check,
-        text=True,
-        stdout=subprocess.PIPE if capture else None,
-        stderr=subprocess.PIPE if capture else None,
-    )
-
-
-def output(root: Path, *command: str) -> str:
-    try:
-        return run(root, command, capture=True).stdout.strip()
-    except subprocess.CalledProcessError as error:
-        detail = error.stderr.strip() if error.stderr else "command failed"
-        fail(f"{' '.join(command)}: {detail}")
-
-
-def watch_run(root: Path, repository: str, run_id: int) -> subprocess.CompletedProcess[str]:
-    return run(
-        root,
-        (
-            "gh",
-            "run",
-            "watch",
-            str(run_id),
-            "--repo",
-            repository,
-            "--interval",
-            str(WATCH_REFRESH_SECONDS),
-            "--exit-status",
-        ),
-        check=False,
-    )
-
-
-def validate_semver(value: str) -> None:
-    match = SEMVER.fullmatch(value)
-    if not match:
-        fail(f"{value!r} is not a supported SemVer version")
-    prerelease = match.group(4)
-    build = match.group(5)
-    if build is not None and any(not identifier for identifier in build.split(".")):
-        fail(f"{value!r} contains an empty build identifier")
-    if prerelease is None:
+def request(gh, root, commit, ci_run):
+    version, _ = check_metadata(root)
+    candidates = gh.api(f'commits/{commit}/pulls?per_page=100')
+    matching = [p for p in candidates if p.get('merge_commit_sha') == commit
+                and p['head']['ref'] == 'release-please--branches--main']
+    if not matching:
+        print('No merged Release PR at this commit; no publication requested.')
         return
-    for identifier in prerelease.split("."):
-        if not identifier:
-            fail(f"{value!r} contains an empty prerelease identifier")
-        if identifier.isdigit() and len(identifier) > 1 and identifier.startswith("0"):
-            fail(f"{value!r} contains a numeric prerelease identifier with a leading zero")
-
-
-def require_tool(name: str) -> None:
-    if shutil.which(name) is None:
-        fail(f"required command {name!r} is not available on PATH")
-
-
-def configured_version(root: Path) -> str:
-    properties = (root / "gradle.properties").read_text(encoding="utf-8")
-    match = re.search(r"(?m)^magrathea\.version=(.+)$", properties)
-    if not match:
-        fail("gradle.properties is missing magrathea.version")
-    return match.group(1).strip()
-
-
-def github_repository(root: Path) -> str:
-    remote_url = output(root, "git", "remote", "get-url", "origin")
-    match = re.search(r"github\.com(?::|/)([^/\s]+/[^/\s]+?)(?:\.git)?$", remote_url)
-    if not match:
-        fail(f"origin is not a supported GitHub remote: {remote_url}")
-    return match.group(1)
-
-
-def remote_main_sha(root: Path) -> str:
-    result = run(
-        root,
-        ("git", "ls-remote", "--heads", "origin", "refs/heads/main"),
-        capture=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        detail = result.stderr.strip() if result.stderr else "unable to read origin/main"
-        fail(detail)
-    lines = [line for line in result.stdout.splitlines() if line.strip()]
-    if len(lines) != 1:
-        fail("origin/main does not resolve to exactly one commit")
-    sha = lines[0].split()[0]
-    if not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
-        fail(f"origin/main returned an invalid commit: {sha}")
-    return sha.lower()
-
-
-def ensure_fast_forward(root: Path, remote_sha: str, local_sha: str) -> None:
-    if remote_sha == local_sha:
+    if len(matching) != 1:
+        raise ValueError('ambiguous Release PR merge')
+    pr = release_pr(gh, matching[0]['number'], commit)
+    existing = gh.runs(version)
+    if existing:
+        print(f"Publication already has a run: {existing[0]['html_url']}; use Re-run failed jobs if needed.")
         return
-    result = run(
-        root,
-        ("git", "merge-base", "--is-ancestor", remote_sha, local_sha),
-        capture=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        fail(
-            "local main is not a fast-forward of origin/main; fetch, reconcile, and review "
-            "the release commit before retrying"
-        )
+    gh.api('actions/workflows/release.yml/dispatches', 'POST', {
+        'ref': 'main', 'inputs': {'version': version, 'commit': commit,
+                                'pull_request': str(pr['number']), 'ci_run': str(ci_run)}})
+    print(f'Requested {version} from Release PR #{pr["number"]} at {commit}')
 
 
-def remote_tag_commit(root: Path, tag: str) -> Optional[str]:
-    result = run(
-        root,
-        ("git", "ls-remote", "origin", f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"),
-        capture=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        detail = result.stderr.strip() if result.stderr else f"unable to inspect {tag}"
-        fail(detail)
-    refs = {}
-    for line in result.stdout.splitlines():
-        fields = line.split()
-        if len(fields) == 2:
-            refs[fields[1]] = fields[0].lower()
-    direct = refs.get(f"refs/tags/{tag}")
-    peeled = refs.get(f"refs/tags/{tag}^{{}}")
-    if direct is None:
-        return None
-    if peeled is None:
-        fail(f"remote tag {tag} exists but is not an annotated tag")
-    return peeled
+def validate(gh, root, version, commit, number, ci_run, current_run):
+    check_metadata(root, version)
+    if not re.fullmatch(r'[0-9a-f]{40}', commit):
+        raise ValueError('expected a full commit SHA')
+    head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+    if head != commit:
+        raise ValueError('checkout differs from the authorized commit')
+    release_pr(gh, number, commit)
+    prior = [r for r in gh.runs(version) if r['id'] < current_run]
+    if prior:
+        raise ValueError(f"Version already authorized: {prior[0]['html_url']}; use Re-run failed jobs")
+    # Every attempt restores the same uploaded candidate once one exists.
+    artifacts = gh.api(f'actions/runs/{current_run}/artifacts?per_page=100')['artifacts']
+    candidate_exists = any(a['name'] == 'magrathea-release-candidate' and not a['expired'] for a in artifacts)
+    if not candidate_exists and gh.api(f'git/ref/tags/v{version}', missing=True):
+        raise ValueError('release tag already exists; restore the original candidate instead of rebuilding')
+    require_ci(gh, ci_run, commit, wait=True)
+    return candidate_exists
 
 
-def parse_runs(raw: str) -> list[WorkflowRun]:
-    try:
-        values = json.loads(raw)
-    except json.JSONDecodeError as error:
-        fail(f"GitHub returned invalid workflow JSON: {error}")
-    if not isinstance(values, list):
-        fail("GitHub returned an invalid workflow run list")
-    parsed = []
-    for value in values:
-        try:
-            parsed.append(
-                WorkflowRun(
-                    database_id=int(value["databaseId"]),
-                    status=str(value["status"] or ""),
-                    conclusion=str(value["conclusion"] or ""),
-                    head_sha=str(value["headSha"] or "").lower(),
-                    url=str(value["url"] or ""),
-                    created_at=str(value["createdAt"] or ""),
-                    display_title=str(value["displayTitle"] or ""),
-                )
-            )
-        except (KeyError, TypeError, ValueError) as error:
-            fail(f"GitHub returned a malformed workflow run: {error}")
-    return parsed
+def complete(gh, version, commit, number):
+    pr = release_pr(gh, number, commit)
+    release = gh.api(f'releases/tags/v{version}')
+    expected = {f'Magrathea-{version}-release-bundle.zip',
+                f'Magrathea-{version}-release-bundle.zip.sha256',
+                f'Magrathea-{version}-maven-coordinates.txt',
+                f'Magrathea-{version}-maven-files.sha256',
+                'magrathea-sbom.cdx.json', 'third-party-licenses.tsv', 'publish-verification.receipt'}
+    if release['draft'] or release['prerelease'] != ('-' in version) or not expected.issubset({a['name'] for a in release['assets']}):
+        raise ValueError('GitHub Release is not complete')
+    ref = gh.api(f'git/ref/tags/v{version}')['object']
+    if ref['type'] != 'tag' or gh.api(f'git/tags/{ref["sha"]}')['object']['sha'] != commit:
+        raise ValueError('release tag is not annotated at the authorized commit')
+    labels = {label['name'] for label in pr['labels']} - {'autorelease: pending'}
+    gh.api(f'issues/{number}', 'PATCH', {'labels': sorted(labels | {'autorelease: tagged'})})
+    gh.api('actions/workflows/release-please.yml/dispatches', 'POST', {'ref': 'main'})
+    print(release['html_url'])
 
 
-def workflow_runs(
-    root: Path,
-    repository: str,
-    workflow: str,
-    event: str,
-    *,
-    sha: Optional[str] = None,
-) -> list[WorkflowRun]:
-    command = [
-        "gh",
-        "run",
-        "list",
-        "--repo",
-        repository,
-        "--workflow",
-        workflow,
-        "--event",
-        event,
-        "--limit",
-        "100",
-        "--json",
-        "databaseId,status,conclusion,headSha,url,createdAt,displayTitle",
-    ]
-    if sha is not None:
-        command.extend(("--commit", sha))
-    runs = parse_runs(output(root, *command))
-    return runs if sha is None else [item for item in runs if item.head_sha == sha]
+def supersede(gh, number):
+    pr = release_pr(gh, number)
+    commit = pr['merge_commit_sha']
+    raw = gh.api(f'contents/.release-please-manifest.json?ref={commit}')
+    import base64
+    version = json.loads(base64.b64decode(raw['content']))['.']
+    if gh.api(f'releases/tags/v{version}', missing=True):
+        raise ValueError('GitHub Release exists; finish its lifecycle instead of superseding it')
+    if any(r['status'] != 'completed' for r in gh.runs(version)):
+        raise ValueError('wait for or cancel the active publication before superseding it')
+    labels = {label['name'] for label in pr['labels']} - {'autorelease: pending'}
+    gh.api(f'issues/{number}', 'PATCH', {'labels': sorted(labels | {'autorelease: superseded'})})
+    print(f'Superseded incomplete {version}; existing tags and bytes are retained. Fix forward with a higher Release-As version and carry its notes into the next Release PR.')
 
 
-def preferred_run(runs: list[WorkflowRun]) -> Optional[WorkflowRun]:
-    if not runs:
-        return None
-    successful = [item for item in runs if item.successful]
-    active = [item for item in runs if item.active]
-    candidates = successful or active or runs
-    return max(candidates, key=lambda item: (item.created_at, item.database_id))
-
-
-def verify_run(root: Path, repository: str, sha: str) -> Optional[WorkflowRun]:
-    return preferred_run(
-        workflow_runs(root, repository, "verify.yml", "push", sha=sha)
-    )
-
-
-def release_runs(
-    root: Path, repository: str, sha: str, version: str
-) -> tuple[Optional[WorkflowRun], list[WorkflowRun], list[WorkflowRun]]:
-    runs = workflow_runs(root, repository, "release.yml", "workflow_dispatch")
-    title = f"Release Magrathea SDK {version}"
-    version_runs = [item for item in runs if item.display_title == title]
-    matching = [item for item in version_runs if item.head_sha == sha]
-    wrong_commit = [item for item in version_runs if item.head_sha != sha]
-    unknown = [
-        item for item in runs if item.head_sha == sha and item.display_title != title
-    ]
-    return preferred_run(matching), unknown, wrong_commit
-
-
-def describe_run(item: Optional[WorkflowRun], *, absent: str) -> str:
-    if item is None:
-        return absent
-    if item.successful:
-        state = "passed"
-    elif item.active:
-        state = item.status.replace("_", " ")
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--repo')
+    sub = parser.add_subparsers(dest='command', required=True)
+    for name in ('status', 'retry'):
+        p = sub.add_parser(name)
+        p.add_argument('version')
+    p = sub.add_parser('supersede')
+    p.add_argument('pull_request', type=int)
+    p = sub.add_parser('request')
+    p.add_argument('--commit', required=True)
+    p.add_argument('--ci-run', required=True, type=int)
+    for name in ('validate', 'complete'):
+        p = sub.add_parser(name)
+        p.add_argument('--version', required=True)
+        p.add_argument('--commit', required=True)
+        p.add_argument('--pull-request', required=True, type=int)
+        if name == 'validate':
+            p.add_argument('--ci-run', required=True, type=int)
+            p.add_argument('--run-id', required=True, type=int)
+    args = parser.parse_args()
+    gh = GitHub(args.repo)
+    if args.command == 'request':
+        request(gh, ROOT, args.commit, args.ci_run)
+    elif args.command == 'validate':
+        restored = validate(gh, ROOT, args.version, args.commit, args.pull_request, args.ci_run, args.run_id)
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            output.write(f'candidate_exists={str(restored).lower()}\n')
+    elif args.command == 'complete':
+        complete(gh, args.version, args.commit, args.pull_request)
+    elif args.command == 'supersede':
+        supersede(gh, args.pull_request)
     else:
-        state = item.conclusion or item.status or "failed"
-    return f"{state} (run {item.database_id}, {item.url})"
+        runs = gh.runs(args.version)
+        if not runs:
+            raise ValueError('no publication run found')
+        run = runs[0]
+        print(f'{run["html_url"]}: {run["status"]} / {run["conclusion"]}')
+        if args.command == 'retry':
+            if run['status'] != 'completed' or run['conclusion'] == 'success':
+                raise ValueError('only a failed completed publication can be retried')
+            gh.api(f'actions/runs/{run["id"]}/rerun-failed-jobs', 'POST')
 
 
-def print_plan(
-    version: str,
-    sha: str,
-    remote_sha: str,
-    verify: Optional[WorkflowRun],
-    release: Optional[WorkflowRun],
-) -> None:
-    push_state = (
-        "already at this commit"
-        if remote_sha == sha
-        else f"will fast-forward from {remote_sha[:12]}"
-    )
-    verify_absent = "will wait for the push-triggered exact-SHA run"
-    release_absent = "will dispatch after Verify passes"
-    print(
-        "\n".join(
-            (
-                "Magrathea release plan",
-                f"  Version:  {version}",
-                "  Branch:   main",
-                f"  Commit:   {sha}",
-                f"  Push:     origin/main {push_state}",
-                f"  Verify:   {describe_run(verify, absent=verify_absent)}",
-                f"  Release:  {describe_run(release, absent=release_absent)}",
-                f"  Tag:      v{version}",
-            )
-        )
-    )
-
-
-def require_confirmation(assume_yes: bool) -> bool:
-    if assume_yes:
-        return True
-    if not sys.stdin.isatty():
-        fail("confirmation requires an interactive terminal; rerun with --yes")
-    answer = input("Continue? [y/N] ").strip().lower()
-    if answer not in {"y", "yes"}:
-        print("[release] cancelled; no remote changes were made")
-        return False
-    return True
-
-
-def failed_run(kind: str, item: WorkflowRun, repository: str, version: str) -> NoReturn:
-    action = (
-        "fix the release commit or re-run its failed jobs"
-        if kind == "Verify"
-        else "choose Re-run failed jobs on this same run"
-    )
-    fail(
-        f"{kind} run {item.database_id} ended as {item.conclusion or item.status}. {action}:\n"
-        f"  {item.url}\n"
-        f"  gh run rerun {item.database_id} --failed --repo {repository}\n"
-        f"Then rerun scripts/release {version}; a new Release dispatch will not be created."
-    )
-
-
-def wait_for_verify(root: Path, repository: str, sha: str, version: str) -> WorkflowRun:
-    deadline = time.monotonic() + DISCOVERY_TIMEOUT_SECONDS
-    item = verify_run(root, repository, sha)
-    while item is None and time.monotonic() < deadline:
-        print(f"[release] waiting for Verify to appear for {sha[:12]}...")
-        time.sleep(DISCOVERY_POLL_SECONDS)
-        item = verify_run(root, repository, sha)
-    if item is None:
-        fail(
-            f"no Verify Magrathea SDK run appeared for {sha} within "
-            f"{DISCOVERY_TIMEOUT_SECONDS} seconds"
-        )
-    if item.active:
-        print(f"[release] waiting for exact-SHA Verify run {item.database_id}: {item.url}")
-        watched = watch_run(root, repository, item.database_id)
-        item = verify_run(root, repository, sha) or item
-        if watched.returncode != 0 and item.active:
-            fail(
-                f"stopped watching Verify run {item.database_id}, which is still {item.status}:\n"
-                f"  {item.url}\n"
-                f"Rerun scripts/release {version} to resume watching."
-            )
-        if not item.successful:
-            failed_run("Verify", item, repository, version)
-    elif not item.successful:
-        failed_run("Verify", item, repository, version)
-    print(f"[release] exact-SHA Verify passed: {item.url}")
-    return item
-
-
-def dispatch_release(root: Path, repository: str, version: str, sha: str) -> None:
-    print(f"[release] dispatching Release Magrathea SDK {version}")
-    result = run(
-        root,
-        (
-            "gh",
-            "workflow",
-            "run",
-            "release.yml",
-            "--repo",
-            repository,
-            "--ref",
-            "main",
-            "-f",
-            f"version={version}",
-            "-f",
-            f"commit={sha}",
-        ),
-        capture=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        detail = result.stderr.strip() if result.stderr else "dispatch request failed"
-        fail(f"{detail}; inspect GitHub before retrying because the request may have been accepted")
-
-
-def wait_for_release(
-    root: Path, repository: str, sha: str, version: str, existing: Optional[WorkflowRun]
-) -> WorkflowRun:
-    item = existing
-    deadline = time.monotonic() + DISCOVERY_TIMEOUT_SECONDS
-    while item is None and time.monotonic() < deadline:
-        item, unknown, wrong_commit = release_runs(root, repository, sha, version)
-        if item is not None:
-            break
-        if wrong_commit:
-            mismatch = wrong_commit[0]
-            fail(
-                f"Release run {mismatch.database_id} resolved to {mismatch.head_sha}, not the "
-                f"authorized commit {sha}; the workflow will reject it:\n  {mismatch.url}"
-            )
-        if unknown:
-            fail(
-                "a Release workflow already exists for this commit but its version cannot be "
-                "matched; inspect it before dispatching again"
-            )
-        print(f"[release] waiting for Release {version} to appear...")
-        time.sleep(DISCOVERY_POLL_SECONDS)
-    if item is None:
-        fail(
-            f"Release Magrathea SDK {version} did not appear within "
-            f"{DISCOVERY_TIMEOUT_SECONDS} seconds; inspect GitHub before retrying"
-        )
-    if item.active:
-        print(f"[release] waiting for Release run {item.database_id}: {item.url}")
-        watched_run_id = item.database_id
-        watched = watch_run(root, repository, item.database_id)
-        item, _, _ = release_runs(root, repository, sha, version)
-        if item is None:
-            fail(f"Release run {watched_run_id} disappeared from GitHub")
-        if watched.returncode != 0 and item.active:
-            fail(
-                f"stopped watching Release run {item.database_id}, which is still {item.status}:\n"
-                f"  {item.url}\n"
-                f"Rerun scripts/release {version} to resume watching."
-            )
-        if not item.successful:
-            failed_run("Release", item, repository, version)
-    elif not item.successful:
-        failed_run("Release", item, repository, version)
-    return item
-
-
-def validate_completed_release(
-    root: Path, repository: str, version: str, sha: str, item: WorkflowRun
-) -> None:
-    tag = f"v{version}"
-    tagged_commit = remote_tag_commit(root, tag)
-    if tagged_commit != sha:
-        fail(f"successful run {item.database_id} did not leave annotated tag {tag} at {sha}")
-    raw = output(
-        root,
-        "gh",
-        "release",
-        "view",
-        tag,
-        "--repo",
-        repository,
-        "--json",
-        "tagName,url,isPrerelease",
-    )
-    try:
-        release = json.loads(raw)
-    except json.JSONDecodeError as error:
-        fail(f"GitHub returned invalid release JSON: {error}")
-    if release.get("tagName") != tag or not release.get("url"):
-        fail(f"successful run {item.database_id} did not leave a valid GitHub Release for {tag}")
-    print(f"[release] released {version} from {sha}")
-    print(f"[release] workflow: {item.url}")
-    print(f"[release] GitHub Release: {release['url']}")
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Push a prepared release commit, wait for exact-SHA CI, and run its "
-            "release workflow."
-        )
-    )
-    parser.add_argument("version", help="prepared SemVer version without the leading v")
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="validate and show the remote plan without changing it",
-    )
-    parser.add_argument(
-        "--yes",
-        action="store_true",
-        help="accept the release plan without prompting",
-    )
-    arguments = parser.parse_args()
-
-    validate_semver(arguments.version)
-    root = Path(__file__).resolve().parent.parent
-    require_tool("git")
-    require_tool("gh")
-    if output(root, "git", "status", "--porcelain"):
-        fail("git worktree is not clean; review and commit the prepared release first")
-    branch = output(root, "git", "branch", "--show-current")
-    if branch != "main":
-        fail(f"release must run from local main, not {branch or 'a detached HEAD'}")
-    version = configured_version(root)
-    if arguments.version != version:
-        fail(
-            f"requested version {arguments.version} does not match magrathea.version={version}; "
-            "run scripts/prepare-release first"
-        )
-    changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
-    dated_heading = (
-        rf"(?m)^## {re.escape(version)} — [0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}$"
-    )
-    if not re.search(dated_heading, changelog):
-        fail(f"CHANGELOG.md has no dated section for {version}")
-    notes = root / "docs" / "releases" / f"v{version}.md"
-    if not notes.is_file() or notes.stat().st_size == 0:
-        fail(f"missing release notes at {notes.relative_to(root)}")
-
-    sha = output(root, "git", "rev-parse", "HEAD").lower()
-    if not re.fullmatch(r"[0-9a-f]{40}", sha):
-        fail(f"HEAD did not resolve to a full commit SHA: {sha}")
-    repository = github_repository(root)
-    try:
-        run(root, ("gh", "auth", "status", "--hostname", "github.com"), capture=True)
-    except subprocess.CalledProcessError as error:
-        detail = error.stderr.strip() if error.stderr else "GitHub CLI is not authenticated"
-        fail(detail)
-
-    remote_sha = remote_main_sha(root)
-    ensure_fast_forward(root, remote_sha, sha)
-    tagged_commit = remote_tag_commit(root, f"v{version}")
-
-    verify: Optional[WorkflowRun] = None
-    release: Optional[WorkflowRun] = None
-    unknown_release_runs: list[WorkflowRun] = []
-    wrong_commit_release_runs: list[WorkflowRun] = []
-    if remote_sha == sha:
-        verify = verify_run(root, repository, sha)
-        release, unknown_release_runs, wrong_commit_release_runs = release_runs(
-            root, repository, sha, version
-        )
-    if wrong_commit_release_runs and release is None:
-        mismatch = wrong_commit_release_runs[0]
-        fail(
-            f"Release run {mismatch.database_id} for {version} targets {mismatch.head_sha}, not "
-            f"the prepared commit {sha}; inspect {mismatch.url}"
-        )
-    if unknown_release_runs and release is None:
-        fail(
-            "a Release workflow already exists for this commit but its version cannot be matched; "
-            f"inspect {unknown_release_runs[0].url} before dispatching again"
-        )
-    if release is not None and not release.active and not release.successful:
-        failed_run("Release", release, repository, version)
-    if release is None and verify is not None and not verify.active and not verify.successful:
-        failed_run("Verify", verify, repository, version)
-    if tagged_commit is not None and release is None:
-        fail(
-            f"remote tag v{version} already exists at {tagged_commit}, without a "
-            "matching Release run"
-        )
-    if tagged_commit is not None and tagged_commit != sha:
-        fail(f"remote tag v{version} points to {tagged_commit}, not the prepared commit {sha}")
-    if release is not None and release.successful:
-        validate_completed_release(root, repository, version, sha, release)
-        return
-
-    print_plan(version, sha, remote_sha, verify, release)
-    if arguments.dry_run:
-        print("[release] dry run complete; no remote changes were made")
-        return
-    if not require_confirmation(arguments.yes):
-        return
-
-    if remote_sha != sha:
-        print(f"[release] pushing {sha} to origin/main")
-        run(root, ("git", "push", "origin", "HEAD:refs/heads/main"))
-        pushed_sha = remote_main_sha(root)
-        if pushed_sha != sha:
-            fail(f"origin/main resolved to {pushed_sha} after push, expected {sha}")
-
-    wait_for_verify(root, repository, sha, version)
-    current_remote_sha = remote_main_sha(root)
-    if current_remote_sha != sha:
-        fail(
-            f"origin/main advanced to {current_remote_sha} while Verify was running; "
-            "the release was not dispatched"
-        )
-    release, unknown_release_runs, wrong_commit_release_runs = release_runs(
-        root, repository, sha, version
-    )
-    if release is None and wrong_commit_release_runs:
-        mismatch = wrong_commit_release_runs[0]
-        fail(
-            f"Release run {mismatch.database_id} for {version} targets {mismatch.head_sha}, not "
-            f"the prepared commit {sha}; inspect {mismatch.url}"
-        )
-    if release is None and unknown_release_runs:
-        fail(
-            "a Release workflow already exists for this commit but its version cannot be matched; "
-            f"inspect {unknown_release_runs[0].url} before dispatching again"
-        )
-    if release is None:
-        if remote_tag_commit(root, f"v{version}") is not None:
-            fail(f"remote tag v{version} appeared without a matching Release run; inspect GitHub")
-        dispatch_release(root, repository, version, sha)
-    release = wait_for_release(root, repository, sha, version, release)
-    validate_completed_release(root, repository, version, sha, release)
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     try:
         main()
-    except subprocess.CalledProcessError as error:
-        command = " ".join(str(part) for part in error.cmd)
-        detail = error.stderr.strip() if error.stderr else ""
-        suffix = f": {detail}" if detail else ""
-        fail(f"command failed ({error.returncode}): {command}{suffix}")
+    except (ValueError, KeyError, subprocess.CalledProcessError) as error:
+        sys.exit(f'release failed: {error}')

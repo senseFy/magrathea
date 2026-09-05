@@ -12,20 +12,9 @@ Each release note identifies its exact signing key.
 
 The group and version come from `gradle.properties`:
 
-```text
-group: saien.magrathea
-version: 0.1.0-alpha.10
-artifact: logical module name
-```
-
-Examples:
-
-```text
-saien.magrathea:magrathea-core:0.1.0-alpha.10
-saien.magrathea:magrathea-runtime:0.1.0-alpha.10
-saien.magrathea:magrathea-chatbot:0.1.0-alpha.10
-saien.magrathea:magrathea-provider-openai:0.1.0-alpha.10
-```
+Use `saien.magrathea:<logical-module>:<version>`. Choose a version from
+[GitHub Releases](https://github.com/senseFy/magrathea/releases); a Release PR is a candidate until
+publication completes.
 
 Kotlin Multiplatform generates target variants from the 16 logical modules. Consumers declare the
 logical module, not a target-specific publication.
@@ -67,9 +56,9 @@ repositories {
 }
 
 dependencies {
-    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.10")
-    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.10")
-    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.10")
+    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.9") // x-release-please-version
+    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.9") // x-release-please-version
+    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.9") // x-release-please-version
 }
 ```
 
@@ -84,19 +73,9 @@ The configured GitHub Packages repository is:
 https://maven.pkg.github.com/sensefy/magrathea
 ```
 
-Publishing requires a clean verified commit, repository credentials, and an in-memory PGP key:
-
-```bash
-MAGRATHEA_SIGNING_KEY="$(cat private-key.asc)" \
-MAGRATHEA_SIGNING_PASSWORD=key-password \
-GITHUB_SAIEN_MAVEN_USERNAME=your-user \
-GITHUB_SAIEN_MAVEN_TOKEN=your-token \
-scripts/publish-sdk --target github
-```
-
-Direct remote Gradle publish tasks fail closed. `scripts/publish-sdk` creates the signed release
-candidate; the authorized release workflow publishes the candidate's manifest-bound files without
-rebuilding them.
+Official releases are prepared in a Release Please PR and published after its merge passes CI.
+See [Release Process](release-process.md). Gradle stages the signed artifacts; the workflow uploads
+the same candidate files and supports interrupted publication without rebuilding.
 
 ### Consume
 
@@ -159,48 +138,8 @@ Repository and signing credentials are environment-only. The publisher rejects n
 repositories, dirty worktrees, skipped release tests, unsigned publications, and coordinates that
 already exist. The repository itself must also enforce immutable release versions.
 
-Maintainers publish through one guarded local command backed by the manually authorized
-`Release Magrathea SDK` workflow. The workflow requires successful CI for the exact `main` commit,
-builds and verifies the signed Candidate once, creates the annotated tag, publishes four exact-byte
-Maven shards, validates all remote coordinates, resolves an isolated JVM/Android consumer, and
-creates the GitHub Release.
-
-Prepare the reviewed version metadata and local quick gate through the single maintainer entry
-point:
-
-```bash
-scripts/prepare-release 0.1.0-alpha.10
-```
-
-It performs no commit, push, tag, or remote publication. Review and commit the prepared files onto
-local `main`, then run:
-
-```bash
-scripts/release 0.1.0-alpha.10
-```
-
-That command presents one confirmation, pushes the exact commit, waits for exact-SHA CI, and starts
-or resumes the version-and-commit-bound release workflow. It stops before dispatch if `main` moves,
-and the workflow rejects a mismatched commit or a second authorization for the same version before
-publication side effects. `--dry-run` only validates and prints the plan; `--yes` is required for
-non-interactive use. [Release Process](release-process.md) is the full runbook.
-
-With signing material in the environment, prepare a candidate without remote side effects:
-
-```bash
-scripts/publish-sdk --target github --prepare-only
-```
-
-If publication is interrupted, rerun `scripts/release <version>`. It refuses a duplicate dispatch
-and points to **Re-run failed jobs** on the same workflow run. Existing bytes must match the
-Candidate manifest; only absent files are uploaded, and each POM is uploaded last. Do not start
-another dispatch after the tag or package bytes exist.
-
-Inspect a remote Gradle task graph without publishing:
-
-```bash
-scripts/publish-sdk --target github --dry-run
-```
+The official GitHub Packages workflow is described in [Release Process](release-process.md).
+Custom repositories must enforce the same immutable-coordinate policy.
 
 ## Web artifacts
 
