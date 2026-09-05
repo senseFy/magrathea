@@ -768,17 +768,19 @@ class RuntimeRecoveryContractTest {
         val provider = RetryableInvalidatedThenCompleteProvider()
         val retryPolicy = BlockingBackoffRetryPolicy()
         val runner = runner(provider, persistence, retryPolicy)
-        val observed = mutableListOf<AgentEvent>()
+        val retryScheduled = CompletableDeferred<AgentEvent.RetryScheduled>()
         val collection = launch {
             try {
-                runner.run(request(sessionId)).collect(observed::add)
+                runner.run(request(sessionId)).collect { event ->
+                    if (event is AgentEvent.RetryScheduled) retryScheduled.complete(event)
+                }
             } catch (_: CancellationException) {
                 // The interruption deliberately cancels the scheduled retry backoff.
             }
         }
 
         retryPolicy.backoffStarted.await()
-        assertTrue(observed.any { it is AgentEvent.RetryScheduled })
+        assertEquals(sessionId, retryScheduled.await().sessionId)
         assertNull(persistence.load(sessionId)?.checkpoint?.cursor?.provider?.pending)
 
         runner.interrupt(sessionId)

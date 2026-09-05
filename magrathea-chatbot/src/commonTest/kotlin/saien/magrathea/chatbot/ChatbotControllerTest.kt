@@ -3,7 +3,9 @@ package saien.magrathea.chatbot
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
@@ -37,6 +39,51 @@ import saien.magrathea.runtime.InMemoryAgentPersistence
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatbotControllerTest {
+    @Test
+    fun sendingAfterCompletionWaitsForThePreviousCollectorToSettle() = runTest {
+        val cleanupStarted = CompletableDeferred<Unit>()
+        val releaseCleanup = CompletableDeferred<Unit>()
+        var cleanupCount = 0
+        val runner = ScriptedAgentRunner(
+            runScript = { request ->
+                listOf(
+                    AgentEvent.Completed(
+                        request.sessionId,
+                        AgentStateSnapshot(messages = request.messages, status = AgentStatus.COMPLETED),
+                    ),
+                )
+            },
+            afterRun = {
+                if (cleanupCount++ == 0) {
+                    cleanupStarted.complete(Unit)
+                    releaseCleanup.await()
+                }
+            },
+        )
+        val fixture = ManagedChatbotControllerFixture.create(runner = runner, scope = this)
+        try {
+            fixture.controller.sendMessage("first")
+            cleanupStarted.await()
+            runCurrent()
+            assertEquals(ChatbotStatus.COMPLETED, fixture.controller.state.value.status)
+
+            val nextSend = async { runCatching { fixture.controller.sendMessage("second") } }
+            runCurrent()
+            val waitedForCleanup = !nextSend.isCompleted
+            releaseCleanup.complete(Unit)
+            nextSend.await().getOrThrow()
+            advanceUntilIdle()
+
+            assertTrue(waitedForCleanup)
+            assertEquals(2, runner.requests.size)
+            assertEquals(listOf("first", "second"), runner.requests.last().messages.map { it.text() })
+            assertTrue(runner.cancelled.isEmpty())
+        } finally {
+            releaseCleanup.complete(Unit)
+            fixture.close()
+        }
+    }
+
     @Test
     fun sendMessageShouldBuildRequestAndReduceCompletedState() = runTest {
         val runner = ScriptedAgentRunner(runScript = { request ->
@@ -300,6 +347,7 @@ class ChatbotControllerTest {
         private val suspendAfterRunScript: Boolean = false,
         private val recoveryState: AgentStateSnapshot? = null,
         private val persistence: InMemoryAgentPersistence? = null,
+        private val afterRun: suspend () -> Unit = {},
     ) : TestAgentRunner() {
         val requests = mutableListOf<AgentRequest>()
         val cancelled = mutableListOf<AgentSessionId>()
@@ -314,6 +362,7 @@ class ChatbotControllerTest {
                 if (suspendAfterRunScript) awaitCancellation()
             } finally {
                 activeJobs.remove(request.sessionId)
+                afterRun()
             }
         }
 

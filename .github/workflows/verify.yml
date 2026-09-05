@@ -2,7 +2,6 @@ name: Verify Magrathea SDK
 
 on:
   pull_request:
-  workflow_dispatch:
   push:
     branches: [main]
     paths:
@@ -29,10 +28,6 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          if [ -z "$BASE_SHA" ]; then
-            git fetch --no-tags origin main
-            BASE_SHA=$(git rev-parse origin/main)
-          fi
           if [ -n "$BASE_SHA" ] && git cat-file -e "${BASE_SHA}:persistence/schema-ledger.json" 2>/dev/null; then
             git show "${BASE_SHA}:persistence/schema-ledger.json" > "$RUNNER_TEMP/persistence-schema-baseline.json"
             python3 scripts/verify_persistence_schemas.py \

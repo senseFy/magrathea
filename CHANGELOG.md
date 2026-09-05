@@ -5,6 +5,26 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## [0.1.0-alpha.11](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.9...v0.1.0-alpha.11) (2026-09-05)
+
+
+### Features
+
+* automate SDK releases through Release Please ([9844198](https://github.com/senseFy/magrathea/commit/98441988836e1f6d4281b28971dc0f1552bab966))
+* Removed the debug recorder API and per-chunk debug path. Provider spans contain fixed incremental request summaries, first-text timing and typed failures without retaining message histories. Execution outcomes distinguish completed, failed, cancelled, interrupted and recovery blocked. ([9844198](https://github.com/senseFy/magrathea/commit/98441988836e1f6d4281b28971dc0f1552bab966))
+* Runtime propagates direct and wrapped fatal errors to the host instead of converting them into Agent failures, retries, or fail-open results. Ordinary exceptions retain their typed failure behavior, while cancellation remains cooperative control flow, including in tracing integrations. ([9844198](https://github.com/senseFy/magrathea/commit/98441988836e1f6d4281b28971dc0f1552bab966))
+* Trace recording now bounds active spans, admission rate, attributes, events and retained text at construction. Completed handles release their event/attribute graphs; sink cancellation and direct or wrapped fatal errors propagate. ([9844198](https://github.com/senseFy/magrathea/commit/98441988836e1f6d4281b28971dc0f1552bab966))
+
+
+### Bug Fixes
+
+* Chatbot follow-up sends and regenerations wait for prior execution cleanup after a terminal update instead of intermittently failing with `BUSY`.
+* Failed managed-session shutdown prevents destructive persistence deletion or clearing; manager close still attempts every independent cleanup and replays the same result to later callers. ([9844198](https://github.com/senseFy/magrathea/commit/98441988836e1f6d4281b28971dc0f1552bab966))
+* Managed sessions no longer remain falsely active after a fatal error or cancellation ends their collector without a terminal event. Late `ACTIVE` recovery observations cannot revive a settled execution or prevent its cleanup. ([9844198](https://github.com/senseFy/magrathea/commit/98441988836e1f6d4281b28971dc0f1552bab966))
+* Presentation-only session events no longer discard otherwise valid recovery observations; changes to execution results still invalidate older observations even if their values later match. ([9844198](https://github.com/senseFy/magrathea/commit/98441988836e1f6d4281b28971dc0f1552bab966))
+* Tool permit release and Runtime cleanup failures no longer mask an earlier fatal error or cancellation. Independent cleanup steps are attempted, with fatal failures taking priority and other failures preserved as suppressed context. ([9844198](https://github.com/senseFy/magrathea/commit/98441988836e1f6d4281b28971dc0f1552bab966))
+* Unavailable or inconsistent managed-session recovery reads block fresh execution instead of treating an existing checkpoint as absent. Hosts can retry `inspectRecovery` or explicitly cancel; failed cancellation commits also keep pending recovery fenced until it can be resolved. ([9844198](https://github.com/senseFy/magrathea/commit/98441988836e1f6d4281b28971dc0f1552bab966))
+
 ## 0.1.0-alpha.10 — 2026-09-05
 
 Not published. Candidate verification failed before publication; its reviewed changes are carried

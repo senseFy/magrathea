@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-`0.1.0-alpha.9` receives best-effort fixes while it is the latest Alpha. It does not carry a <!-- x-release-please-version -->
+`0.1.0-alpha.11` receives best-effort fixes while it is the latest Alpha. It does not carry a <!-- x-release-please-version -->
 security SLA or production certification. Reports are evaluated against both the latest release
 and the current `main` branch.
 
