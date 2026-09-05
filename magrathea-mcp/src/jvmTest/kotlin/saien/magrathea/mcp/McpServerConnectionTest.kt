@@ -2,12 +2,15 @@
 
 package saien.magrathea.mcp
 
-import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+import io.modelcontextprotocol.kotlin.sdk.server.ServerSession
 import io.modelcontextprotocol.kotlin.sdk.testing.ChannelTransport
+import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.ListToolsRequest
 import io.modelcontextprotocol.kotlin.sdk.types.ListToolsResult
+import io.modelcontextprotocol.kotlin.sdk.types.Method
 import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
 import io.modelcontextprotocol.kotlin.sdk.types.TaskSupport
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
@@ -117,9 +120,10 @@ class McpServerConnectionTest {
     fun discoversCallsAndRefreshesOfficialMcpTools() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val linked = ChannelTransport.createLinkedPair(dispatcher = dispatcher)
-        val server = testServer()
-        val serverSession = async {
-            server.createSession(linked.serverTransport)
+        val tools = fixtureTools().toMutableList()
+        val server = testServer(tools)
+        val serverStarted = async {
+            server.connect(linked.serverTransport)
         }
         var enabledTools = setOf("echo")
         val connection = McpServerConnection(
@@ -139,7 +143,7 @@ class McpServerConnectionTest {
 
         try {
             connection.connect()
-            val connectedServerSession = serverSession.await()
+            serverStarted.await()
 
             val connected = assertIs<McpConnectionState.Connected>(connection.state.value)
             assertEquals("fixture-server", connected.server.name)
@@ -182,8 +186,7 @@ class McpServerConnectionTest {
                 result.origin,
             )
 
-            server.removeTool("echo")
-            server.addTool(
+            tools[0] = Tool(
                 name = "echo",
                 description = "Changed contract",
                 inputSchema = ToolSchema(
@@ -191,10 +194,8 @@ class McpServerConnectionTest {
                         put("replacement", buildJsonObject { put("type", "string") })
                     },
                 ),
-            ) {
-                CallToolResult(content = listOf(TextContent("replacement")))
-            }
-            connectedServerSession.sendToolListChanged()
+            )
+            server.sendToolListChanged()
             testScheduler.advanceUntilIdle()
             assertEquals(
                 "Changed contract",
@@ -220,19 +221,21 @@ class McpServerConnectionTest {
             }
 
             enabledTools = setOf("echo", "later")
-            server.addTool(
+            tools += Tool(
                 name = "later",
                 description = "Added after initialization",
-            ) {
-                CallToolResult(content = listOf(TextContent("later")))
-            }
-            connectedServerSession.sendToolListChanged()
+                inputSchema = ToolSchema(),
+            )
+            server.sendToolListChanged()
             testScheduler.advanceUntilIdle()
             assertTrue(connection.tools.value.any { it.remoteName == "later" })
             assertTrue(connection.definitions().any { it.name.endsWith("__later") })
         } finally {
-            connection.close()
-            server.close()
+            try {
+                server.close()
+            } finally {
+                connection.close()
+            }
         }
     }
 
@@ -241,7 +244,7 @@ class McpServerConnectionTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val linked = ChannelTransport.createLinkedPair(dispatcher = dispatcher)
         val server = testServer()
-        val serverSession = async { server.createSession(linked.serverTransport) }
+        val serverStarted = async { server.connect(linked.serverTransport) }
         val connection = McpServerConnection(
             server = McpServer("refresh", "Refresh failure"),
             transportFactory = McpTransportFactory {
@@ -253,7 +256,7 @@ class McpServerConnectionTest {
 
         try {
             connection.connect()
-            serverSession.await()
+            serverStarted.await()
             assertTrue(connection.tools.value.isNotEmpty())
 
             server.close()
@@ -262,8 +265,11 @@ class McpServerConnectionTest {
             assertTrue(connection.tools.value.isEmpty())
             assertIs<McpConnectionState.Failed>(connection.state.value)
         } finally {
-            connection.close()
-            server.close()
+            try {
+                server.close()
+            } finally {
+                connection.close()
+            }
         }
     }
 
@@ -271,19 +277,14 @@ class McpServerConnectionTest {
     fun rejectsToolResultsAboveTheConnectionLimit() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val linked = ChannelTransport.createLinkedPair(dispatcher = dispatcher)
-        val server = Server(
-            serverInfo = Implementation("large-result", "1.0.0"),
-            options = ServerOptions(
-                capabilities = ServerCapabilities(
-                    tools = ServerCapabilities.Tools(),
-                ),
+        val server = testServer(
+            tools = listOf(
+                Tool(name = "large", description = "Returns too much data", inputSchema = ToolSchema()),
             ),
-        ).apply {
-            addTool(name = "large", description = "Returns too much data") {
-                CallToolResult(content = listOf(TextContent("x".repeat(512))))
-            }
+        ) {
+            CallToolResult(content = listOf(TextContent("x".repeat(512))))
         }
-        val serverSession = async { server.createSession(linked.serverTransport) }
+        val serverStarted = async { server.connect(linked.serverTransport) }
         val connection = McpServerConnection(
             server = McpServer("limits", "Limits"),
             transportFactory = McpTransportFactory {
@@ -298,7 +299,7 @@ class McpServerConnectionTest {
 
         try {
             connection.connect()
-            serverSession.await()
+            serverStarted.await()
             val definition = connection.definitions().single()
             val executor = assertNotNull(connection.find(definition.name))
 
@@ -321,8 +322,11 @@ class McpServerConnectionTest {
                 )
             }
         } finally {
-            connection.close()
-            server.close()
+            try {
+                server.close()
+            } finally {
+                connection.close()
+            }
         }
     }
 
@@ -331,7 +335,7 @@ class McpServerConnectionTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val linked = ChannelTransport.createLinkedPair(dispatcher = dispatcher)
         val server = testServer()
-        val serverSession = async { server.createSession(linked.serverTransport) }
+        val serverStarted = async { server.connect(linked.serverTransport) }
         val connection = McpServerConnection(
             server = McpServer("safe", "Safe default"),
             transportFactory = McpTransportFactory {
@@ -342,23 +346,47 @@ class McpServerConnectionTest {
 
         try {
             connection.connect()
-            serverSession.await()
+            serverStarted.await()
             assertTrue(connection.definitions().single { it.name.endsWith("__echo") }.requiresApproval)
         } finally {
-            connection.close()
-            server.close()
+            try {
+                server.close()
+            } finally {
+                connection.close()
+            }
         }
     }
 
-    private fun testServer(): Server = Server(
+    // Use the protocol session directly so notifications share the transport's test scheduler.
+    private fun testServer(
+        tools: List<Tool> = fixtureTools(),
+        callTool: (CallToolRequest) -> CallToolResult = { request ->
+            val value = request.arguments?.get("value")?.jsonPrimitive?.content.orEmpty()
+            CallToolResult(
+                content = listOf(TextContent("Echo: $value")),
+                structuredContent = buildJsonObject { put("echo", value) },
+            )
+        },
+    ): ServerSession = ServerSession(
         serverInfo = Implementation("fixture-server", "1.0.0", title = "Fixture server"),
         options = ServerOptions(
             capabilities = ServerCapabilities(
                 tools = ServerCapabilities.Tools(listChanged = true),
             ),
         ),
+        instructions = null,
     ).apply {
-        addTool(
+        setRequestHandler<ListToolsRequest>(Method.Defined.ToolsList) { _, _ ->
+            ListToolsResult(tools.toList())
+        }
+        setRequestHandler<CallToolRequest>(Method.Defined.ToolsCall) { request, _ ->
+            check(tools.any { it.name == request.params.name }) { "Unknown fixture tool" }
+            callTool(request)
+        }
+    }
+
+    private fun fixtureTools(): List<Tool> = listOf(
+        Tool(
             name = "echo",
             description = "Echo one value",
             inputSchema = ToolSchema(
@@ -372,21 +400,14 @@ class McpServerConnectionTest {
                 },
                 required = listOf("value"),
             ),
-        ) { request ->
-            val value = request.arguments?.get("value")?.jsonPrimitive?.content.orEmpty()
-            CallToolResult(
-                content = listOf(TextContent("Echo: $value")),
-                structuredContent = buildJsonObject { put("echo", value) },
-            )
-        }
-        addTool(
+        ),
+        Tool(
             name = "task-only",
             description = "Requires MCP Tasks",
+            inputSchema = ToolSchema(),
             execution = ToolExecution(TaskSupport.Required),
-        ) {
-            CallToolResult(content = listOf(TextContent("task")))
-        }
-    }
+        ),
+    )
 }
 
 private fun kotlinx.serialization.json.JsonElement.jsonObjectValue(name: String) =
