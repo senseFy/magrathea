@@ -4,9 +4,10 @@
 
 1. Merge changes into `main` using Conventional Commits (`feat:`, `fix:`, and `!` or
    `BREAKING CHANGE` for incompatible contracts). Release Please maintains one Release PR for the SDK.
-2. Review its version, `CHANGELOG.md`, compatibility notes, and CI results. Merge the Release PR
-   when ready; this authorizes publication. If editing the changelog manually, review it again after
-   any bot refresh, which may regenerate the entry.
+2. Review its version, `CHANGELOG.md`, and compatibility notes. If GitHub shows
+   **Approve workflows to run**, approve the bot PR checks. After CI passes, merge the Release PR;
+   this authorizes publication. If editing the changelog manually, review it again after any bot
+   refresh, which may regenerate the entry.
 3. Follow **Verify Magrathea SDK**, then **Release Magrathea SDK**, in GitHub Actions. The GitHub
    Release appears after signed Maven artifacts and an isolated remote consumer are verified.
 
@@ -54,8 +55,8 @@ can pin a previous verified version while a forward fix is prepared.
 ## Repository setup
 
 Enable Actions to create pull requests, and require `linux-gate`, `web-gate`, and both `apple-gate`
-checks before merging. The bot uses `GITHUB_TOKEN` and explicitly dispatches PR verification; no
-additional long-lived token is needed. Keep `MAGRATHEA_SIGNING_KEY` and
+checks before merging. The bot uses `GITHUB_TOKEN`; GitHub may require a maintainer to approve
+its PR workflows. No additional long-lived token is needed. Keep `MAGRATHEA_SIGNING_KEY` and
 `MAGRATHEA_SIGNING_PASSWORD` as repository secrets. Only candidate preparation receives them.
 
 The release retains the bundle/checksum, coordinate inventory, Maven manifest, SBOM, license report,

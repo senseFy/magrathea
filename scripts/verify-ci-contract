@@ -415,8 +415,8 @@ fail_contract("GitHub Release job has unexpected permissions") unless
 fail_contract("Release Please must only maintain PRs") unless
   all_steps(please).any? { |step| step["uses"]&.start_with?("googleapis/release-please-action@") &&
     step.dig("with", "skip-github-release") == true }
-fail_contract("bot PR verification must be explicitly dispatched") unless
-  triggers(verify).key?("workflow_dispatch") && run_commands(please).include?("gh workflow run verify.yml")
+fail_contract("Release PRs must use native PR checks without a duplicate dispatch") unless
+  triggers(verify).key?("pull_request") && !run_commands(please).include?("gh workflow run verify.yml")
 fail_contract("publication request must follow the complete matrix on a main push") unless
   verify.dig("jobs", "publish", "if") == "github.event_name == 'push'" &&
     Array(verify.dig("jobs", "publish", "needs")).sort == %w[apple-gate linux-gate web-gate] &&
