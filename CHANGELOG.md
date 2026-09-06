@@ -5,6 +5,13 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## [0.1.0-alpha.12](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.11...v0.1.0-alpha.12) (2026-09-06)
+
+
+### Bug Fixes
+
+* simplify Responses parsing and preserve protocol diagnostics ([#10](https://github.com/senseFy/magrathea/issues/10)) ([7209aca](https://github.com/senseFy/magrathea/commit/7209aca83ba1438d742e8f2d4b9999955e0e4808))
+
 ## [0.1.0-alpha.11](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.9...v0.1.0-alpha.11) (2026-09-05)
 
 
