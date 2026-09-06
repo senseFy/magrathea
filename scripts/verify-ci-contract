@@ -140,9 +140,53 @@ fail_contract("verify.yml must limit main pushes to release version changes") un
     verify_push.keys.sort == %w[branches paths] &&
     Array(verify_push["branches"]) == ["main"] &&
     Array(verify_push["paths"]) == ["gradle.properties"]
-%w[linux-gate apple-gate web-gate dependency-review].each do |job|
+%w[ci-plan linux-gate apple-gate web-gate dependency-review ci-evidence publish].each do |job|
   fail_contract("verify.yml missing #{job}") unless verify.fetch("jobs", {}).key?(job)
 end
+verify_jobs = verify.fetch("jobs")
+cache_plan = verify_jobs.fetch("ci-plan").fetch("steps").find { |step| step["id"] == "cache" }
+fail_contract("cache discovery must be optional and bounded independently of CI authorization") unless
+  cache_plan && cache_plan["continue-on-error"] == true && cache_plan["timeout-minutes"] == 2 &&
+    cache_plan.dig("env", "BASE_SHA") == '${{ github.event.pull_request.base.sha || github.event.before }}'
+%w[linux-gate apple-gate web-gate].each do |name|
+  job = verify_jobs.fetch(name)
+  fail_contract("#{name} must run unless content reuse is verified") unless
+    job["needs"] == "ci-plan" && job["if"] == "always() && !cancelled() && needs.ci-plan.outputs.reuse != 'true'"
+  guard = job.fetch("steps").first
+  fail_contract("#{name} must fail when the plan failed, not silently pass required checks") unless
+    guard["if"] == "needs.ci-plan.result != 'success'" && guard["run"] == "exit 1"
+  cache_steps = job.fetch("steps").select { |step| step["uses"] == './.github/actions/gradle-cache' }
+  fail_contract("#{name} must restore and save optional task caches with read-only Actions access") unless
+    cache_steps.map { |step| step.dig("with", "mode") } == %w[restore save] &&
+    cache_steps.all? { |step| step["continue-on-error"] == true && step["timeout-minutes"] == 3 } &&
+    job.dig("permissions", "actions") == "read"
+  restore = cache_steps.first.fetch("with")
+  fail_contract("#{name} must restore only the planned source run and attempt") unless
+    restore["run-id"] == '${{ needs.ci-plan.outputs.cache_run }}' &&
+    restore["attempt"] == '${{ needs.ci-plan.outputs.cache_attempt }}'
+end
+fail_contract("CI must pin every checkout to its actual workflow commit") unless
+  all_steps(verify).select { |step| step["uses"]&.start_with?("actions/checkout@") }
+    .all? { |step| step.dig("with", "ref") == '${{ github.sha }}' }
+evidence = verify_jobs.fetch("ci-evidence")
+fail_contract("CI evidence requires all platform gates and cannot describe reused checks") unless
+  Array(evidence["needs"]).sort == %w[ci-plan linux-gate apple-gate web-gate].sort &&
+    evidence["if"].include?("needs.ci-plan.outputs.reuse != 'true'") &&
+    %w[linux-gate apple-gate web-gate].all? { |name| evidence["if"].include?("needs.#{name}.result == 'success'") }
+fail_contract("CI evidence must be immutable per attempt") unless
+  evidence.fetch("steps").any? { |step| step["uses"]&.start_with?("actions/upload-artifact@") &&
+    step.dig("with", "name") == 'magrathea-ci-${{ github.run_attempt }}' &&
+    step.dig("with", "retention-days") == 90 }
+publish_condition = verify_jobs.fetch("publish").fetch("if")
+fail_contract("Publication requires either verified reuse or complete fresh evidence") unless
+  publish_condition.include?("needs.ci-plan.result == 'success'") &&
+    publish_condition.include?("needs.ci-plan.outputs.reuse == 'true'") &&
+    %w[linux-gate apple-gate web-gate ci-evidence].all? { |name|
+      publish_condition.include?("needs.#{name}.result == 'success'") }
+request_step = verify_jobs.fetch("publish").fetch("steps").find { |step| step["run"]&.include?("scripts/release request") }
+fail_contract("fresh verification must use the current attempt after a partial rerun") unless
+  request_step&.dig("env", "CI_RUN_ID") == '${{ needs.ci-plan.outputs.ci_run || github.run_id }}' &&
+    request_step&.dig("env", "CI_RUN_ATTEMPT") == '${{ needs.ci-plan.outputs.ci_attempt || github.run_attempt }}'
 fail_contract("verify.yml missing pinned dependency review action") unless
   action_uses(verify).any? { |action| action.start_with?("actions/dependency-review-action@") && pinned_action(action) }
 required_apple_tasks = %w[
@@ -195,7 +239,7 @@ release_inputs = triggers(release).dig("workflow_dispatch", "inputs") || {}
 version_input = release_inputs["version"]
 commit_input = release_inputs["commit"]
 fail_contract("release.yml must require explicit version and commit inputs") unless
-  release_inputs.keys.sort == %w[ci_run commit pull_request version] &&
+  release_inputs.keys.sort == %w[ci_attempt ci_run commit pull_request version] &&
     version_input.is_a?(Hash) &&
     version_input["required"] == true &&
     version_input["type"] == "string" &&
@@ -209,7 +253,7 @@ end
 release_runs = run_commands(release)
 authorization = all_steps(release).find { |step| step["run"]&.include?("scripts/release validate") }
 fail_contract("release.yml must bind publication to its Release PR, commit, and CI run") unless
-  authorization && %w[--version --commit --pull-request --ci-run --run-id].all? { |arg| authorization["run"].include?(arg) }
+  authorization && %w[--version --commit --pull-request --ci-run --ci-attempt --run-id].all? { |arg| authorization["run"].include?(arg) }
 fail_contract("release.yml must check out the authorized commit") unless
   all_steps(release).first.dig("with", "ref") == '${{ inputs.commit }}'
 fail_contract("release.yml must restore the original candidate on repeated preparation") unless
@@ -220,6 +264,15 @@ release_preparation = all_steps(release).find do |step|
     step["run"]&.include?("--prepare-only") &&
     step["run"]&.include?("--verified-ci-run")
 end
+candidate_steps = release.dig("jobs", "release-candidate", "steps")
+cache_restore = candidate_steps.find { |step| step["uses"] == './.github/actions/gradle-cache' }
+fail_contract("release task cache must follow authorization and remain optional on fresh preparation") unless
+  cache_restore && candidate_steps.index(authorization) < candidate_steps.index(cache_restore) &&
+    candidate_steps.index(cache_restore) < candidate_steps.index(release_preparation) &&
+    cache_restore["if"] == "steps.release.outputs.candidate_exists != 'true'" &&
+    cache_restore["continue-on-error"] == true && cache_restore["timeout-minutes"] == 3 &&
+    cache_restore.dig("with", "run-id") == '${{ inputs.ci_run }}' &&
+    cache_restore.dig("with", "attempt") == '${{ inputs.ci_attempt }}'
 fail_contract("release.yml must exercise the exact side-effect-free release preparation path") unless
   release_preparation
 fail_contract("release.yml preparation must have a bounded step timeout") unless
@@ -230,6 +283,13 @@ fail_contract("release.yml must emit five-minute preparation heartbeats") unless
 fail_contract("release.yml preparation must receive repository signing material") unless
   release_preparation.dig("env", "MAGRATHEA_SIGNING_KEY")&.include?("secrets.MAGRATHEA_SIGNING_KEY") &&
     release_preparation.dig("env", "MAGRATHEA_SIGNING_PASSWORD")&.include?("secrets.MAGRATHEA_SIGNING_PASSWORD")
+fail_contract("release.yml must retain the tested commit, file tree and pinned CI attempt") unless
+  release_preparation.dig("env", "VERIFIED_CI_RUN_ATTEMPT") == '${{ inputs.ci_attempt }}' &&
+    release_preparation.dig("env", "VERIFIED_CI_COMMIT") == '${{ steps.release.outputs.ci_commit }}' &&
+    release_preparation.dig("env", "VERIFIED_CI_TREE") == '${{ steps.release.outputs.ci_tree }}'
+fail_contract("restored candidates must match the original CI authorization") unless
+  release.dig("jobs", "release-candidate", "env", "EXPECTED_CI_RUN_ID") == '${{ inputs.ci_run }}' &&
+    release.dig("jobs", "release-candidate", "env", "EXPECTED_CI_RUN_ATTEMPT") == '${{ inputs.ci_attempt }}'
 fail_contract("release.yml must retain preparation failure diagnostics") unless
   retains_failure_diagnostics?(release)
 fail_contract("release preparation must skip SDK assembly when a candidate exists") unless
@@ -255,7 +315,7 @@ fail_contract("release.yml must attest the outer candidate exactly once") unless
     step["uses"]&.start_with?("actions/attest-build-provenance@") &&
       step.dig("with", "subject-path")&.include?("release-candidate.zip")
   }
-fail_contract("release.yml must not boot a simulator after exact-SHA CI") if
+fail_contract("release.yml must not boot a simulator after verified CI") if
   release_runs.include?("simctl")
 fail_contract("release.yml must not promote a candidate from another workflow run") if
   release_runs.include?("CANDIDATE_RUN_ID") || release.to_s.include?("promoted-candidate")
@@ -360,6 +420,7 @@ fail_contract("release.yml must fetch full source history") unless
       uses.any? { |action| action.start_with?("gradle/actions/wrapper-validation@") && pinned_action(action) }
   end
   uses.each do |action|
+    next if action == './.github/actions/gradle-cache'
     repository, ref = action.split("@", 2)
     fail_contract("#{File.basename(path)} uses an unreviewed action #{repository}") unless ACTION_PINS.key?(repository)
     fail_contract("#{File.basename(path)} action #{repository} is not pinned to a 40-character commit") unless
@@ -368,6 +429,20 @@ fail_contract("release.yml must fetch full source history") unless
       pinned_action(action)
   end
 end
+
+cache_action = YAML.safe_load(File.read(File.join(root, '.github/actions/gradle-cache/action.yml')))
+fail_contract("task cache action must be composite") unless cache_action.dig("runs", "using") == "composite"
+cache_steps = cache_action.fetch("runs").fetch("steps")
+cache_steps.map { |step| step["uses"] }.compact.each do |action|
+  fail_contract("task cache action uses an unreviewed dependency") unless pinned_action(action)
+end
+cache_download = cache_steps.find { |step| step["uses"]&.start_with?("actions/download-artifact@") }
+cache_upload = cache_steps.find { |step| step["uses"]&.start_with?("actions/upload-artifact@") }
+fail_contract("task caches must use selected immutable artifact IDs and bounded retention") unless
+  cache_download&.dig("with", "artifact-ids") == '${{ steps.select.outputs.ids }}' &&
+    cache_download.dig("with", "run-id") == '${{ inputs.run-id }}' &&
+    cache_upload&.dig("with", "retention-days") == 7 &&
+    cache_upload.dig("with", "name") == '${{ steps.snapshot.outputs.name }}'
 
 {
   verify_path => verify,
@@ -417,10 +492,10 @@ fail_contract("Release Please must only maintain PRs") unless
     step.dig("with", "skip-github-release") == true }
 fail_contract("Release PRs must use native PR checks without a duplicate dispatch") unless
   triggers(verify).key?("pull_request") && !run_commands(please).include?("gh workflow run verify.yml")
-fail_contract("publication request must follow the complete matrix on a main push") unless
-  verify.dig("jobs", "publish", "if") == "github.event_name == 'push'" &&
-    Array(verify.dig("jobs", "publish", "needs")).sort == %w[apple-gate linux-gate web-gate] &&
-    run_commands(verify).include?("scripts/release request")
+fail_contract("publication request must bind main to a verified CI run and attempt") unless
+  publish_condition.include?("github.event_name == 'push'") &&
+    Array(verify.dig("jobs", "publish", "needs")).sort == %w[apple-gate ci-evidence ci-plan linux-gate web-gate] &&
+    run_commands(verify).include?("scripts/release request") && run_commands(verify).include?("--ci-attempt")
 
 puts "MAGRATHEA_CI_CONTRACT_PASS workflows=4 release=single-run promotion=exact-byte shards=4"
 RUBY

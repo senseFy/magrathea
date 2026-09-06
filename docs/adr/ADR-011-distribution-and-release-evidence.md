@@ -21,8 +21,11 @@
   paths.
 - Remote Maven publication requires in-memory PGP signing and an immediate immutable-coordinate
   preflight. Repository credentials and signing material are environment-only.
-- Merging a reviewed Release Please PR authorizes publication after the exact merge commit
-  passes the complete CI gate. One version-and-commit-bound workflow builds and signs the Candidate once, verifies its provenance, receipt,
+- Merging a reviewed Release Please PR authorizes publication after complete platform verification
+  of its file tree. The final commit may reuse that PR's successful CI evidence when the actual
+  tested checkout has the same tree; otherwise it runs the complete gate. CI evidence binds the
+  tested commit, tree, run, and attempt. One version-and-commit-bound workflow builds and signs
+  the Candidate once, verifies its provenance, receipt,
   signatures, coordinate inventory, and file manifest, then creates the annotated tag and promotes
   those exact bytes without rebuilding.
 - Maven promotion uses disjoint logical-module shards. New versions receive one global absence

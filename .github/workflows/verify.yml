@@ -15,14 +15,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  linux-gate:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  ci-plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      reuse: ${{ steps.plan.outputs.reuse }}
+      ci_run: ${{ steps.plan.outputs.ci_run }}
+      ci_attempt: ${{ steps.plan.outputs.ci_attempt }}
+      cache_run: ${{ steps.cache.outputs.cache_run }}
+      cache_attempt: ${{ steps.cache.outputs.cache_attempt }}
     steps:
-      - name: Check out source
+      - name: Check out the workflow commit
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
+          ref: ${{ github.sha }}
 
       - name: Enforce append-only persistence schema history
         env:
@@ -36,6 +47,40 @@ jobs:
             python3 scripts/verify_persistence_schemas.py
           fi
 
+      - name: Find verified Release PR content
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/release ci-plan --commit "$GITHUB_SHA"
+
+      - name: Find optional task cache from the verified base
+        if: steps.plan.outputs.reuse != 'true'
+        id: cache
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: scripts/release cache-plan --commit "$BASE_SHA"
+
+  linux-gate:
+    needs: ci-plan
+    if: always() && !cancelled() && needs.ci-plan.outputs.reuse != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Require a successful verification plan
+        if: needs.ci-plan.result != 'success'
+        run: exit 1
+      - name: Check out source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
       - name: Validate Gradle Wrapper
         uses: gradle/actions/wrapper-validation@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
 
@@ -47,6 +92,16 @@ jobs:
 
       - name: Set up Gradle build cache
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Restore verified Gradle task outputs
+        uses: ./.github/actions/gradle-cache
+        continue-on-error: true
+        timeout-minutes: 3
+        with:
+          mode: restore
+          run-id: ${{ needs.ci-plan.outputs.cache_run }}
+          attempt: ${{ needs.ci-plan.outputs.cache_attempt }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up release tooling
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -61,9 +116,22 @@ jobs:
       - name: Run JVM and Android SDK gate
         run: ./gradlew verifySdkLinux --no-daemon --stacktrace
 
+      - name: Save successful Gradle task outputs
+        uses: ./.github/actions/gradle-cache
+        continue-on-error: true
+        timeout-minutes: 3
+        with:
+          mode: save
+          gate: linux-gate
+
   apple-gate:
+    needs: ci-plan
+    if: always() && !cancelled() && needs.ci-plan.outputs.reuse != 'true'
     runs-on: macos-15
     timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -76,8 +144,13 @@ jobs:
             boot_simulator: true
     name: apple-gate (${{ matrix.name }})
     steps:
+      - name: Require a successful verification plan
+        if: needs.ci-plan.result != 'success'
+        run: exit 1
       - name: Check out source
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.sha }}
 
       - name: Validate Gradle Wrapper
         uses: gradle/actions/wrapper-validation@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
@@ -90,6 +163,16 @@ jobs:
 
       - name: Set up Gradle build cache
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Restore verified Gradle task outputs
+        uses: ./.github/actions/gradle-cache
+        continue-on-error: true
+        timeout-minutes: 3
+        with:
+          mode: restore
+          run-id: ${{ needs.ci-plan.outputs.cache_run }}
+          attempt: ${{ needs.ci-plan.outputs.cache_attempt }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Boot an available iOS Simulator
         if: matrix.boot_simulator
@@ -104,12 +187,30 @@ jobs:
       - name: Run ${{ matrix.name }} Apple gate
         run: ./gradlew ${{ matrix.gradle_task }} --no-daemon --stacktrace
 
+      - name: Save successful Gradle task outputs
+        uses: ./.github/actions/gradle-cache
+        continue-on-error: true
+        timeout-minutes: 3
+        with:
+          mode: save
+          gate: apple-gate (${{ matrix.name }})
+
   web-gate:
+    needs: ci-plan
+    if: always() && !cancelled() && needs.ci-plan.outputs.reuse != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    permissions:
+      contents: read
+      actions: read
     steps:
+      - name: Require a successful verification plan
+        if: needs.ci-plan.result != 'success'
+        run: exit 1
       - name: Check out source
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.sha }}
 
       - name: Validate Gradle Wrapper
         uses: gradle/actions/wrapper-validation@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
@@ -123,6 +224,16 @@ jobs:
       - name: Set up Gradle build cache
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
 
+      - name: Restore verified Gradle task outputs
+        uses: ./.github/actions/gradle-cache
+        continue-on-error: true
+        timeout-minutes: 3
+        with:
+          mode: restore
+          run-id: ${{ needs.ci-plan.outputs.cache_run }}
+          attempt: ${{ needs.ci-plan.outputs.cache_attempt }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install pinned browser matrix
         working-directory: tooling/web-browser-e2e
         run: |
@@ -131,6 +242,14 @@ jobs:
 
       - name: Run JS, Wasm, Gateway, and package gates
         run: ./gradlew verifySdkWeb --no-daemon --stacktrace
+
+      - name: Save successful Gradle task outputs
+        uses: ./.github/actions/gradle-cache
+        continue-on-error: true
+        timeout-minutes: 3
+        with:
+          mode: save
+          gate: web-gate
 
       - name: Retain Web gate failure diagnostics
         if: failure()
@@ -155,22 +274,58 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.sha }}
 
       - name: Review dependency changes
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
 
+  ci-evidence:
+    needs: [ci-plan, linux-gate, apple-gate, web-gate]
+    if: >-
+      always() && !cancelled() && needs.ci-plan.result == 'success' &&
+      needs.ci-plan.outputs.reuse != 'true' &&
+      needs.linux-gate.result == 'success' && needs.apple-gate.result == 'success' &&
+      needs.web-gate.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out the tested commit
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.sha }}
+      - name: Record the tested checkout
+        run: scripts/release ci-record --output ci-evidence/verification.json
+      - name: Retain verification evidence for this attempt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: magrathea-ci-${{ github.run_attempt }}
+          path: ci-evidence/verification.json
+          if-no-files-found: error
+          retention-days: 90
+
   publish:
-    if: github.event_name == 'push'
-    needs: [linux-gate, apple-gate, web-gate]
+    if: >-
+      always() && !cancelled() && github.event_name == 'push' && needs.ci-plan.result == 'success' &&
+      (needs.ci-plan.outputs.reuse == 'true' ||
+       (needs.linux-gate.result == 'success' && needs.apple-gate.result == 'success' &&
+        needs.web-gate.result == 'success' && needs.ci-evidence.result == 'success'))
+    needs: [ci-plan, linux-gate, apple-gate, web-gate, ci-evidence]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: read
       actions: write
     steps:
-      - name: Check out the verified commit
+      - name: Check out the release commit
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.sha }}
       - name: Request publication of the merged Release PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: scripts/release request --commit "$GITHUB_SHA" --ci-run "$GITHUB_RUN_ID"
+          CI_RUN_ID: ${{ needs.ci-plan.outputs.ci_run || github.run_id }}
+          CI_RUN_ATTEMPT: ${{ needs.ci-plan.outputs.ci_attempt || github.run_attempt }}
+        run: |
+          scripts/release request --commit "$GITHUB_SHA" \
+            --ci-run "$CI_RUN_ID" --ci-attempt "$CI_RUN_ATTEMPT"

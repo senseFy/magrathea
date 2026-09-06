@@ -160,12 +160,15 @@ write_verification_receipt() {
   tmp_receipt="$(mktemp "$release_dir/.publish-verification.XXXXXX")"
   chmod 0600 "$tmp_receipt"
   printf '%s\n' \
-    "format=3" \
+    "format=4" \
     "head=$head" \
     "group=$PUBLISH_GROUP" \
     "version=$PUBLISH_VERSION" \
     "repository_url=$REPOSITORY_URL" \
     "ci_run_id=${VERIFIED_CI_RUN_ID:-none}" \
+    "ci_run_attempt=${VERIFIED_CI_RUN_ATTEMPT:-none}" \
+    "ci_commit=${VERIFIED_CI_COMMIT:-none}" \
+    "ci_tree=${VERIFIED_CI_TREE:-none}" \
     "modules_sha256=$modules_digest" \
     "release_public_key_sha256=$public_key_digest" \
     "coordinates_sha256=$coordinates_digest" \
@@ -323,7 +326,9 @@ Remote repository options:
   MAGRATHEA_PUBLISH_USERNAME    Maven repository username
   MAGRATHEA_PUBLISH_PASSWORD    Maven repository password/token
   --prepare-only                Verify and stage a remote release without publishing
-  --verified-ci-run RUN_ID      Use the release-only gate after an exact-SHA CI run
+  --verified-ci-run RUN_ID      Use CI evidence validated by the release workflow
+                               Requires VERIFIED_CI_RUN_ATTEMPT, VERIFIED_CI_COMMIT,
+                               and VERIFIED_CI_TREE in the environment
 
 Signing options for remote repositories:
   MAGRATHEA_SIGNING_KEY         ASCII-armored PGP private key
@@ -422,6 +427,16 @@ if [[ -n "$VERIFIED_CI_RUN_ID" ]]; then
   }
   [[ "$PREPARE_ONLY" == true ]] || {
     echo "--verified-ci-run is valid only with --prepare-only." >&2
+    exit 2
+  }
+  [[ "${VERIFIED_CI_RUN_ATTEMPT:-}" =~ ^[1-9][0-9]*$ &&
+    "${VERIFIED_CI_COMMIT:-}" =~ ^[0-9a-f]{40}$ &&
+    "${VERIFIED_CI_TREE:-}" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "Verified CI requires its attempt, tested commit and file tree." >&2
+    exit 2
+  }
+  [[ "$VERIFIED_CI_TREE" == "$(git -C "$ROOT_DIR" rev-parse 'HEAD^{tree}')" ]] || {
+    echo "Verified CI file tree differs from the publication checkout." >&2
     exit 2
   }
 fi

@@ -88,7 +88,7 @@ public_key="$ROOT_DIR/docs/release-signing-key.asc"
   -s "$bundle" && -s "$bundle_checksum" && -s "$public_key" ]] ||
   fail "candidate evidence set is incomplete"
 
-[[ "$(read_property format "$receipt")" == "3" ]] ||
+[[ "$(read_property format "$receipt")" == "4" ]] ||
   fail "candidate receipt format is unsupported"
 [[ "$(read_property head "$receipt")" == "$EXPECTED_COMMIT" ]] ||
   fail "candidate belongs to a different commit"
@@ -102,7 +102,18 @@ group_path="$(printf '%s' "$group" | tr '.' '/')"
   fail "candidate targets a different Maven repository"
 ci_run_id="$(read_property ci_run_id "$receipt")"
 [[ "$ci_run_id" =~ ^[1-9][0-9]*$ ]] ||
-  fail "candidate is not bound to an exact-SHA CI run"
+  fail "candidate is not bound to a CI run"
+ci_run_attempt="$(read_property ci_run_attempt "$receipt")"
+ci_commit="$(read_property ci_commit "$receipt")"
+ci_tree="$(read_property ci_tree "$receipt")"
+[[ "$ci_run_attempt" =~ ^[1-9][0-9]*$ && "$ci_commit" =~ ^[0-9a-f]{40}$ &&
+  "$ci_tree" =~ ^[0-9a-f]{40}$ ]] || fail "candidate CI binding is incomplete"
+[[ "$ci_tree" == "$(git -C "$ROOT_DIR" rev-parse "$EXPECTED_COMMIT^{tree}")" ]] ||
+  fail "candidate CI file tree differs from the release commit"
+[[ -z "${EXPECTED_CI_RUN_ID:-}" || "$ci_run_id" == "$EXPECTED_CI_RUN_ID" ]] ||
+  fail "candidate belongs to a different CI run"
+[[ -z "${EXPECTED_CI_RUN_ATTEMPT:-}" || "$ci_run_attempt" == "$EXPECTED_CI_RUN_ATTEMPT" ]] ||
+  fail "candidate belongs to a different CI attempt"
 [[ "$(read_property release_public_key_sha256 "$receipt")" == "$(sha256_file "$public_key")" ]] ||
   fail "candidate was built for a different release public key"
 [[ "$(read_property coordinates_sha256 "$receipt")" == "$(sha256_file "$coordinates")" ]] ||

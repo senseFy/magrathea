@@ -501,7 +501,7 @@ val verifyReleaseTagContract = tasks.register<Exec>("verifyReleaseTagContract") 
 val verifyReleaseAutomationContract = tasks.register<Exec>("verifyReleaseAutomationContract") {
     group = "verification"
     description = "Verify release metadata, authorization, and recovery without remote writes."
-    commandLine("python3", file("scripts/test_release.py").absolutePath)
+    commandLine("python3", "-m", "unittest", "discover", "-s", file("scripts").absolutePath, "-p", "test_*.py")
 }
 
 val normalizedSdkSbom = layout.buildDirectory.file("reports/supply-chain/magrathea-sbom.cdx.json")
@@ -1554,7 +1554,7 @@ val verifySdkReleaseBundle = tasks.register("verifySdkReleaseBundle") {
 
 tasks.register("prepareSdkRelease") {
     group = "distribution"
-    description = "Assemble and validate signed release evidence after the exact commit passed CI."
+    description = "Assemble and validate signed release evidence after the release file tree passed CI."
     dependsOn(verifySdkModuleClassification)
     dependsOn(verifySdkPublicationMetadata)
     dependsOn(verifySdkPublicationArtifactIsolation)

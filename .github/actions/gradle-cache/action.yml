@@ -1,0 +1,66 @@
+name: Gradle task cache
+description: Transfer optional task outputs from a pinned successful verification run
+inputs:
+  mode:
+    description: restore or save
+    required: true
+  run-id:
+    description: Successful source Verify run
+    default: ''
+  attempt:
+    description: Successful source attempt
+    default: ''
+  gate:
+    description: Current verification gate name when saving
+    default: ''
+  token:
+    description: Read-only Actions token when restoring
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Select immutable task cache snapshots
+      if: inputs.mode == 'restore' && inputs.run-id != ''
+      id: select
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        CACHE_RUN: ${{ inputs.run-id }}
+        CACHE_ATTEMPT: ${{ inputs.attempt }}
+      run: |
+        scripts/release cache-select --ci-run "$CACHE_RUN" --ci-attempt "$CACHE_ATTEMPT" \
+          --output "$RUNNER_TEMP/gradle-cache-selection.json"
+
+    - name: Download task cache snapshots
+      if: steps.select.outputs.ids != ''
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      with:
+        artifact-ids: ${{ steps.select.outputs.ids }}
+        run-id: ${{ inputs.run-id }}
+        github-token: ${{ inputs.token }}
+        path: ${{ runner.temp }}/gradle-cache-download
+
+    - name: Restore verified task outputs
+      if: steps.select.outputs.ids != ''
+      shell: bash
+      run: |
+        scripts/release cache-restore --selection "$RUNNER_TEMP/gradle-cache-selection.json" \
+          --directory "$RUNNER_TEMP/gradle-cache-download"
+
+    - name: Snapshot successful task outputs
+      if: inputs.mode == 'save'
+      id: snapshot
+      shell: bash
+      env:
+        CACHE_GATE: ${{ inputs.gate }}
+      run: scripts/release cache-export --gate "$CACHE_GATE" --output "$RUNNER_TEMP/gradle-cache-export"
+
+    - name: Retain task cache snapshot
+      if: steps.snapshot.outputs.available == 'true'
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ steps.snapshot.outputs.name }}
+        path: ${{ runner.temp }}/gradle-cache-export
+        compression-level: 0
+        retention-days: 7
+        if-no-files-found: error
