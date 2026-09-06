@@ -136,8 +136,7 @@ class OpenAiProviderAdapter(
                 OpenAiWireProtocol.RESPONSES -> OpenAiResponsesCodec(
                     providerKey = key,
                     model = request.model.model,
-                    json = json,
-                    dialectPolicy = profile.dialect.responsesPolicy(config.hasXSearch()),
+                    allowServerManagedTools = profile.dialect == OpenAiProtocolDialect.XAI && config.hasXSearch(),
                 )
                     .decodeNonStreaming(response.body)
                 OpenAiWireProtocol.CHAT_COMPLETIONS -> OpenAiChatCompletionsCodec(key, request.model.model)
@@ -155,13 +154,10 @@ class OpenAiProviderAdapter(
         config: OpenAiTransportConfig,
         protocol: OpenAiWireProtocol,
     ): Flow<ProviderChunk> = channelFlow {
-        val normalizer = OpenAiResponsesDialectNormalizer(profile.dialect, json)
-            .takeIf { protocol == OpenAiWireProtocol.RESPONSES }
         val responsesCodec = OpenAiResponsesCodec(
             providerKey = key,
             model = request.model.model,
-            json = json,
-            dialectPolicy = profile.dialect.responsesPolicy(config.hasXSearch()),
+            allowServerManagedTools = profile.dialect == OpenAiProtocolDialect.XAI && config.hasXSearch(),
         ).takeIf { protocol == OpenAiWireProtocol.RESPONSES }
         val chatCodec = OpenAiChatCompletionsCodec(key, request.model.model)
             .takeIf { protocol == OpenAiWireProtocol.CHAT_COMPLETIONS }
@@ -181,10 +177,9 @@ class OpenAiProviderAdapter(
                 is HttpStreamFrame.ServerSentEvent -> {
                     eventIndex += 1
                     val chunk = try {
-                        val normalized = normalizer?.normalize(frame.event, frame.data)
                         responsesCodec?.decodeServerSentEvent(
-                            normalized?.eventName ?: frame.event,
-                            normalized?.payload ?: frame.data,
+                            frame.event,
+                            frame.data,
                         ) ?: chatCodec?.decodeServerSentEvent(frame.event, frame.data)
                     } catch (failure: ProviderProtocolException) {
                         throw failure.withOpenAiDiagnosticContext(

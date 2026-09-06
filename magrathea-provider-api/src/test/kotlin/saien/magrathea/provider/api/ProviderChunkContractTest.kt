@@ -214,6 +214,19 @@ class ProviderChunkContractTest {
     }
 
     @Test
+    fun emptyTextBlockDoesNotOverwriteThePreviousFinalBlock() {
+        val message = requireNotNull(ProviderEventAssembler().apply(null, listOf(
+            ProviderEvent.TextStart(),
+            ProviderEvent.TextDelta("Keep this"),
+            ProviderEvent.TextEnd(),
+            ProviderEvent.TextStart(),
+            ProviderEvent.TextEnd(""),
+        )))
+        assertEquals(listOf("Keep this", ""), message.parts.filterIsInstance<TextPart>().map { it.text })
+        assertTrue(message.parts.filterIsInstance<TextPart>().all { it.phase == MessageBlockPhase.FINAL })
+    }
+
+    @Test
     fun consecutiveReasoningLifecyclesRemainDistinctAndFinalized() {
         val message = requireNotNull(
             ProviderEventAssembler().apply(

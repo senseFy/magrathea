@@ -659,10 +659,9 @@ class ProviderEventAssembler(
 }
 
 private fun AgentMessage.startText(signature: String?): AgentMessage {
-    if (signature == null) return this
     val last = parts.lastOrNull() as? TextPart
     return if (last != null && last.phase != MessageBlockPhase.FINAL) {
-        copy(parts = parts.dropLast(1) + last.copy(signature = signature))
+        copy(parts = parts.dropLast(1) + last.copy(signature = signature ?: last.signature))
     } else {
         copy(parts = parts + TextPart(text = "", signature = signature, phase = MessageBlockPhase.COMMENTARY))
     }
@@ -828,7 +827,9 @@ class DefaultReplayPolicy(
         val transformed = messages.mapNotNull { message ->
             when (message.role) {
                 MessageRole.USER, MessageRole.SYSTEM, MessageRole.TOOL -> transformToolResultMessage(message, toolCallIdMap)
-                MessageRole.ASSISTANT -> transformAssistantMessage(message, model, toolCallIdMap)
+                MessageRole.ASSISTANT -> if (message.stopReason == StopReason.MAX_TOKENS &&
+                    message.parts.any { it is ToolCallPart && it.partial }
+                ) null else transformAssistantMessage(message, model, toolCallIdMap)
             }
         }
 

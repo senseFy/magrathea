@@ -24,7 +24,7 @@ class OpenAiProtocolDiagnosticsTest {
     @Test
     fun nonStreamingFailureDoesNotInventAnSseOrdinal() = runTest {
         val adapter = OpenAiProviderAdapter(transport = ScriptedOpenAiTransport(
-            executeResponses = listOf(HttpResponseSpec(200, body = """{"status":"completed","private":"private-canary"}""")),
+            executeResponses = listOf(HttpResponseSpec(200, body = """{"output":[],"private":"private-canary"}""")),
         ))
         val failure = assertFailsWith<ProviderProtocolException> {
             adapter.generate(ProviderRequest(
@@ -33,42 +33,42 @@ class OpenAiProtocolDiagnosticsTest {
             )).toList()
         }
         assertEquals(ProviderProtocolDiagnostic(
-            "openai.responses.invalid_string_field", "non_streaming", field = "id",
+            "openai.responses.invalid_string_field", "non_streaming", field = "status",
         ), failure.diagnostic)
         assertFalse(failure.diagnostic.toString().contains("private"))
     }
 
     @Test
-    fun openRouterTerminalMismatchHasAReasonAndTheActualSseOrdinal() = runTest {
-        val stream = OPENAI_TEXT_STREAM.map { (type, data) ->
-            type to if (type == "response.completed") data.replace("Shanghai", "private-content") else data
+    fun malformedTerminalArgumentsHaveAReasonAndTheActualSseOrdinal() = runTest {
+        val stream = OPENAI_TOOL_STREAM.map { (type, data) ->
+            type to if (type == "response.completed") data.replace("{\\\"city\\\":\\\"Shanghai\\\"}", "{private-invalid-json") else data
         }
         val failure = assertFailsWith<ProviderProtocolException> { collect(stream) }
         assertEquals(ProviderProtocolDiagnostic(
-            "openai.responses.terminal_output_mismatch", "response.completed", stream.size.toLong(),
+            "openai.responses.malformed_arguments", "response.completed", stream.size.toLong(),
         ), failure.diagnostic)
         assertFalse(failure.retryable)
-        assertFalse(failure.diagnostic.toString().contains("private-content"))
+        assertFalse(failure.diagnostic.toString().contains("private"))
     }
 
     @Test
-    fun textCompletionAndTerminalMismatchHaveDifferentReasons() = runTest {
+    fun malformedFinalTextNamesOnlyTheConsumedField() = runTest {
         val stream = OPENAI_TEXT_STREAM.map { (type, data) ->
-            type to if (type == "response.output_text.done") data.replace("Shanghai", "private-content") else data
+            type to if (type == "response.output_item.done") data.replace("\"text\":\"Shanghai is sunny.\"", "\"text\":{}") else data
         }
         val failure = assertFailsWith<ProviderProtocolException> { collect(stream) }
         assertEquals(ProviderProtocolDiagnostic(
-            "openai.responses.text_delta_mismatch", "response.output_text.done", 6,
+            "openai.responses.invalid_string_field", "response.output_item.done", 8, "text",
         ), failure.diagnostic)
     }
 
     @Test
     fun missingFieldsNameOnlyTheCodeDefinedField() = runTest {
         val failure = assertFailsWith<ProviderProtocolException> {
-            collect(listOf("response.created" to """{"type":"response.created","response":{"status":"in_progress"}}"""))
+            collect(listOf("response.completed" to """{"type":"response.completed","response":{"status":"completed"}}"""))
         }
         assertEquals(ProviderProtocolDiagnostic(
-            "openai.responses.invalid_string_field", "response.created", 1, "id",
+            "openai.responses.invalid_array_field", "response.completed", 1, "output",
         ), failure.diagnostic)
     }
 
@@ -76,21 +76,21 @@ class OpenAiProtocolDiagnosticsTest {
     fun unknownEventTypesNeverLeakWireValuesIntoDiagnostics() = runTest {
         val canary = "private-token-that-looks-like-an-identifier"
         val failure = assertFailsWith<ProviderProtocolException> {
-            collect(listOf(canary to """{"type":"$canary"}"""))
+            collect(listOf(canary to "{private-invalid-json"))
         }
         assertEquals(ProviderProtocolDiagnostic(
-            "openai.responses.unsupported_event_type", "unknown", 1,
+            "openai.responses.malformed_json", "unknown", 1,
         ), failure.diagnostic)
         assertFalse(failure.diagnostic.toString().contains(canary))
     }
 
     @Test
-    fun malformedOpenRouterFramesKeepNormalizerReasonWithoutParserMessage() = runTest {
+    fun malformedOpenRouterFramesUseTheSharedCodecReasonWithoutParserMessage() = runTest {
         val failure = assertFailsWith<ProviderProtocolException> {
             collect(listOf("response.completed" to "{private-invalid-json"))
         }
         assertEquals(ProviderProtocolDiagnostic(
-            "openrouter.responses.malformed_json", "response.completed", 1,
+            "openai.responses.malformed_json", "response.completed", 1,
         ), failure.diagnostic)
         assertFalse(failure.diagnostic.toString().contains("private"))
     }

@@ -40,6 +40,8 @@ import saien.magrathea.provider.api.ProviderContextLimitException
 import saien.magrathea.provider.api.ProviderInvocationIntent
 import saien.magrathea.provider.api.ProviderInvocationInvalidatedException
 import saien.magrathea.provider.api.ProviderInvocationResumeMode
+import saien.magrathea.provider.api.ProviderServerException
+import saien.magrathea.provider.api.ProviderException
 import saien.magrathea.provider.api.ProviderNetworkException
 import saien.magrathea.provider.api.ProviderRequest
 import saien.magrathea.provider.api.ProviderUsage
@@ -114,6 +116,23 @@ class ContextManagementRuntimeIntegrationTest {
         assertEquals(2, provider.requests.size)
         assertTrue(events.any { it is AgentEvent.Completed })
         assertTrue(events.none { it is AgentEvent.Interrupted || it is AgentEvent.Failed })
+    }
+
+    @Test
+    fun remoteErrorAfterSummaryCompletionDoesNotCommitTheSummary() = runTest {
+        val provider = SummaryThenDisconnectProvider(ProviderServerException("late error", statusCode = 503))
+        val traceSink = RecordingTraceSink()
+        val events = runner(provider, InMemoryAgentPersistence(), tracer = traceSink.tracer()).run(request(
+            sessionId = AgentSessionId("summary-late-error"),
+            messages = longHistory(),
+            contextWindowTokens = 220,
+        )).toList()
+        val state = events.filterIsInstance<AgentEvent.Completed>().single().state
+        assertNull(state.contextManagement.compaction)
+        assertEquals(listOf(TraceStatus.ERROR, TraceStatus.OK), traceSink.spans
+            .filter { it.name == RuntimeTraceNames.PROVIDER_REQUEST }.map { it.status })
+        val modelRequest = provider.requests.single { !it.isContextSummary() }
+        assertTrue(modelRequest.messages.flatMap { it.parts }.filterIsInstance<TextPart>().none { it.text.contains("completed summary") })
     }
 
     @Test
@@ -669,7 +688,9 @@ class ContextManagementRuntimeIntegrationTest {
         }
     }
 
-    private class SummaryThenDisconnectProvider : ProviderAdapter {
+    private class SummaryThenDisconnectProvider(
+        private val failure: ProviderException = ProviderNetworkException("late disconnect"),
+    ) : ProviderAdapter {
         override val key: String = PROVIDER
         val requests = mutableListOf<ProviderRequest>()
 
@@ -677,7 +698,7 @@ class ContextManagementRuntimeIntegrationTest {
             requests += request
             if (request.isContextSummary()) {
                 emit(providerChunk(text = "completed summary", completed = true))
-                throw ProviderNetworkException("late disconnect")
+                throw failure
             }
             emit(providerChunk(text = "answer", completed = true))
         }

@@ -135,8 +135,8 @@ the Agent loop.
 An adapter must:
 
 - declare a unique `key`;
-- encode requests and decode streaming and non-streaming responses strictly;
-- emit one valid canonical lifecycle;
+- validate outgoing requests and the response fields needed to produce canonical content;
+- normalize wire variations into one valid canonical lifecycle, keeping deltas provisional until finalized;
 - declare only attachment MIME types its encoder can represent;
 - map errors to stable Provider failure types without leaking credentials;
 - close any transport it owns.

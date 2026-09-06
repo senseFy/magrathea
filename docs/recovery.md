@@ -24,12 +24,17 @@ separately accumulates transient pre-output retries actually started by `RetryPo
 logical Agent run.
 
 A canonical `Completed` event is the semantic terminal signal. A later transport disconnect does
-not invalidate the completed response, while any later canonical event is a protocol violation.
+not invalidate the completed response. Explicit Provider errors remain failures even if retryable;
+any later canonical event is a protocol violation.
 
 On resume, the partial assistant message is not treated as authoritative history. Direct adapters
 start a new Provider attempt. An adapter backed by a durable remote stream may declare
 `ProviderInvocationResumeMode.REATTACH`, causing Runtime to reuse the invocation identity; the
 Gateway uses this mode for idempotent stream reattachment.
+
+Output-limited assistant turns containing unfinished tool calls are omitted from subsequent
+Provider input. Full history retains the partial output for presentation; replay neither fabricates
+tool results for that turn nor sends incomplete arguments to another model.
 
 Before either a model call or context-summary call begins, Runtime persists its request ID,
 purpose, input identity, and next physical-attempt ordinal. Reattachment therefore uses the exact

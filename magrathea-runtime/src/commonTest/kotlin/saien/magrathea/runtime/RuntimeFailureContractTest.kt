@@ -192,6 +192,21 @@ class RuntimeFailureContractTest {
     }
 
     @Test
+    fun retryableRemoteErrorsAfterCompletionRemainInterruptions() = runTest {
+        for ((failure, code) in listOf(
+            ProviderServerException("late server error", statusCode = 503) to AgentFailureCode.PROVIDER_SERVER,
+            ProviderRateLimitException("late rate limit") to AgentFailureCode.PROVIDER_RATE_LIMIT,
+        )) {
+            val provider = CompleteThenFailProvider("completed-then-error", failure)
+            val retryPolicy = RecordingRetryPolicy()
+            val events = runner(provider, retryPolicy).run(request(provider.key)).toList()
+            assertEquals(code, events.filterIsInstance<AgentEvent.Interrupted>().single().interruption.provider?.code)
+            assertTrue(events.none { it is AgentEvent.Completed })
+            assertEquals(0, retryPolicy.decisions)
+        }
+    }
+
+    @Test
     fun canonicalEventAfterCompletionRemainsAProtocolFailure() = runTest {
         val provider = object : ProviderAdapter {
             override val key: String = "event-after-completed"

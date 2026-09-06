@@ -1840,7 +1840,7 @@ class DefaultAgentRunner(
                     }
                 } catch (failure: Throwable) {
                     failure.rethrowFatalError()
-                    if (!providerTerminalObserved || !failure.isRecoverableProviderFailure()) {
+                    if (!providerTerminalObserved || failure !is ProviderNetworkException) {
                         throw failure
                     }
                 }
@@ -1866,7 +1866,9 @@ class DefaultAgentRunner(
                 }
                 finishProviderRequest(TraceStatus.OK, "success", failureCode = null)
                 val toolCalls = assistant?.parts?.filterIsInstance<ToolCallPart>().orEmpty()
-                if (toolCalls.isNotEmpty()) {
+                if (toolCalls.isNotEmpty() &&
+                    assistant?.stopReason !in setOf(StopReason.MAX_TOKENS, StopReason.ERROR, StopReason.CANCELLED)
+                ) {
                     updateState(
                         state.copy(
                             pendingToolCalls = mergePartialToolCalls(toolCalls),
@@ -2581,7 +2583,7 @@ class DefaultAgentRunner(
                     }
                 } catch (failure: Throwable) {
                     failure.rethrowFatalError()
-                    if (!terminalObserved || !failure.isRecoverableProviderFailure()) {
+                    if (!terminalObserved || failure !is ProviderNetworkException) {
                         throw failure
                     }
                 }
