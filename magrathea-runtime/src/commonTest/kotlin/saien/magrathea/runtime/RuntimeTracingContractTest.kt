@@ -48,12 +48,33 @@ import saien.magrathea.core.withMagratheaTraceContext
 import saien.magrathea.provider.api.InMemoryProviderRegistry
 import saien.magrathea.provider.api.ProviderAdapter
 import saien.magrathea.provider.api.ProviderChunk
+import saien.magrathea.provider.api.ProviderContextLimitException
 import saien.magrathea.provider.api.ProviderNetworkException
 import saien.magrathea.provider.api.ProviderRateLimitException
 import saien.magrathea.provider.api.ProviderRequest
 import saien.magrathea.provider.api.ProviderUsage
 
 class RuntimeTracingContractTest {
+    @Test
+    fun contextLimitAfterPartialOutputHasAProtocolReasonWithoutRetry() = runTest {
+        val sink = RecordingTraceSink()
+        val provider = object : ProviderAdapter {
+            override val key = "context-limit-after-output"
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                emit(providerChunk(text = "private-reply", completed = false))
+                throw ProviderContextLimitException("private-upstream-message")
+            }
+        }
+        runner(provider, sink).run(request(provider.key, "private-prompt")).toList()
+        val attempt = sink.spans.single { it.name == RuntimeTraceNames.PROVIDER_REQUEST }
+        assertEquals("PROVIDER_PROTOCOL", attempt.stringAttribute("magrathea.error.code"))
+        assertEquals(TraceValue.StringValue("runtime.context_limit_after_output"),
+            attempt.events.single { it.name == "magrathea.provider.protocol_failure" }.attributes["reason"])
+        assertEquals(TraceValue.BooleanValue(false),
+            attempt.events.single { it.name == "magrathea.provider.failure" }.attributes["retryable"])
+        assertFalse(sink.spans.toString().contains("private"))
+    }
+
     @Test
     fun tracingBuildsOneContentFreeExecutionTreeAcrossRetry() = runTest {
         val canary = "trace-content-canary"

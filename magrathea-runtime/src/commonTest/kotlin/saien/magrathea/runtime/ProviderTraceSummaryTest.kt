@@ -6,6 +6,65 @@ import saien.magrathea.provider.api.*
 
 class ProviderTraceSummaryTest {
     @Test
+    fun protocolFailureRetainsOnlyStructuredFactsWithinTheEventBudget() {
+        val sink = RecordingTraceSink()
+        val span = RuntimeTraceSpan(sink.tracer().startSpan("attempt"))
+        val summary = ProviderTraceSummary(span, ProviderRequest(model = ModelDescriptor("provider", "model"), messages = emptyList()))
+        span.addEvent(RuntimeTraceEvents.PROVIDER_FIRST_EVENT)
+        summary.observe(ProviderChunk(events = listOf(ProviderEvent.TextDelta("private-reply"))))
+        span.addEvent(RuntimeTraceEvents.PROVIDER_TERMINAL_EVENT)
+        summary.failure(ProviderProtocolException(
+            ProviderProtocolDiagnostic("openai.responses.invalid_string_field", "response.completed", 88, "id"),
+            "private-exception-message", IllegalArgumentException("private-nested-cause"),
+        ))
+        summary.finish()
+        span.end(TraceStatus.ERROR, emptyMap())
+
+        val recorded = sink.spans.single()
+        assertEquals(8, recorded.events.size)
+        val facts = recorded.events.single { it.name == "magrathea.provider.protocol_failure" }.attributes
+        assertEquals(mapOf(
+            "reason" to TraceValue.StringValue("openai.responses.invalid_string_field"),
+            "event_type" to TraceValue.StringValue("response.completed"),
+            "event_index" to TraceValue.LongValue(88),
+            "field" to TraceValue.StringValue("id"),
+        ), facts)
+        assertFalse(recorded.toString().contains("private"))
+    }
+
+    @Test
+    fun interruptedStreamRetainsItsProtocolCauseWithoutChangingNetworkClassification() {
+        val sink = RecordingTraceSink()
+        val span = RuntimeTraceSpan(sink.tracer().startSpan("attempt"))
+        val summary = ProviderTraceSummary(span, ProviderRequest(model = ModelDescriptor("provider", "model"), messages = emptyList()))
+        summary.failure(ProviderStreamInterruptedException(ProviderStreamInterruptedException(ProviderProtocolException(
+            ProviderProtocolDiagnostic("openai.responses.missing_terminal_event", "stream_end"),
+            "private-message",
+        ))))
+        summary.finish()
+        span.end(TraceStatus.ERROR, emptyMap())
+
+        val events = sink.spans.single().events
+        val failure = events.single { it.name == "magrathea.provider.failure" }.attributes
+        assertEquals(TraceValue.StringValue("network"), failure["type"])
+        assertEquals(TraceValue.BooleanValue(true), failure["retryable"])
+        val facts = events.single { it.name == "magrathea.provider.protocol_failure" }.attributes
+        assertEquals(TraceValue.StringValue("openai.responses.missing_terminal_event"), facts["reason"])
+        assertFalse(sink.spans.toString().contains("private"))
+    }
+
+    @Test
+    fun legacyExceptionsNeverTurnTheirMessagesIntoDiagnosticIdentifiers() {
+        val sink = RecordingTraceSink()
+        val span = RuntimeTraceSpan(sink.tracer().startSpan("attempt"))
+        val summary = ProviderTraceSummary(span, ProviderRequest(model = ModelDescriptor("provider", "model"), messages = emptyList()))
+        summary.failure(ProviderProtocolException("private-token-and-payload"))
+        span.end(TraceStatus.ERROR, emptyMap())
+        assertFalse(sink.spans.toString().contains("private"))
+        assertTrue(sink.spans.single().events.none { it.name == "magrathea.provider.protocol_failure" })
+    }
+
+    @Test
     fun aLargeStreamProducesOnlyFixedCountersAndOneFirstTextEvent() {
         val sink = RecordingTraceSink()
         var now = 0L

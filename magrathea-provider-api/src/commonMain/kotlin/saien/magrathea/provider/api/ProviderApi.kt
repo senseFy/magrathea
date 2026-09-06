@@ -590,7 +590,19 @@ class ProviderTimeoutException(
     cause: Throwable? = null,
 ) : ProviderNetworkException("Provider timeout (${phase.name.lowercase()})", cause)
 
-class ProviderProtocolException(message: String, cause: Throwable? = null) : ProviderException(message, cause)
+class ProviderProtocolException private constructor(
+    message: String,
+    cause: Throwable?,
+    val diagnostic: ProviderProtocolDiagnostic?,
+) : ProviderException(message, cause) {
+    constructor(message: String, cause: Throwable? = null) : this(message, cause, null)
+
+    constructor(
+        diagnostic: ProviderProtocolDiagnostic,
+        message: String,
+        cause: Throwable? = null,
+    ) : this(message, cause, diagnostic)
+}
 
 interface ProviderRegistry {
     fun get(key: String): ProviderAdapter?

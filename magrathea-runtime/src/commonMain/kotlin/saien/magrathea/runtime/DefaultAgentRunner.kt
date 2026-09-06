@@ -136,6 +136,7 @@ import saien.magrathea.provider.api.ProviderInvocationResumeMode
 import saien.magrathea.provider.api.ProviderHttpException
 import saien.magrathea.provider.api.ProviderNetworkException
 import saien.magrathea.provider.api.ProviderPermissionException
+import saien.magrathea.provider.api.ProviderProtocolDiagnostic
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRateLimitException
 import saien.magrathea.provider.api.ProviderRegistry
@@ -1765,6 +1766,7 @@ class DefaultAgentRunner(
                         ) { chunk ->
                             if (providerTerminalObserved) {
                                 throw ProviderProtocolException(
+                                    ProviderProtocolDiagnostic("runtime.provider_emitted_a_chunk_after_completed"),
                                     "Provider emitted a chunk after Completed",
                                 )
                             }
@@ -1772,6 +1774,7 @@ class DefaultAgentRunner(
                                 chunk.validateSemantics()
                             } catch (failure: IllegalArgumentException) {
                                 throw ProviderProtocolException(
+                                    ProviderProtocolDiagnostic("runtime.provider_chunk_violated_the_canonical_event_contract"),
                                     "Provider chunk violated the canonical event contract",
                                     failure,
                                 )
@@ -1830,10 +1833,10 @@ class DefaultAgentRunner(
                         withMagratheaTraceContext(context) { collectProvider() }
                     } ?: collectProvider()
                     if (!providerChunkObserved) {
-                        throw ProviderProtocolException("Provider flow completed without any chunks")
+                        throw ProviderProtocolException(ProviderProtocolDiagnostic("runtime.provider_flow_completed_without_any_chunks"), "Provider flow completed without any chunks")
                     }
                     if (!providerTerminalObserved) {
-                        throw ProviderProtocolException("Provider flow completed without a Completed event")
+                        throw ProviderProtocolException(ProviderProtocolDiagnostic("runtime.provider_flow_completed_without_a_completed_event"), "Provider flow completed without a Completed event")
                     }
                 } catch (failure: Throwable) {
                     failure.rethrowFatalError()
@@ -1920,6 +1923,7 @@ class DefaultAgentRunner(
                 if (t is ProviderContextLimitException) {
                     if (providerChunkObserved) {
                         val protocolFailure = ProviderProtocolException(
+                            ProviderProtocolDiagnostic(CONTEXT_LIMIT_AFTER_OUTPUT_REASON),
                             "Provider reported a context limit after emitting output",
                             t,
                         )
@@ -2542,6 +2546,7 @@ class DefaultAgentRunner(
                         ) { chunk ->
                             if (terminalObserved) {
                                 throw ProviderProtocolException(
+                                    ProviderProtocolDiagnostic("runtime.context_summarizer_emitted_output_after_completion"),
                                     "Context summarizer emitted output after completion",
                                 )
                             }
@@ -2572,7 +2577,7 @@ class DefaultAgentRunner(
                         withMagratheaTraceContext(context) { collectProvider() }
                     } ?: collectProvider()
                     if (!chunkObserved || !terminalObserved) {
-                        throw ProviderProtocolException("Context summarizer did not complete")
+                        throw ProviderProtocolException(ProviderProtocolDiagnostic("runtime.context_summarizer_did_not_complete"), "Context summarizer did not complete")
                     }
                 } catch (failure: Throwable) {
                     failure.rethrowFatalError()
@@ -2581,16 +2586,16 @@ class DefaultAgentRunner(
                     }
                 }
                 val message = summaryMessage
-                    ?: throw ProviderProtocolException("Context summarizer returned no message")
+                    ?: throw ProviderProtocolException(ProviderProtocolDiagnostic("runtime.context_summarizer_returned_no_message"), "Context summarizer returned no message")
                 if (message.parts.any { it is ToolCallPart }) {
-                    throw ProviderProtocolException("Context summarizer unexpectedly requested a Tool")
+                    throw ProviderProtocolException(ProviderProtocolDiagnostic("runtime.context_summarizer_unexpectedly_requested_a_tool"), "Context summarizer unexpectedly requested a Tool")
                 }
                 val summary = message.parts
                     .filterIsInstance<TextPart>()
                     .joinToString(separator = "") { it.text }
                     .trim()
                 if (summary.isBlank()) {
-                    throw ProviderProtocolException("Context summarizer returned no summary text")
+                    throw ProviderProtocolException(ProviderProtocolDiagnostic("runtime.context_summarizer_returned_no_summary_text"), "Context summarizer returned no summary text")
                 }
                 finishSummaryRequest(TraceStatus.OK, "success", failureCode = null)
                 lifecycle.complete(invocation.invocation.requestId)

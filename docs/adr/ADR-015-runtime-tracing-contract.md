@@ -242,10 +242,18 @@ not the persisted session total.
 |---|---|---|
 | Provider span | `magrathea.provider.first_event` | First canonical Provider event; offset is first-event latency |
 | Provider span | `magrathea.provider.terminal_event` | Canonical terminal event observed |
+| Provider span | `magrathea.provider.protocol_failure` | Structured protocol `reason`, optional `event_type`, `event_index`, and `field` |
 | Turn span | `magrathea.provider.retry_scheduled` | Next attempt, failure code, and delay |
 | Tool span | `magrathea.tool.result_reused` | Durable completed result reused without fresh execution |
 
 The failed Provider span ends before retry backoff. No event is emitted per chunk.
+
+Protocol details come from `ProviderProtocolException.diagnostic`, including the known EOF
+interruption wrapper, without changing retryability. `ProviderProtocolDiagnostic` uses bounded,
+code-defined reason/field identifiers and allowlisted event types (`unknown` for unrecognized
+wire types). `event_index` is the one-based SSE ordinal; `stream_end` and `non_streaming` omit it.
+OpenAI-family decoders, HTTP size checks, and Runtime's protocol checks supply these facts.
+Exceptions without them retain classification only; messages are never used as a fallback.
 
 ### Status
 

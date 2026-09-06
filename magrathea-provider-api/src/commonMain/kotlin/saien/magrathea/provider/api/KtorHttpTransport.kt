@@ -72,7 +72,10 @@ internal class KtorHttpTransport(
                     val line = try {
                         readBoundedLine(channel)
                     } catch (_: TooLongLineException) {
-                        throw ProviderProtocolException("HTTP stream line exceeds configured limit")
+                        throw ProviderProtocolException(
+                            ProviderProtocolDiagnostic("http.stream_line_limit_exceeded"),
+                            "HTTP stream line exceeds configured limit",
+                        )
                     } ?: break
                     framer.accept(line).forEach { send(it) }
                 }
@@ -101,7 +104,10 @@ internal class KtorHttpTransport(
     private suspend fun HttpResponse.toResponseSpec(): HttpResponseSpec {
         val bodyRead = readBoundedBody()
         if (status.value in 200..299 && bodyRead.truncated) {
-            throw ProviderProtocolException("HTTP response body exceeds configured limit")
+            throw ProviderProtocolException(
+                ProviderProtocolDiagnostic("http.response_body_limit_exceeded"),
+                "HTTP response body exceeds configured limit",
+            )
         }
         val body = if (bodyRead.truncated) bodyRead.value + "…" else bodyRead.value
         return HttpResponseSpec(

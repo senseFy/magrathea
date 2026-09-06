@@ -4,7 +4,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
+import saien.magrathea.provider.api.ProviderProtocolDiagnostic
 import saien.magrathea.provider.api.ProviderProtocolException
 
 internal data class NormalizedOpenAiSseEvent(
@@ -27,7 +27,7 @@ internal class OpenAiResponsesDialectNormalizer(
             return NormalizedOpenAiSseEvent(eventName, payload)
         }
         val root = parseDialectObject(payload)
-        if (root["type"]?.jsonPrimitive?.contentOrNull != OPENROUTER_RESPONSE_ERROR) {
+        if ((root["type"] as? JsonPrimitive)?.contentOrNull != OPENROUTER_RESPONSE_ERROR) {
             return NormalizedOpenAiSseEvent(eventName, payload)
         }
         val normalized = JsonObject(root + ("type" to JsonPrimitive(STANDARD_ERROR)))
@@ -39,11 +39,17 @@ internal class OpenAiResponsesDialectNormalizer(
 
     private fun parseDialectObject(payload: String): JsonObject = try {
         json.parseToJsonElement(payload) as? JsonObject
-            ?: throw ProviderProtocolException("OpenRouter Responses event must be a JSON object")
+            ?: throw ProviderProtocolException(
+                ProviderProtocolDiagnostic("openrouter.responses.payload_not_object"),
+                "OpenRouter Responses event must be a JSON object",
+            )
     } catch (failure: ProviderProtocolException) {
         throw failure
     } catch (failure: Throwable) {
-        throw ProviderProtocolException("Malformed OpenRouter Responses event", failure)
+        throw ProviderProtocolException(
+            ProviderProtocolDiagnostic("openrouter.responses.malformed_json"),
+            "Malformed OpenRouter Responses event", failure,
+        )
     }
 }
 
