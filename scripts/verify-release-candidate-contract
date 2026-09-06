@@ -145,13 +145,22 @@ printf '%s  %s\n' "$(shasum -a 256 "$BUNDLE" | awk '{ print $1 }')" "$(basename 
 
 modules="$FIXTURE/modules.txt"
 printf 'magrathea-core\n' > "$modules"
+git -C "$SOURCE" init --quiet
+git -C "$SOURCE" add .
+git -C "$SOURCE" -c user.name='Magrathea Contract' -c user.email='contract@invalid.example' \
+  -c commit.gpgsign=false commit --quiet -m fixture
+COMMIT="$(git -C "$SOURCE" rev-parse HEAD)"
+TREE="$(git -C "$SOURCE" rev-parse 'HEAD^{tree}')"
 printf '%s\n' \
-  'format=3' \
+  'format=4' \
   "head=$COMMIT" \
   "group=$GROUP" \
   "version=$VERSION" \
   'repository_url=https://maven.pkg.github.com/sensefy/magrathea' \
   "ci_run_id=$CI_RUN_ID" \
+  'ci_run_attempt=2' \
+  "ci_commit=$COMMIT" \
+  "ci_tree=$TREE" \
   "modules_sha256=$(shasum -a 256 "$modules" | awk '{ print $1 }')" \
   "release_public_key_sha256=$(shasum -a 256 "$SOURCE/docs/release-signing-key.asc" | awk '{ print $1 }')" \
   "coordinates_sha256=$(shasum -a 256 "$COORDINATES" | awk '{ print $1 }')" \
@@ -202,6 +211,45 @@ fi
 [[ "$mismatch_output" == *"different commit"* ]] || {
   printf 'release candidate contract failed: wrong-commit rejection was unclear: %s\n' \
     "$mismatch_output" >&2
+  exit 1
+}
+
+if attempt_output="$(
+  EXPECTED_CI_RUN_ID="$CI_RUN_ID" EXPECTED_CI_RUN_ATTEMPT=3 \
+    PATH="$FAKE_BIN:$PATH" "$SOURCE/scripts/verify-release-candidate" \
+      "$SOURCE" "$CANDIDATE" "$CANDIDATE_CHECKSUM" "$COMMIT" "$VERSION" \
+      "$FIXTURE/attempt-mismatch" 2>&1
+)"; then
+  printf 'release candidate contract failed: wrong CI attempt unexpectedly passed\n' >&2
+  exit 1
+fi
+[[ "$attempt_output" == *"different CI attempt"* ]] || {
+  printf 'release candidate contract failed: wrong-attempt rejection was unclear: %s\n' "$attempt_output" >&2
+  exit 1
+}
+
+wrong_tree_candidate="$FIXTURE/wrong-tree.zip"
+cp "$CANDIDATE" "$wrong_tree_candidate"
+sed 's/^ci_tree=.*/ci_tree=0000000000000000000000000000000000000000/' \
+  "$RECEIPT" > "$FIXTURE/wrong-tree.receipt"
+cp "$FIXTURE/wrong-tree.receipt" "$RECEIPT"
+(
+  cd "$BUILD"
+  zip -q -X "$wrong_tree_candidate" release/publish-verification.receipt
+)
+cp "$FIXTURE/verified/release/publish-verification.receipt" "$RECEIPT"
+printf '%s  %s\n' "$(shasum -a 256 "$wrong_tree_candidate" | awk '{print $1}')" \
+  'wrong-tree.zip' > "$wrong_tree_candidate.sha256"
+if tree_output="$(
+  PATH="$FAKE_BIN:$PATH" "$SOURCE/scripts/verify-release-candidate" \
+    "$SOURCE" "$wrong_tree_candidate" "$wrong_tree_candidate.sha256" "$COMMIT" "$VERSION" \
+    "$FIXTURE/tree-mismatch" 2>&1
+)"; then
+  printf 'release candidate contract failed: wrong CI file tree unexpectedly passed\n' >&2
+  exit 1
+fi
+[[ "$tree_output" == *"CI file tree differs"* ]] || {
+  printf 'release candidate contract failed: wrong-tree rejection was unclear: %s\n' "$tree_output" >&2
   exit 1
 }
 

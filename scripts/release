@@ -2,14 +2,19 @@
 """Coordinate merged Release PRs and immutable publication runs."""
 
 import argparse
+import io
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
 import time
+import zipfile
 
 from release_notes import ROOT, check_metadata
+import ci_evidence
+import ci_cache
 
 
 class GitHub:
@@ -37,6 +42,36 @@ class GitHub:
                 return sorted(runs, key=lambda r: r['id'])
             page += 1
 
+    def pages(self, path, key):
+        items, page = [], 1
+        separator = '&' if '?' in path else '?'
+        while True:
+            response = self.api(f'{path}{separator}per_page=100&page={page}')
+            batch = response if isinstance(response, list) else response[key]
+            items += batch
+            if len(batch) < 100:
+                return items
+            page += 1
+
+    def evidence(self, run_id, attempt):
+        artifacts = self.pages(f'actions/runs/{run_id}/artifacts', 'artifacts')
+        available = [a for a in artifacts if re.fullmatch(r'magrathea-ci-[1-9][0-9]*', a['name'])
+                     and int(a['name'].rsplit('-', 1)[1]) <= attempt and not a['expired']]
+        recorded_attempt = max((int(a['name'].rsplit('-', 1)[1]) for a in available), default=0)
+        matches = [a for a in available if a['name'] == f'magrathea-ci-{recorded_attempt}']
+        if len(matches) != 1:
+            raise ValueError('CI checkout evidence is missing or expired')
+        result = subprocess.run(
+            ['gh', 'api', f'repos/{self.repo}/actions/artifacts/{matches[0]["id"]}/zip'],
+            capture_output=True, check=True)
+        with zipfile.ZipFile(io.BytesIO(result.stdout)) as archive:
+            if archive.namelist() != ['verification.json'] or archive.infolist()[0].file_size > 16384:
+                raise ValueError('CI checkout evidence has an unexpected layout')
+            evidence = json.loads(archive.read('verification.json'))
+            if not isinstance(evidence, dict) or evidence.get('run_attempt') != recorded_attempt:
+                raise ValueError('CI checkout evidence does not match its artifact attempt')
+            return evidence
+
 
 def release_pr(gh, number, commit=None):
     pr = gh.api(f'pulls/{number}')
@@ -52,50 +87,73 @@ def release_pr(gh, number, commit=None):
     return pr
 
 
-def require_ci(gh, run_id, commit, wait=False):
+def require_ci(gh, root, run_id, ci_attempt, commit, pr, wait=False):
     for attempt in range(61 if wait else 1):
-        run = gh.api(f'actions/runs/{run_id}')
-        if (run['head_sha'] != commit or run['head_branch'] != 'main'
-                or run['event'] != 'push' or run['path'] != '.github/workflows/verify.yml'):
-            raise ValueError('CI run is not the authorized main push and exact commit')
+        run = gh.api(f'actions/runs/{run_id}/attempts/{ci_attempt}')
         if run['status'] == 'completed':
-            if run['conclusion'] != 'success':
-                raise ValueError('exact-commit verification did not succeed')
-            return
+            return ci_evidence.verify(gh, root, run, ci_attempt, commit, pr)
         if wait and attempt < 60:
             time.sleep(2)
-    raise ValueError('exact-commit verification has not completed')
+    raise ValueError('verification has not completed')
 
 
-def request(gh, root, commit, ci_run):
-    version, _ = check_metadata(root)
-    candidates = gh.api(f'commits/{commit}/pulls?per_page=100')
+def merged_release_pr(gh, commit):
+    candidates = gh.pages(f'commits/{commit}/pulls', 'items')
     matching = [p for p in candidates if p.get('merge_commit_sha') == commit
                 and p['head']['ref'] == 'release-please--branches--main']
     if not matching:
-        print('No merged Release PR at this commit; no publication requested.')
-        return
+        return None
     if len(matching) != 1:
         raise ValueError('ambiguous Release PR merge')
-    pr = release_pr(gh, matching[0]['number'], commit)
+    return release_pr(gh, matching[0]['number'], commit)
+
+
+def ci_plan(gh, root, commit):
+    """An unavailable optimization always falls back to full main verification."""
+    if os.environ.get('GITHUB_EVENT_NAME') != 'push':
+        return None
+    try:
+        pr = merged_release_pr(gh, commit)
+        if pr is None:
+            return None
+        # Only the latest run can supply evidence; a newer failure must not be hidden.
+        run = ci_evidence.latest_pr_run(gh, pr)
+        if run is None:
+            return None
+        evidence = require_ci(gh, root, run['id'], run['run_attempt'], commit, pr)
+        print(f'Reusing Release PR #{pr["number"]} verification: {run["html_url"]} '
+              f'(attempt {run["run_attempt"]}, tree {evidence["tree"]})')
+        return evidence
+    except (ValueError, KeyError, TypeError, subprocess.CalledProcessError, zipfile.BadZipFile) as error:
+        print(f'Running full platform verification: {error}')
+        return None
+
+
+def request(gh, root, commit, ci_run, ci_attempt):
+    version, _ = check_metadata(root)
+    pr = merged_release_pr(gh, commit)
+    if pr is None:
+        print('No merged Release PR at this commit; no publication requested.')
+        return
     existing = gh.runs(version)
     if existing:
         print(f"Publication already has a run: {existing[0]['html_url']}; use Re-run failed jobs if needed.")
         return
     gh.api('actions/workflows/release.yml/dispatches', 'POST', {
         'ref': 'main', 'inputs': {'version': version, 'commit': commit,
-                                'pull_request': str(pr['number']), 'ci_run': str(ci_run)}})
+                                'pull_request': str(pr['number']), 'ci_run': str(ci_run),
+                                'ci_attempt': str(ci_attempt)}})
     print(f'Requested {version} from Release PR #{pr["number"]} at {commit}')
 
 
-def validate(gh, root, version, commit, number, ci_run, current_run):
+def validate(gh, root, version, commit, number, ci_run, ci_attempt, current_run):
     check_metadata(root, version)
     if not re.fullmatch(r'[0-9a-f]{40}', commit):
         raise ValueError('expected a full commit SHA')
     head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
     if head != commit:
         raise ValueError('checkout differs from the authorized commit')
-    release_pr(gh, number, commit)
+    pr = release_pr(gh, number, commit)
     prior = [r for r in gh.runs(version) if r['id'] < current_run]
     if prior:
         raise ValueError(f"Version already authorized: {prior[0]['html_url']}; use Re-run failed jobs")
@@ -104,7 +162,12 @@ def validate(gh, root, version, commit, number, ci_run, current_run):
     candidate_exists = any(a['name'] == 'magrathea-release-candidate' and not a['expired'] for a in artifacts)
     if not candidate_exists and gh.api(f'git/ref/tags/v{version}', missing=True):
         raise ValueError('release tag already exists; restore the original candidate instead of rebuilding')
-    require_ci(gh, ci_run, commit, wait=True)
+    if not candidate_exists:
+        evidence = require_ci(gh, root, ci_run, ci_attempt, commit, pr, wait=True)
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            output.write(f'ci_commit={evidence["commit"]}\nci_tree={evidence["tree"]}\n')
+    # A retry restores the original attested candidate, whose receipt binds these CI inputs.
+    # Its validation does not depend on retention or reruns of the source PR's artifacts.
     return candidate_exists
 
 
@@ -154,6 +217,23 @@ def main():
     p = sub.add_parser('request')
     p.add_argument('--commit', required=True)
     p.add_argument('--ci-run', required=True, type=int)
+    p.add_argument('--ci-attempt', required=True, type=int)
+    p = sub.add_parser('ci-plan')
+    p.add_argument('--commit', required=True)
+    p = sub.add_parser('ci-record')
+    p.add_argument('--output', required=True)
+    p = sub.add_parser('cache-plan')
+    p.add_argument('--commit', required=True)
+    p = sub.add_parser('cache-select')
+    p.add_argument('--ci-run', required=True, type=int)
+    p.add_argument('--ci-attempt', required=True, type=int)
+    p.add_argument('--output', required=True, type=Path)
+    p = sub.add_parser('cache-export')
+    p.add_argument('--gate', required=True, choices=ci_cache.GATE_KEYS)
+    p.add_argument('--output', required=True, type=Path)
+    p = sub.add_parser('cache-restore')
+    p.add_argument('--selection', required=True, type=Path)
+    p.add_argument('--directory', required=True, type=Path)
     for name in ('validate', 'complete'):
         p = sub.add_parser(name)
         p.add_argument('--version', required=True)
@@ -161,13 +241,46 @@ def main():
         p.add_argument('--pull-request', required=True, type=int)
         if name == 'validate':
             p.add_argument('--ci-run', required=True, type=int)
+            p.add_argument('--ci-attempt', required=True, type=int)
             p.add_argument('--run-id', required=True, type=int)
     args = parser.parse_args()
     gh = GitHub(args.repo)
     if args.command == 'request':
-        request(gh, ROOT, args.commit, args.ci_run)
+        request(gh, ROOT, args.commit, args.ci_run, args.ci_attempt)
+    elif args.command == 'ci-plan':
+        evidence = ci_plan(gh, ROOT, args.commit)
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            output.write(f'reuse={str(evidence is not None).lower()}\n')
+            output.write(f'ci_run={evidence["run_id"] if evidence else ""}\n')
+            output.write(f'ci_attempt={evidence["run_attempt"] if evidence else ""}\n')
+    elif args.command == 'ci-record':
+        ci_evidence.record(ROOT, args.output)
+    elif args.command == 'cache-plan':
+        cache = ci_cache.source(gh, ROOT, args.commit)
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            output.write(f'cache_run={cache["run_id"] if cache else ""}\n')
+            output.write(f'cache_attempt={cache["run_attempt"] if cache else ""}\n')
+    elif args.command.startswith('cache-'):
+        home = Path(os.environ.get('GRADLE_USER_HOME', str(Path.home() / '.gradle')))
+        platform = f'{os.environ["RUNNER_OS"]}-{os.environ["RUNNER_ARCH"]}'
+        if args.command == 'cache-select':
+            selected = ci_cache.select(gh, args.ci_run, args.ci_attempt, platform)
+            args.output.write_text(json.dumps(selected) + '\n')
+            with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+                output.write(f'ids={",".join(str(a["id"]) for a in selected)}\n')
+        elif args.command == 'cache-export':
+            attempt = int(os.environ['GITHUB_RUN_ATTEMPT'])
+            metadata = {'repository': gh.repo, 'run_id': int(os.environ['GITHUB_RUN_ID']),
+                        'run_attempt': attempt, 'platform': platform, 'gate': args.gate}
+            available = ci_cache.export(home, args.output, metadata)
+            with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+                output.write(f'available={str(available).lower()}\n')
+                output.write(f'name={ci_cache.artifact_name(platform, args.gate, attempt)}\n')
+        else:
+            ci_cache.restore(home, args.directory, json.loads(args.selection.read_text()))
     elif args.command == 'validate':
-        restored = validate(gh, ROOT, args.version, args.commit, args.pull_request, args.ci_run, args.run_id)
+        restored = validate(gh, ROOT, args.version, args.commit, args.pull_request, args.ci_run,
+                            args.ci_attempt, args.run_id)
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
             output.write(f'candidate_exists={str(restored).lower()}\n')
     elif args.command == 'complete':

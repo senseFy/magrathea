@@ -12,4 +12,4 @@
   for incompatible contracts). Describe consumer-visible behavior, including migration requirements.
 - Release Please owns version promotion and the release changelog. Review its Release PR before
   merging; do not create prepare commits or manually bump SDK versions during implementation.
-- Preserve exact-commit CI evidence and the original signed candidate across publication retries.
+- Preserve the tested commit, file tree, CI run/attempt, and original signed candidate across publication retries.

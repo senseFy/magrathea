@@ -29,10 +29,29 @@ make release-check
 This checks the real pinned Release Please configuration, metadata, workflow wiring, and recovery
 with local fixtures; it does not build SDK artifacts or write to GitHub. Use the relevant Gradle
 platform gates for SDK changes; complete broader verification once changes settle.
+`scripts/verify-ci-cache-contract` checks cache transfer with isolated Java builds: a version-only
+change reuses compilation across workspaces, while a source change recompiles.
 
-CI verifies PRs and the exact release merge commit. Candidate preparation reuses that successful
-CI result instead of repeating the platform test matrix. It still assembles signed release artifacts.
-All upload shards and retries use the same candidate files without rebuilding the SDK.
+PRs run the complete platform matrix. After a Release PR merges, CI reuses its latest successful
+run only when the recorded checkout and final commit have identical Git file trees. This includes
+version files, dependencies, tests, workflow definitions, and declared toolchains. Missing or expired
+evidence, a newer unsuccessful run, or changed content triggers the complete matrix on `main`.
+The persistence schema baseline is checked against the merge's parent even when tests are reused.
+
+Gradle task outputs are shared through optional per-platform snapshots from successful Verify jobs.
+A PR restores snapshots from the verified PR merged at its base commit; candidate preparation uses
+the pinned release CI run. Each snapshot keeps up to 256 MiB of recent task outputs for seven days,
+excluding dependency caches, configuration state, and locks. Restores check the source job/attempt
+and file checksums; Gradle decides reuse from task inputs, including version-dependent inputs.
+Missing, expired, or invalid snapshots fall back to ordinary builds and never authorize publication.
+Dependency downloads continue to use `setup-gradle` caching. Platform gates produce new snapshots
+even when compilation hits the cache, so subsequent PRs do not need a main build to refresh them.
+
+Publication pins the source CI run and attempt. Its receipt retains the tested commit and tree
+alongside the final release commit. Partial reruns can retain successful jobs and checkout records
+from earlier attempts of that same run. Candidate preparation assembles signed artifacts without
+repeating the platform matrix; upload shards and retries use the same candidate bytes. Restoring
+an existing candidate does not depend on the source CI artifact still being available.
 
 ## Recover
 

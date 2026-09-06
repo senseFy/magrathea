@@ -36,7 +36,7 @@ help="$(run_publisher --help)"
 [[ "$help" == *"--prepare-only"* && "$help" != *"--use-prepared"* ]] ||
   fail "help does not expose the single candidate-preparation path"
 [[ "$help" == *"--verified-ci-run"* ]] ||
-  fail "help omits the exact-SHA CI promotion flow"
+  fail "help omits the verified-CI promotion flow"
 
 expect_rejected "does not allow --skip-tests" --target github --skip-tests --dry-run
 expect_rejected "does not allow --no-clean" --target custom --repo-url https://example.invalid/releases --no-clean --dry-run
@@ -44,6 +44,11 @@ expect_rejected "requires a remote publish target" --prepare-only
 expect_rejected "Unknown option: --use-prepared" --target github --use-prepared
 expect_rejected "positive numeric workflow run ID" --target github --prepare-only --verified-ci-run invalid
 expect_rejected "valid only with --prepare-only" --target github --verified-ci-run 123
+expect_rejected "Verified CI requires its attempt" --target github --prepare-only --verified-ci-run 123
+VERIFIED_CI_RUN_ATTEMPT=1 \
+VERIFIED_CI_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+VERIFIED_CI_TREE=0000000000000000000000000000000000000000 \
+  expect_rejected "file tree differs" --target github --prepare-only --verified-ci-run 123
 expect_rejected "Unknown option: --password" --password secret
 expect_rejected "Unknown option: --allow-dirty" --allow-dirty
 expect_rejected "requires MAGRATHEA_SIGNING_KEY" --target github
@@ -124,6 +129,9 @@ git -C "$fixture_root" \
 if ! fixture_output="$(
   MAGRATHEA_SIGNING_KEY=contract-test-key \
   MAGRATHEA_SIGNING_PASSWORD=contract-test-password \
+  VERIFIED_CI_RUN_ATTEMPT=2 \
+  VERIFIED_CI_COMMIT="$(git -C "$fixture_root" rev-parse HEAD)" \
+  VERIFIED_CI_TREE="$(git -C "$fixture_root" rev-parse 'HEAD^{tree}')" \
     /bin/bash "$fixture_root/scripts/publish-sdk" \
       --target github \
       --prepare-only \
@@ -140,10 +148,14 @@ fi
   -s "$fixture_root/build/distributions/Magrathea-0.1.0-alpha.1-release-candidate.zip.sha256" &&
   -s "$fixture_root/build/distributions/Magrathea-0.1.0-alpha.1-maven-files.sha256" ]] ||
   fail "release preparation did not produce the complete promotion evidence"
-grep -Fxq 'format=3' "$fixture_root/build/release/publish-verification.receipt" ||
-  fail "release preparation did not write a format-3 receipt"
+grep -Fxq 'format=4' "$fixture_root/build/release/publish-verification.receipt" ||
+  fail "release preparation did not write a format-4 receipt"
 grep -Fxq 'ci_run_id=12345' "$fixture_root/build/release/publish-verification.receipt" ||
-  fail "release receipt is not bound to the exact-SHA CI run"
+  fail "release receipt is not bound to the CI run"
+grep -Fxq 'ci_run_attempt=2' "$fixture_root/build/release/publish-verification.receipt" ||
+  fail "release receipt is not bound to the original CI attempt"
+grep -Fxq "ci_tree=$(git -C "$fixture_root" rev-parse 'HEAD^{tree}')" "$fixture_root/build/release/publish-verification.receipt" ||
+  fail "release receipt does not retain the verified tree"
 
 verification_line="$(grep -En 'run_gradle "\$\{VERIFY_TASKS\[@\]\}"' "$PUBLISHER" | cut -d: -f1)"
 preflight_line="$(grep -En 'printPublishingArtifactCoordinates \|' "$PUBLISHER" | tail -1 | cut -d: -f1)"

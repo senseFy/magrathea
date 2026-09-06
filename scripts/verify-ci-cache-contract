@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""Exercise task-cache transfer with real Gradle builds in isolated workspaces."""
+
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+
+import ci_cache
+from release_notes import ROOT
+
+
+with tempfile.TemporaryDirectory(prefix='magrathea-gradle-cache-') as directory:
+    root = Path(directory)
+    producer, consumer = root / 'producer', root / 'consumer'
+    producer.mkdir()
+    (producer / 'settings.gradle').write_text("rootProject.name = 'cache-consumer'\n")
+    (producer / 'build.gradle').write_text("plugins { id 'java' }\nversion = '1.0'\n")
+    (producer / 'gradle.properties').write_text('org.gradle.caching=true\n')
+    source = producer / 'src/main/java/Example.java'
+    source.parent.mkdir(parents=True)
+    source.write_text('public class Example { public static int value() { return 1; } }\n')
+    shutil.copytree(producer, consumer)
+    (consumer / 'build.gradle').write_text("plugins { id 'java' }\nversion = '1.1'\n")
+
+    # The wrapper can reuse its installed distribution; each build uses a distinct task cache.
+    def build(project, home):
+        init = project / 'cache.init.gradle'
+        init.write_text('gradle.settingsEvaluated { settings ->\n'
+                        '  settings.buildCache.local.directory = new File(System.getenv("FIXTURE_TASK_CACHE"))\n'
+                        '}\n')
+        environment = dict(os.environ, FIXTURE_TASK_CACHE=str(home / 'caches/build-cache-1'))
+        result = subprocess.run([str(ROOT / 'gradlew'), '-p', str(project), '--init-script', str(init),
+                                 'clean', 'compileJava', '--build-cache', '--no-daemon', '--console=plain'],
+                                env=environment, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        if result.returncode:
+            raise RuntimeError(result.stdout)
+        return result.stdout
+
+    producer_home, consumer_home = root / 'home-a', root / 'home-b'
+    first = build(producer, producer_home)
+    if ':compileJava FROM-CACHE' in first:
+        raise AssertionError('producer unexpectedly used a cache')
+    metadata = {'repository': 'fixture/magrathea', 'run_id': 1, 'run_attempt': 1,
+                'platform': 'fixture', 'gate': 'linux-gate'}
+    name = ci_cache.artifact_name('fixture', 'linux-gate', 1)
+    snapshot = root / 'download' / name
+    if not ci_cache.export(producer_home, snapshot, metadata):
+        raise AssertionError('Gradle produced no transferable task outputs')
+    if not ci_cache.restore(consumer_home, snapshot.parent, [dict(metadata, id=1, name=name)]):
+        raise AssertionError('task outputs were not restored')
+    second = build(consumer, consumer_home)
+    if ':compileJava FROM-CACHE' not in second:
+        raise AssertionError('version-only build did not reuse compilation:\n' + second)
+    original_class = (consumer / 'build/classes/java/main/Example.class').read_bytes()
+    (consumer / 'src/main/java/Example.java').write_text(
+        'public class Example { public static int value() { return 2; } }\n')
+    third = build(consumer, consumer_home)
+    if ':compileJava FROM-CACHE' in third:
+        raise AssertionError('changed source reused stale compilation')
+    if original_class == (consumer / 'build/classes/java/main/Example.class').read_bytes():
+        raise AssertionError('changed source did not change the compiled class')
+    print('CI_CACHE_CONTRACT_PASS: relocated version-only build reused outputs; source change recompiled.')

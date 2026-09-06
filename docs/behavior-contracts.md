@@ -86,7 +86,7 @@ substitute for the public API or the tests themselves.
 | D-005 | Remote Maven publication requires in-memory PGP signing, publication-isolated signature outputs, and immutable coordinates | Publisher and rollback contracts |
 | D-006 | The production SBOM has the exact internal-module set, recognized licenses, and no test dependencies | Supply-chain mutation gate |
 | D-007 | The release bundle contains Maven, Web, release notes/key, SBOM/license, and SHA-256 artifacts | Release-bundle verifier |
-| D-008 | A reviewed Release PR merge authorizes a version-and-commit-bound publication after exact-commit CI; the annotated tag and attested Candidate remain immutable across retries | Tag, Candidate, and workflow contracts |
+| D-008 | A reviewed Release PR merge authorizes publication after complete CI of the same file tree; the receipt binds tested and released commits to a CI run/attempt, and the tag and attested Candidate remain immutable across retries | Tag, Candidate, and workflow contracts |
 | D-009 | Remote publication uses the candidate's signed, manifest-bound bytes; reruns reject mismatches and fill only absent files | Exact-publication contract |
 | D-010 | Every remote coordinate and an isolated JVM/Android consumer are verified before the GitHub Release | Remote-resolution contract |
 
@@ -99,7 +99,7 @@ substitute for the public API or the tests themselves.
 | `./gradlew verifySdkApple` | Published Apple graph linkage and Simulator composition tests |
 | `./gradlew verifySdkWeb` | JS/Wasm tests, Gateway real HTTP, TypeScript, and browser engines |
 | `./gradlew clean verifySdkRelease` | Complete clean release verification graph and bundle |
-| `./gradlew clean prepareSdkRelease` | Signed evidence assembly after the exact commit passed CI |
+| `./gradlew clean prepareSdkRelease` | Signed evidence assembly after the release file tree passed CI |
 | `./gradlew verifyAndroidDevice` | Keystore/no-backup, Room process/corruption, HTTP/cancel, and device baseline |
 | `make verify-mcp-conformance` | Official MCP client initialize and Tool-call scenarios over real loopback Streamable HTTP |
 

@@ -68,7 +68,7 @@ publish-local: ## Verify and publish the SDK to the local Maven repository.
 	./scripts/publish-sdk $(PUBLISH_ARGS)
 
 release-check: ## Check release automation locally without builds or remote writes.
-	python3 scripts/test_release.py
+	python3 -m unittest discover -s scripts -p 'test_*.py'
 	./scripts/verify-ci-contract
 	npm ci --prefix tooling/release-please --ignore-scripts --no-audit --no-fund
 	npm test --prefix tooling/release-please
