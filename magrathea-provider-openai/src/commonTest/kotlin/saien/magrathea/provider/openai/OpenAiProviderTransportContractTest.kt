@@ -335,7 +335,7 @@ class OpenAiProviderTransportContractTest {
     }
 
     @Test
-    fun openRouterResponsesDialectNormalizesResponseErrorWithoutWeakeningStandardCodec() = runTest {
+    fun responseErrorMapsToTypedFailureAcrossResponsesProfiles() = runTest {
         val errorStream = listOf(
             "response.created" to
                 """{"type":"response.created","response":{"id":"resp_error_1","status":"in_progress"}}""",
@@ -362,7 +362,7 @@ class OpenAiProviderTransportContractTest {
 
         val standard = OpenAiResponsesCodec("openai", "gpt-contract")
         standard.decodeServerSentEvent(errorStream.first().first, errorStream.first().second)
-        assertFailsWith<ProviderProtocolException> {
+        assertFailsWith<ProviderRateLimitException> {
             standard.decodeServerSentEvent(errorStream.last().first, errorStream.last().second)
         }
     }

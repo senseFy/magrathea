@@ -173,7 +173,10 @@ class HttpStreamFramer(
         val line = if (firstLine) rawLine.removePrefix(UTF8_BOM) else rawLine
         firstLine = false
         if (line.length > limits.maxStreamLineChars) {
-            throw ProviderProtocolException("HTTP stream line exceeds configured limit")
+            throw ProviderProtocolException(
+                ProviderProtocolDiagnostic("http.stream_line_limit_exceeded"),
+                "HTTP stream line exceeds configured limit",
+            )
         }
         return when (format) {
             HttpStreamFormat.JSON_LINES -> acceptJsonLine(line)
@@ -208,7 +211,10 @@ class HttpStreamFramer(
             "data" -> {
                 val addedChars = value.length + if (dataLines.isEmpty()) 0 else 1
                 if (eventChars + addedChars > limits.maxStreamEventChars) {
-                    throw ProviderProtocolException("Server-sent event exceeds configured limit")
+                    throw ProviderProtocolException(
+                        ProviderProtocolDiagnostic("http.sse_event_limit_exceeded"),
+                        "Server-sent event exceeds configured limit",
+                    )
                 }
                 dataLines += value
                 eventChars += addedChars

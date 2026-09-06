@@ -39,16 +39,18 @@ products intersect it with their own policy and model-specific metadata when ava
 adapters default to no attachment support and opt in explicitly. Request codecs validate the
 attachment input they encode.
 
-Reference codecs model the selected wire contract. Responses and Chat Completions share one module
-but use separate codecs. OpenRouter maps `response.error` into the Responses error lifecycle, and
-xAI maps hosted X Search activity through its dialect. Distinct protocols integrate through
-`ProviderAdapter`.
+Reference codecs translate the content they consume into canonical events, validating the fields
+needed for that translation. Optional wire details do not impose additional Runtime invariants.
+Responses and Chat Completions share a module but use separate codecs; distinct protocols integrate
+through `ProviderAdapter`. xAI hosted X Search remains Provider-owned.
 
 Provider-authoritative metadata is retained for replay with the same Provider and model. A
 cross-Provider or cross-model replay rebuilds only portable text and tool semantics. Tool calls
-become executable only after their protocol lifecycle is finalized and their arguments validate.
+become executable only after the response completes, their arguments are finalized JSON objects,
+and Runtime checks the advertised tool and execution permissions. Incomplete, failed, and cancelled
+responses do not trigger tool execution.
 
-Reasoning has three separate meanings that must not be collapsed:
+Reasoning separates usage, request intent, visible content, and continuation state:
 
 - token usage reports how much internal reasoning a model consumed;
 - request intent selects `Auto`, explicit disable, or a semantic effort supported by trusted model
@@ -83,16 +85,19 @@ tool results, reasoning metadata, and terminal state without relying on server-s
 storage. OpenAI and Anthropic apply the equivalent rule to their authoritative output/content
 structures.
 
-Streaming codecs preserve strict lifecycle validation while accepting standard transport-envelope
-variants. Responses events may omit the optional SSE event name; when present it must match the
-payload type. Responses keeps `summary_text` and `reasoning_text` content-part lifecycles distinct.
-OpenRouter and xAI Responses streams may supply the complete reasoning item at
-`response.output_item.done` without nested completion events. Their dialects reconcile that item
-when identity, kind, part count, order, and streamed prefix agree.
-Chat Completions assembles indexed text, normalized `reasoning_details`, legacy reasoning text, and
-tool-call deltas and requires
-its `[DONE]` terminal sentinel. Responses and Messages accept a single post-terminal `[DONE]`.
-Missing, premature, duplicate, or post-sentinel data still fails closed.
+Responses uses the payload event type for dispatch. Deltas are provisional; `output_item.done`
+finalizes visible text and reasoning without requiring nested done events or matching streamed
+prefixes. The terminal response supplies any unfinished items and owns final tool arguments and
+replay metadata. Already finalized visible blocks are not revalidated against replay metadata.
+Interleaved items and additional reasoning parts may wait for item completion to keep canonical
+blocks separate. Unknown events, output extensions, and annotations are ignored when not consumed;
+duplicate boundaries and optional `[DONE]` sentinels do not produce extra canonical events.
+Malformed consumed fields, ambiguous tool identity, explicit errors, and missing terminal responses
+remain failures. Responses profiles share these completion rules.
+
+Chat Completions assembles indexed deltas and requires its `[DONE]` terminal sentinel. Anthropic
+Messages retains its block-index lifecycle and accepts one post-`message_stop` `[DONE]`. Reference
+adapters validate transport completion; late transport failures follow [Runtime recovery](../recovery.md).
 
 Custom integrations implement the public `ProviderAdapter` and may reuse `HttpTransport`, canonical
 events, typed failures, and Runtime contracts. Name similarity is not treated as protocol

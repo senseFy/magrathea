@@ -590,7 +590,19 @@ class ProviderTimeoutException(
     cause: Throwable? = null,
 ) : ProviderNetworkException("Provider timeout (${phase.name.lowercase()})", cause)
 
-class ProviderProtocolException(message: String, cause: Throwable? = null) : ProviderException(message, cause)
+class ProviderProtocolException private constructor(
+    message: String,
+    cause: Throwable?,
+    val diagnostic: ProviderProtocolDiagnostic?,
+) : ProviderException(message, cause) {
+    constructor(message: String, cause: Throwable? = null) : this(message, cause, null)
+
+    constructor(
+        diagnostic: ProviderProtocolDiagnostic,
+        message: String,
+        cause: Throwable? = null,
+    ) : this(message, cause, diagnostic)
+}
 
 interface ProviderRegistry {
     fun get(key: String): ProviderAdapter?
@@ -647,10 +659,9 @@ class ProviderEventAssembler(
 }
 
 private fun AgentMessage.startText(signature: String?): AgentMessage {
-    if (signature == null) return this
     val last = parts.lastOrNull() as? TextPart
     return if (last != null && last.phase != MessageBlockPhase.FINAL) {
-        copy(parts = parts.dropLast(1) + last.copy(signature = signature))
+        copy(parts = parts.dropLast(1) + last.copy(signature = signature ?: last.signature))
     } else {
         copy(parts = parts + TextPart(text = "", signature = signature, phase = MessageBlockPhase.COMMENTARY))
     }
@@ -816,7 +827,9 @@ class DefaultReplayPolicy(
         val transformed = messages.mapNotNull { message ->
             when (message.role) {
                 MessageRole.USER, MessageRole.SYSTEM, MessageRole.TOOL -> transformToolResultMessage(message, toolCallIdMap)
-                MessageRole.ASSISTANT -> transformAssistantMessage(message, model, toolCallIdMap)
+                MessageRole.ASSISTANT -> if (message.stopReason == StopReason.MAX_TOKENS &&
+                    message.parts.any { it is ToolCallPart && it.partial }
+                ) null else transformAssistantMessage(message, model, toolCallIdMap)
             }
         }
 

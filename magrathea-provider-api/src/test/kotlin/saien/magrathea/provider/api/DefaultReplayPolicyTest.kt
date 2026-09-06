@@ -13,6 +13,7 @@ import saien.magrathea.core.MessagePart
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ReasoningPart
+import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolResultPart
@@ -223,6 +224,21 @@ class DefaultReplayPolicyTest {
         assertEquals(MessageRole.TOOL, transformed[1].role)
         assertEquals(MessageRole.USER, transformed[2].role)
         assertTrue((transformed[0].parts.single() as ToolCallPart).partial)
+    }
+
+    @Test
+    fun unfinishedToolTurnsAreExcludedFromReplayButTextOnlyLimitsRemain() = runBlocking {
+        val textOnly = assistantMessage("openai", "gpt-5", listOf(TextPart("A partial answer")))
+            .copy(stopReason = StopReason.MAX_TOKENS)
+        val unfinished = assistantMessage("openai", "gpt-5", listOf(
+            TextPart("Preparing a tool call"),
+            ToolCallPart("call-1", "search", JsonPrimitive("{"), partial = true),
+        )).copy(stopReason = StopReason.MAX_TOKENS)
+        val user = AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("continue")))
+        for (target in listOf(model, model.copy(model = "other-model"))) {
+            assertEquals(listOf(textOnly, user), DefaultReplayPolicy().transform(listOf(textOnly, unfinished, user), target))
+        }
+        assertTrue((unfinished.parts.last() as ToolCallPart).partial)
     }
 
     private fun assistantMessage(provider: String, model: String, parts: List<MessagePart>): AgentMessage {

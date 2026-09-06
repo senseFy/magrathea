@@ -23,6 +23,7 @@ import saien.magrathea.provider.api.ProviderAdapter
 import saien.magrathea.provider.api.ProviderAuthException
 import saien.magrathea.provider.api.ProviderChunk
 import saien.magrathea.provider.api.ProviderInputCapabilities
+import saien.magrathea.provider.api.ProviderProtocolDiagnostic
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRequest
 import saien.magrathea.provider.api.ProviderStreamInterruptedException
@@ -130,19 +131,21 @@ class OpenAiProviderAdapter(
         protocol: OpenAiWireProtocol,
     ): Flow<ProviderChunk> = channelFlow {
         val response = transport.execute(httpRequest).requireSuccessful()
-        send(
+        val chunk = try {
             when (protocol) {
                 OpenAiWireProtocol.RESPONSES -> OpenAiResponsesCodec(
                     providerKey = key,
                     model = request.model.model,
-                    json = json,
-                    dialectPolicy = profile.dialect.responsesPolicy(config.hasXSearch()),
+                    allowServerManagedTools = profile.dialect == OpenAiProtocolDialect.XAI && config.hasXSearch(),
                 )
                     .decodeNonStreaming(response.body)
                 OpenAiWireProtocol.CHAT_COMPLETIONS -> OpenAiChatCompletionsCodec(key, request.model.model)
                     .decodeNonStreaming(response.body)
-            },
-        )
+            }
+        } catch (failure: ProviderProtocolException) {
+            throw failure.withOpenAiDiagnosticContext(eventType = "non_streaming")
+        }
+        send(chunk)
     }
 
     private fun streamResponse(
@@ -151,19 +154,20 @@ class OpenAiProviderAdapter(
         config: OpenAiTransportConfig,
         protocol: OpenAiWireProtocol,
     ): Flow<ProviderChunk> = channelFlow {
-        val normalizer = OpenAiResponsesDialectNormalizer(profile.dialect, json)
-            .takeIf { protocol == OpenAiWireProtocol.RESPONSES }
         val responsesCodec = OpenAiResponsesCodec(
             providerKey = key,
             model = request.model.model,
-            json = json,
-            dialectPolicy = profile.dialect.responsesPolicy(config.hasXSearch()),
+            allowServerManagedTools = profile.dialect == OpenAiProtocolDialect.XAI && config.hasXSearch(),
         ).takeIf { protocol == OpenAiWireProtocol.RESPONSES }
         val chatCodec = OpenAiChatCompletionsCodec(key, request.model.model)
             .takeIf { protocol == OpenAiWireProtocol.CHAT_COMPLETIONS }
         var transportCompleted = false
+        var eventIndex = 0L
         transport.stream(httpRequest, HttpStreamFormat.SERVER_SENT_EVENTS).collect { frame ->
-            if (transportCompleted) throw ProviderProtocolException("OpenAI transport emitted a frame after completion")
+            if (transportCompleted) throw ProviderProtocolException(
+                ProviderProtocolDiagnostic("openai.frame_after_transport_completion"),
+                "OpenAI transport emitted a frame after completion",
+            )
             when (frame) {
                 is HttpStreamFrame.ResponseStarted -> HttpResponseSpec(
                     statusCode = frame.statusCode,
@@ -171,28 +175,44 @@ class OpenAiProviderAdapter(
                     body = "",
                 ).requireSuccessful()
                 is HttpStreamFrame.ServerSentEvent -> {
-                    val normalized = normalizer?.normalize(frame.event, frame.data)
-                    val chunk = responsesCodec?.decodeServerSentEvent(
-                        normalized?.eventName ?: frame.event,
-                        normalized?.payload ?: frame.data,
-                    )
-                        ?: chatCodec?.decodeServerSentEvent(frame.event, frame.data)
+                    eventIndex += 1
+                    val chunk = try {
+                        responsesCodec?.decodeServerSentEvent(
+                            frame.event,
+                            frame.data,
+                        ) ?: chatCodec?.decodeServerSentEvent(frame.event, frame.data)
+                    } catch (failure: ProviderProtocolException) {
+                        throw failure.withOpenAiDiagnosticContext(
+                            eventType = if (frame.data == "[DONE]") "done_sentinel"
+                                else if (protocol == OpenAiWireProtocol.CHAT_COMPLETIONS) "chat_completion_chunk"
+                                else safeOpenAiEventType(frame.event),
+                            eventIndex = eventIndex,
+                        )
+                    }
                     chunk?.let { send(it) }
                 }
                 is HttpStreamFrame.RetryHint -> Unit
-                is HttpStreamFrame.JsonLine -> throw ProviderProtocolException("OpenAI stream must use SSE framing")
+                is HttpStreamFrame.JsonLine -> throw ProviderProtocolException(
+                    ProviderProtocolDiagnostic("openai.invalid_stream_framing", eventType = "json_line"),
+                    "OpenAI stream must use SSE framing",
+                )
                 HttpStreamFrame.Completed -> {
                     try {
                         responsesCodec?.finish()
                         chatCodec?.finish()
                     } catch (failure: ProviderProtocolException) {
-                        throw ProviderStreamInterruptedException(failure)
+                        throw ProviderStreamInterruptedException(
+                            failure.withOpenAiDiagnosticContext(eventType = "stream_end"),
+                        )
                     }
                     transportCompleted = true
                 }
             }
         }
-        if (!transportCompleted) throw ProviderProtocolException("OpenAI transport ended without a completion frame")
+        if (!transportCompleted) throw ProviderProtocolException(
+            ProviderProtocolDiagnostic("openai.missing_transport_completion", eventType = "stream_end"),
+            "OpenAI transport ended without a completion frame",
+        )
     }
 
     private fun requireCredential(request: ProviderRequest): ProviderCredential {

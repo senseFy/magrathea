@@ -15,6 +15,7 @@ import saien.magrathea.core.StopReason
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.provider.api.ProviderChunk
 import saien.magrathea.provider.api.ProviderEvent
+import saien.magrathea.provider.api.ProviderProtocolDiagnostic
 import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderUsage
 import saien.magrathea.provider.api.validateSemantics
@@ -47,7 +48,7 @@ internal class OpenAiChatCompletionsCodec(
         val choice = root.singleChoice()
         val message = choice.requiredChatObject("message")
         if (message.requiredChatString("role") != "assistant") {
-            chatProtocolFailure("OpenAI-compatible response role must be assistant")
+            chatProtocolFailure("response_role_must_be_assistant", "OpenAI-compatible response role must be assistant")
         }
         val events = buildList {
             addAll(decodeCompleteReasoning(message))
@@ -70,12 +71,12 @@ internal class OpenAiChatCompletionsCodec(
 
     fun decodeServerSentEvent(eventName: String?, payload: String): ProviderChunk? {
         if (eventName !in setOf(null, "message", "data")) {
-            chatProtocolFailure("OpenAI-compatible stream has an unsupported SSE event name")
+            chatProtocolFailure("stream_has_an_unsupported_sse_event_name", "OpenAI-compatible stream has an unsupported SSE event name")
         }
-        if (terminal) chatProtocolFailure("OpenAI-compatible stream emitted data after completion")
+        if (terminal) chatProtocolFailure("stream_emitted_data_after_completion", "OpenAI-compatible stream emitted data after completion")
         if (payload == "[DONE]") {
             val reason = finishReason
-                ?: chatProtocolFailure("OpenAI-compatible stream ended before a finish reason")
+                ?: chatProtocolFailure("stream_ended_before_a_finish_reason", "OpenAI-compatible stream ended before a finish reason")
             terminal = true
             return ProviderChunk(
                 listOf(completedEvent(reason, usage = usage, hasToolCalls = toolCalls.isNotEmpty())),
@@ -87,23 +88,23 @@ internal class OpenAiChatCompletionsCodec(
         recordIdentity(root)
         (root["usage"] as? JsonObject)?.let { usage = it.toChatUsage() }
         val choices = root["choices"] as? JsonArray
-            ?: chatProtocolFailure("OpenAI-compatible streaming chunk is missing choices")
+            ?: chatProtocolFailure("streaming_chunk_is_missing_choices", "OpenAI-compatible streaming chunk is missing choices")
         if (choices.isEmpty()) return null
-        if (choices.size != 1) chatProtocolFailure("OpenAI-compatible streaming requires exactly one choice")
+        if (choices.size != 1) chatProtocolFailure("streaming_requires_exactly_one_choice", "OpenAI-compatible streaming requires exactly one choice")
         val choice = choices.single() as? JsonObject
-            ?: chatProtocolFailure("OpenAI-compatible streaming choice must be an object")
+            ?: chatProtocolFailure("streaming_choice_must_be_an_object", "OpenAI-compatible streaming choice must be an object")
         if ((choice["index"] as? JsonPrimitive)?.intOrNull != 0) {
-            chatProtocolFailure("OpenAI-compatible streaming choice index must be zero")
+            chatProtocolFailure("streaming_choice_index_must_be_zero", "OpenAI-compatible streaming choice index must be zero")
         }
         if (finishReason != null) {
-            chatProtocolFailure("OpenAI-compatible stream emitted a choice after its finish reason")
+            chatProtocolFailure("stream_emitted_a_choice_after_its_finish_reason", "OpenAI-compatible stream emitted a choice after its finish reason")
         }
 
         val events = buildList {
             val delta = choice["delta"] as? JsonObject
-                ?: chatProtocolFailure("OpenAI-compatible streaming choice is missing delta")
+                ?: chatProtocolFailure("streaming_choice_is_missing_delta", "OpenAI-compatible streaming choice is missing delta")
             delta.optionalChatString("role")?.let { role ->
-                if (role != "assistant") chatProtocolFailure("OpenAI-compatible streaming role must be assistant")
+                if (role != "assistant") chatProtocolFailure("streaming_role_must_be_assistant", "OpenAI-compatible streaming role must be assistant")
             }
             val reasoningDetailElement = delta["reasoning_details"]
             if (reasoningDetailElement != null && reasoningDetailElement != JsonNull) {
@@ -147,17 +148,17 @@ internal class OpenAiChatCompletionsCodec(
     }
 
     fun finish() {
-        if (!terminal) chatProtocolFailure("OpenAI-compatible stream ended without [DONE]")
+        if (!terminal) chatProtocolFailure("stream_ended_without_done", "OpenAI-compatible stream ended without [DONE]")
     }
 
     private fun recordIdentity(root: JsonObject) {
         val id = root.requiredChatString("id")
         if (responseId == null) responseId = id else if (responseId != id) {
-            chatProtocolFailure("OpenAI-compatible response ID changed")
+            chatProtocolFailure("response_id_changed", "OpenAI-compatible response ID changed")
         }
         root.optionalChatString("model")?.let { model ->
             if (responseModel == null) responseModel = model else if (responseModel != model) {
-                chatProtocolFailure("OpenAI-compatible response model changed")
+                chatProtocolFailure("response_model_changed", "OpenAI-compatible response model changed")
             }
         }
     }
@@ -168,7 +169,7 @@ internal class OpenAiChatCompletionsCodec(
             reasoningMode = ChatReasoningMode.DETAILS
             return details.flatMapIndexed { index, element ->
                 val detail = element as? JsonObject
-                    ?: chatProtocolFailure("OpenAI-compatible reasoning detail must be an object")
+                    ?: chatProtocolFailure("reasoning_detail_must_be_an_object", "OpenAI-compatible reasoning detail must be an object")
                 completeReasoningDetailEvents(detail, index)
             }
         }
@@ -183,26 +184,26 @@ internal class OpenAiChatCompletionsCodec(
 
     private fun decodeReasoningDetailDeltas(element: JsonElement): List<ProviderEvent> {
         if (reasoningMode == ChatReasoningMode.LEGACY) {
-            chatProtocolFailure("OpenAI-compatible stream changed reasoning representation")
+            chatProtocolFailure("stream_changed_reasoning_representation", "OpenAI-compatible stream changed reasoning representation")
         }
         val details = element as? JsonArray
-            ?: chatProtocolFailure("OpenAI-compatible reasoning_details must be an array")
+            ?: chatProtocolFailure("reasoning_details_must_be_an_array", "OpenAI-compatible reasoning_details must be an array")
         reasoningMode = ChatReasoningMode.DETAILS
         return buildList {
             details.forEach { item ->
                 val detail = item as? JsonObject
-                    ?: chatProtocolFailure("OpenAI-compatible reasoning detail must be an object")
+                    ?: chatProtocolFailure("reasoning_detail_must_be_an_object", "OpenAI-compatible reasoning detail must be an object")
                 val explicitIndex = (detail["index"] as? JsonPrimitive)?.intOrNull
                 val current = activeReasoningDetail
                 val index = explicitIndex ?: current
                     ?.takeIf { it.matches(detail) }
                     ?.index ?: reasoningDetails.size
-                if (index < 0) chatProtocolFailure("OpenAI-compatible reasoning detail index must not be negative")
+                if (index < 0) chatProtocolFailure("reasoning_detail_index_must_not_be_negative", "OpenAI-compatible reasoning detail index must not be negative")
 
                 if (current == null || current.index != index) {
                     addAll(finalizeActiveReasoningDetail())
                     if (index != reasoningDetails.size || reasoningDetails.containsKey(index)) {
-                        chatProtocolFailure("OpenAI-compatible reasoning detail index is out of order")
+                        chatProtocolFailure("reasoning_detail_index_is_out_of_order", "OpenAI-compatible reasoning detail index is out of order")
                     }
                     val created = ActiveChatReasoningDetail.from(index, detail)
                     reasoningDetails[index] = created
@@ -210,9 +211,9 @@ internal class OpenAiChatCompletionsCodec(
                     addAll(created.startEvents())
                 }
                 val active = activeReasoningDetail
-                    ?: chatProtocolFailure("OpenAI-compatible reasoning detail is not active")
+                    ?: chatProtocolFailure("reasoning_detail_is_not_active", "OpenAI-compatible reasoning detail is not active")
                 if (!active.matches(detail)) {
-                    chatProtocolFailure("OpenAI-compatible reasoning detail identity changed")
+                    chatProtocolFailure("reasoning_detail_identity_changed", "OpenAI-compatible reasoning detail identity changed")
                 }
                 addAll(active.append(detail))
             }
@@ -228,7 +229,7 @@ internal class OpenAiChatCompletionsCodec(
     private fun completeReasoningDetailEvents(detail: JsonObject, fallbackIndex: Int): List<ProviderEvent> {
         val index = (detail["index"] as? JsonPrimitive)?.intOrNull ?: fallbackIndex
         if (index != fallbackIndex) {
-            chatProtocolFailure("OpenAI-compatible reasoning detail index is out of order")
+            chatProtocolFailure("reasoning_detail_index_is_out_of_order", "OpenAI-compatible reasoning detail index is out of order")
         }
         val active = ActiveChatReasoningDetail.from(index, detail)
         return active.startEvents() + active.append(detail) + active.endEvents()
@@ -237,27 +238,27 @@ internal class OpenAiChatCompletionsCodec(
     private fun decodeToolCallDeltas(element: JsonElement?): List<ProviderEvent> {
         if (element == null || element == JsonNull) return emptyList()
         val calls = element as? JsonArray
-            ?: chatProtocolFailure("OpenAI-compatible tool-call delta must be an array")
+            ?: chatProtocolFailure("tool_call_delta_must_be_an_array", "OpenAI-compatible tool-call delta must be an array")
         return buildList {
             calls.forEach { item ->
                 val delta = item as? JsonObject
-                    ?: chatProtocolFailure("OpenAI-compatible tool-call delta must be an object")
+                    ?: chatProtocolFailure("tool_call_delta_must_be_an_object", "OpenAI-compatible tool-call delta must be an object")
                 val index = (delta["index"] as? JsonPrimitive)?.intOrNull?.takeIf { it >= 0 }
-                    ?: chatProtocolFailure("OpenAI-compatible tool-call delta is missing an index")
+                    ?: chatProtocolFailure("tool_call_delta_is_missing_an_index", "OpenAI-compatible tool-call delta is missing an index")
                 val function = delta["function"] as? JsonObject
                 val active = toolCalls[index] ?: run {
                     val id = delta.requiredChatString("id")
                     val type = delta.optionalChatString("type") ?: "function"
-                    if (type != "function") chatProtocolFailure("Unsupported OpenAI-compatible tool-call type $type")
+                    if (type != "function") chatProtocolFailure("unsupported_tool_call_type", "Unsupported OpenAI-compatible tool-call type $type")
                     val name = function?.requiredChatString("name")
-                        ?: chatProtocolFailure("OpenAI-compatible tool-call delta is missing a function name")
+                        ?: chatProtocolFailure("tool_call_delta_is_missing_a_function_name", "OpenAI-compatible tool-call delta is missing a function name")
                     ActiveChatToolCall(id, name, delta).also { created ->
                         toolCalls[index] = created
                         add(ProviderEvent.ToolCallStart(created.partial()))
                     }
                 }
-                delta.optionalChatString("id")?.let { if (it != active.id) chatProtocolFailure("OpenAI-compatible tool-call ID changed") }
-                function?.optionalChatString("name")?.let { if (it != active.name) chatProtocolFailure("OpenAI-compatible tool name changed") }
+                delta.optionalChatString("id")?.let { if (it != active.id) chatProtocolFailure("tool_call_id_changed", "OpenAI-compatible tool-call ID changed") }
+                function?.optionalChatString("name")?.let { if (it != active.name) chatProtocolFailure("tool_name_changed", "OpenAI-compatible tool name changed") }
                 function?.optionalChatString("arguments")?.let { arguments ->
                     active.arguments.append(arguments)
                     if (arguments.isNotEmpty()) add(ProviderEvent.ToolCallDelta(active.id, arguments))
@@ -269,13 +270,13 @@ internal class OpenAiChatCompletionsCodec(
     private fun decodeCompleteToolCalls(element: JsonElement?): List<ToolCallPart> {
         if (element == null || element == JsonNull) return emptyList()
         val calls = element as? JsonArray
-            ?: chatProtocolFailure("OpenAI-compatible tool_calls must be an array")
+            ?: chatProtocolFailure("tool_calls_must_be_an_array", "OpenAI-compatible tool_calls must be an array")
         return calls.map { item ->
             val call = item as? JsonObject
-                ?: chatProtocolFailure("OpenAI-compatible tool call must be an object")
+                ?: chatProtocolFailure("tool_call_must_be_an_object", "OpenAI-compatible tool call must be an object")
             val id = call.requiredChatString("id")
             val type = call.optionalChatString("type") ?: "function"
-            if (type != "function") chatProtocolFailure("Unsupported OpenAI-compatible tool-call type $type")
+            if (type != "function") chatProtocolFailure("unsupported_tool_call_type", "Unsupported OpenAI-compatible tool-call type $type")
             val function = call.requiredChatObject("function")
             ToolCallPart(
                 toolCallId = id,
@@ -333,7 +334,7 @@ internal class OpenAiChatCompletionsCodec(
 
     private fun ensurePristine() {
         if (terminal || responseId != null || finishReason != null || toolCalls.isNotEmpty()) {
-            chatProtocolFailure("OpenAI-compatible codec instance can decode only one response")
+            chatProtocolFailure("codec_instance_can_decode_only_one_response", "OpenAI-compatible codec instance can decode only one response")
         }
     }
 }
@@ -396,7 +397,7 @@ private data class ActiveChatReasoningDetail(
         )
         "reasoning.encrypted" -> listOf(ProviderEvent.ReasoningStart(redacted = true))
         "reasoning.server_tool_call" -> emptyList()
-        else -> chatProtocolFailure("Unsupported OpenAI-compatible reasoning detail type $type")
+        else -> chatProtocolFailure("unsupported_reasoning_detail_type", "Unsupported OpenAI-compatible reasoning detail type $type")
     }
 
     fun append(detail: JsonObject): List<ProviderEvent> {
@@ -419,7 +420,7 @@ private data class ActiveChatReasoningDetail(
                 }
                 val nextSignature = detail.optionalChatString("signature")
                 if (signature != null && nextSignature != null && signature != nextSignature) {
-                    chatProtocolFailure("OpenAI-compatible reasoning signature changed")
+                    chatProtocolFailure("reasoning_signature_changed", "OpenAI-compatible reasoning signature changed")
                 }
                 if (nextSignature != null) signature = nextSignature
                 if (textFieldPresent || nextSignature != null) {
@@ -433,11 +434,11 @@ private data class ActiveChatReasoningDetail(
                 emptyList()
             }
             "reasoning.server_tool_call" -> {
-                if (wasAppended) chatProtocolFailure("OpenAI-compatible server Tool reasoning detail was repeated")
+                if (wasAppended) chatProtocolFailure("server_tool_reasoning_detail_was_repeated", "OpenAI-compatible server Tool reasoning detail was repeated")
                 validateServerToolCall(JsonObject(common))
                 emptyList()
             }
-            else -> chatProtocolFailure("Unsupported OpenAI-compatible reasoning detail type $type")
+            else -> chatProtocolFailure("unsupported_reasoning_detail_type", "Unsupported OpenAI-compatible reasoning detail type $type")
         }
     }
 
@@ -456,7 +457,7 @@ private data class ActiveChatReasoningDetail(
             ),
         )
         "reasoning.server_tool_call" -> emptyList()
-        else -> chatProtocolFailure("Unsupported OpenAI-compatible reasoning detail type $type")
+        else -> chatProtocolFailure("unsupported_reasoning_detail_type", "Unsupported OpenAI-compatible reasoning detail type $type")
     }
 
     fun authoritative(): JsonObject = buildJsonObject {
@@ -483,7 +484,7 @@ private data class ActiveChatReasoningDetail(
             if (key !in payloadFields) {
                 val previous = common[key]
                 if (previous != null && previous != value) {
-                    chatProtocolFailure("OpenAI-compatible reasoning detail metadata changed")
+                    chatProtocolFailure("reasoning_detail_metadata_changed", "OpenAI-compatible reasoning detail metadata changed")
                 }
                 common[key] = value
             }
@@ -494,7 +495,7 @@ private data class ActiveChatReasoningDetail(
         fun from(index: Int, detail: JsonObject): ActiveChatReasoningDetail {
             val type = detail.requiredChatString("type")
             if (type !in REASONING_DETAIL_TYPES) {
-                chatProtocolFailure("Unsupported OpenAI-compatible reasoning detail type $type")
+                chatProtocolFailure("unsupported_reasoning_detail_type", "Unsupported OpenAI-compatible reasoning detail type $type")
             }
             return ActiveChatReasoningDetail(
                 index = index,
@@ -515,12 +516,12 @@ private enum class ChatReasoningMode {
 
 private fun JsonObject.singleChoice(): JsonObject {
     val choices = this["choices"] as? JsonArray
-        ?: chatProtocolFailure("OpenAI-compatible response is missing choices")
-    if (choices.size != 1) chatProtocolFailure("OpenAI-compatible response requires exactly one choice")
+        ?: chatProtocolFailure("response_is_missing_choices", "OpenAI-compatible response is missing choices")
+    if (choices.size != 1) chatProtocolFailure("response_requires_exactly_one_choice", "OpenAI-compatible response requires exactly one choice")
     val choice = choices.single() as? JsonObject
-        ?: chatProtocolFailure("OpenAI-compatible choice must be an object")
+        ?: chatProtocolFailure("choice_must_be_an_object", "OpenAI-compatible choice must be an object")
     if ((choice["index"] as? JsonPrimitive)?.intOrNull != 0) {
-        chatProtocolFailure("OpenAI-compatible choice index must be zero")
+        chatProtocolFailure("choice_index_must_be_zero", "OpenAI-compatible choice index must be zero")
     }
     return choice
 }
@@ -547,34 +548,34 @@ private fun parseChatArguments(value: String): JsonObject {
     val parsed = try {
         Json.parseToJsonElement(value)
     } catch (failure: Throwable) {
-        throw ProviderProtocolException("Malformed OpenAI-compatible function-call arguments", failure)
+        throw ProviderProtocolException(ProviderProtocolDiagnostic("openai.chat.malformed_arguments"), "Malformed OpenAI-compatible function-call arguments", failure)
     }
     return parsed as? JsonObject
-        ?: chatProtocolFailure("OpenAI-compatible function-call arguments must decode to an object")
+        ?: chatProtocolFailure("function_call_arguments_must_decode_to_an_object", "OpenAI-compatible function-call arguments must decode to an object")
 }
 
 private fun parseChatObject(payload: String, label: String): JsonObject = try {
     Json.parseToJsonElement(payload) as? JsonObject
-        ?: chatProtocolFailure("$label must be a JSON object")
+        ?: chatProtocolFailure("must_be_a_json_object", "$label must be a JSON object")
 } catch (failure: ProviderProtocolException) {
     throw failure
 } catch (failure: Throwable) {
-    throw ProviderProtocolException("Malformed $label", failure)
+    throw ProviderProtocolException(ProviderProtocolDiagnostic("openai.chat.malformed_json"), "Malformed $label", failure)
 }
 
 private fun JsonObject.requiredChatObject(key: String): JsonObject =
-    this[key] as? JsonObject ?: chatProtocolFailure("OpenAI-compatible payload is missing object field $key")
+    this[key] as? JsonObject ?: chatProtocolFailure("payload_is_missing_object_field", "OpenAI-compatible payload is missing object field $key", field = key)
 
 private fun JsonObject.optionalChatArray(key: String): JsonArray? = when (val value = this[key]) {
     null, JsonNull -> null
     is JsonArray -> value
-    else -> chatProtocolFailure("OpenAI-compatible payload field $key must be an array")
+    else -> chatProtocolFailure("payload_field_must_be_an_array", "OpenAI-compatible payload field $key must be an array", field = key)
 }
 
 private fun JsonObject.requiredChatString(key: String, allowEmpty: Boolean = false): String {
     val value = optionalChatString(key)
-        ?: chatProtocolFailure("OpenAI-compatible payload is missing string field $key")
-    if (!allowEmpty && value.isBlank()) chatProtocolFailure("OpenAI-compatible payload field $key must not be blank")
+        ?: chatProtocolFailure("payload_is_missing_string_field", "OpenAI-compatible payload is missing string field $key", field = key)
+    if (!allowEmpty && value.isBlank()) chatProtocolFailure("payload_field_must_not_be_blank", "OpenAI-compatible payload field $key must not be blank", field = key)
     return value
 }
 
@@ -587,7 +588,7 @@ private fun JsonObject.legacyReasoningValue(): String? {
         optionalChatString("reasoning_content"),
     ).distinct()
     if (values.size > 1) {
-        chatProtocolFailure("OpenAI-compatible reasoning aliases disagree")
+        chatProtocolFailure("reasoning_aliases_disagree", "OpenAI-compatible reasoning aliases disagree")
     }
     return values.singleOrNull()
 }
@@ -598,7 +599,8 @@ private fun validateServerToolCall(detail: JsonObject) {
     detail.requiredChatString("result", allowEmpty = true)
 }
 
-private fun chatProtocolFailure(message: String): Nothing = throw ProviderProtocolException(message)
+private fun chatProtocolFailure(reason: String, message: String, field: String? = null): Nothing =
+    throw ProviderProtocolException(ProviderProtocolDiagnostic("openai.chat.$reason", field = field), message)
 
 private val REASONING_DETAIL_TYPES = setOf(
     "reasoning.summary",

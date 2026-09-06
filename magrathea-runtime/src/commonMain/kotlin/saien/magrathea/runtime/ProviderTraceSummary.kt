@@ -4,7 +4,12 @@ import saien.magrathea.provider.api.ProviderChunk
 import saien.magrathea.provider.api.ProviderEvent
 import saien.magrathea.provider.api.ProviderException
 import saien.magrathea.provider.api.ProviderHttpException
+import saien.magrathea.provider.api.ProviderProtocolDiagnostic
+import saien.magrathea.provider.api.ProviderProtocolException
 import saien.magrathea.provider.api.ProviderRequest
+import saien.magrathea.provider.api.ProviderStreamInterruptedException
+
+internal const val CONTEXT_LIMIT_AFTER_OUTPUT_REASON = "runtime.context_limit_after_output"
 
 /** One fixed-size accumulator per physical attempt; no message history or payload is retained. */
 internal class ProviderTraceSummary(
@@ -79,6 +84,17 @@ internal class ProviderTraceSummary(
             "http_status" to (cause as? ProviderHttpException)?.statusCode,
             "retryable" to (cause as? ProviderException)?.retryable,
         ))
+        val diagnostic = if (protocolViolation) {
+            ProviderProtocolDiagnostic(CONTEXT_LIMIT_AFTER_OUTPUT_REASON)
+        } else cause.protocolDiagnostic()
+        diagnostic?.let { facts ->
+            span.addEvent("magrathea.provider.protocol_failure", traceAttributes(
+                "reason" to facts.reason,
+                "event_type" to facts.eventType,
+                "event_index" to facts.eventIndex,
+                "field" to facts.field,
+            ))
+        }
     }
 
     fun finish() {
@@ -94,4 +110,18 @@ internal class ProviderTraceSummary(
             "terminal_observed" to terminal,
         ))
     }
+}
+
+private fun Throwable.protocolDiagnostic(): ProviderProtocolDiagnostic? {
+    var current: Throwable? = this
+    // Coroutine stack recovery can nest a copy of the EOF wrapper. Traverse only this known
+    // wrapper, with a fixed bound; never inspect arbitrary exception messages or object dumps.
+    repeat(8) {
+        when (val failure = current) {
+            is ProviderProtocolException -> return failure.diagnostic
+            is ProviderStreamInterruptedException -> current = failure.cause
+            else -> return null
+        }
+    }
+    return null
 }
