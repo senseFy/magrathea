@@ -13,7 +13,7 @@ Chatbot, Provider, Tool, persistence, and browser layers they need.
 | Execution | `AgentRunner`, `ToolRegistry`, approval and permission gateways |
 | State | `AgentPersistence`, strict snapshot and checkpoint codecs |
 | Credentials | `CredentialRef`, `CredentialProvider`, transient `ProviderCredential` |
-| Infrastructure | Injectable IDs and clocks, tracing primitives, context propagation, debug recorder |
+| Infrastructure | Injectable IDs and clocks, tracing primitives, context propagation |
 
 The application composition root selects the Provider, network engine, database, credential store,
 and UI.
@@ -45,7 +45,7 @@ See [Providers](providers.md) for endpoint and authentication configuration, and
 - retry, explicit cancellation, recoverable interruption, checkpoints, and resume;
 - semantic context compaction and context-limit recovery;
 - Provider, Tool, and whole-run deadlines;
-- hard limits, tracing, and bounded debug recording.
+- hard limits and tracing.
 
 Its constructor accepts Core ports explicitly. `InMemoryAgentPersistence` and
 `InMemoryToolRegistry` are suitable for tests, previews, and intentionally ephemeral hosts;
@@ -87,7 +87,7 @@ local stdio processes. See [MCP](mcp.md).
 | `ChatbotClient` | Create or attach facades, resume, list, delete, and apply owning/borrowed close semantics |
 | `ChatbotSession` | Observe, send, regenerate, cancel, interrupt, resume, and update configuration |
 | `ChatbotSessionConfiguration` | Conversation-owned Provider, model, reasoning preference, and non-secret credential profile |
-| `ChatbotSnapshot` | Immutable product-facing messages, status, usage, context, failures, and Tool activity with typed origin |
+| `ChatbotSnapshot` | Immutable product-facing messages, status, run stop reason, usage, context, failures, and Tool activity with typed origin |
 | `ChatbotRequestFactory` | Map session state to an `AgentRequest` and apply host defaults |
 
 Create an owning root with `createChatbotClient(runner, ...)`, using the same `AgentPersistence` as
@@ -101,6 +101,11 @@ destructive operation that already closed one or all registered facades.
 `ChatbotSnapshot.toolActivities` derives Tool lifecycle from canonical messages and live events
 while using the canonical persisted state. Typed user-audience image results and their stable
 `MediaReference` values are available through `ChatbotToolResult.images`.
+
+`ChatbotSnapshot.stopReason` exposes the canonical run-level reason, separately from each
+message's stop reason. A `COMPLETED` status may carry `MAX_TURNS` when the runtime exhausted
+its turn budget without a final answer. The reason survives session restoration and is cleared
+when a new run starts; it does not change runtime stopping behavior.
 
 ## Persistence and credentials
 

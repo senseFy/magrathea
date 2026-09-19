@@ -24,6 +24,7 @@ public final class saien/magrathea/mcp/McpConnectionFailure : java/lang/Enum {
 	public static final field AUTHENTICATION Lsaien/magrathea/mcp/McpConnectionFailure;
 	public static final field CLOSED Lsaien/magrathea/mcp/McpConnectionFailure;
 	public static final field PROTOCOL Lsaien/magrathea/mcp/McpConnectionFailure;
+	public static final field RATE_LIMITED Lsaien/magrathea/mcp/McpConnectionFailure;
 	public static final field TRANSPORT Lsaien/magrathea/mcp/McpConnectionFailure;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/mcp/McpConnectionFailure;

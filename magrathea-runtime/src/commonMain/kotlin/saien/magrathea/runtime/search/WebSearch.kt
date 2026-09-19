@@ -14,6 +14,7 @@ import saien.magrathea.core.ToolExecutionPermit
 import saien.magrathea.core.ToolExecutionRequest
 import saien.magrathea.core.ToolExecutionResult
 import saien.magrathea.core.ToolExecutor
+import saien.magrathea.core.ToolOrigin
 import saien.magrathea.core.ToolRecoveryPolicy
 import saien.magrathea.core.UnlimitedToolExecutionPermit
 
@@ -25,6 +26,7 @@ enum class WebSearchDepth {
 
 /** Host-owned policy for one portable web-search Tool instance. No credential belongs in this value. */
 data class WebSearchPolicy(
+    /** `0` leaves search calls uncapped; `1..20` sets a per-run and per-model-response limit. */
     val maxSearchCallsPerRun: Int = 3,
     val maxResultsPerQuery: Int = 8,
     val maxSourcesInContext: Int = 6,
@@ -40,8 +42,8 @@ data class WebSearchPolicy(
     val timeoutMs: Long = 12_000,
 ) {
     init {
-        require(maxSearchCallsPerRun in 1..MAX_SEARCH_CALLS_PER_RUN) {
-            "maxSearchCallsPerRun must be between 1 and $MAX_SEARCH_CALLS_PER_RUN"
+        require(maxSearchCallsPerRun in 0..MAX_SEARCH_CALLS_PER_RUN) {
+            "maxSearchCallsPerRun must be 0 (uncapped) or between 1 and $MAX_SEARCH_CALLS_PER_RUN"
         }
         require(maxResultsPerQuery in 1..MAX_RESULTS_PER_QUERY) {
             "maxResultsPerQuery must be between 1 and $MAX_RESULTS_PER_QUERY"
@@ -101,7 +103,16 @@ data class WebSearchSource(
 
 data class WebSearchBackendResponse(
     val results: List<WebSearchSource>,
-)
+    /** Host-supplied identity of the service that produced this response; presentation only. */
+    val origin: ToolOrigin? = null,
+) {
+    /** Retains the original response constructor for previously compiled hosts. */
+    constructor(results: List<WebSearchSource>) : this(results, origin = null)
+
+    /** Retains the original copy/default-copy signatures without discarding response identity. */
+    fun copy(results: List<WebSearchSource> = this.results): WebSearchBackendResponse =
+        WebSearchBackendResponse(results = results, origin = origin)
+}
 
 /**
  * Search service boundary owned by the host. Implementations must honor every request option or
@@ -158,8 +169,8 @@ class WebSearchTool(
         requiresPermission = requiresPermission,
         requiresApproval = requiresApproval,
         timeoutMs = policy.timeoutMs,
-        maxCallsPerTurn = policy.maxSearchCallsPerRun,
-        maxCallsPerRun = policy.maxSearchCallsPerRun,
+        maxCallsPerTurn = policy.maxSearchCallsPerRun.takeIf { it > 0 },
+        maxCallsPerRun = policy.maxSearchCallsPerRun.takeIf { it > 0 },
     )
 
     override fun executionPermit(request: ToolExecutionRequest): ToolExecutionPermit =
@@ -205,6 +216,7 @@ class WebSearchTool(
             query = query,
             sources = normalized.sources,
             truncated = normalized.truncated,
+            origin = response.origin,
         )
     }
 
@@ -213,6 +225,7 @@ class WebSearchTool(
         query: String,
         sources: List<WebSearchSource>,
         truncated: Boolean,
+        origin: ToolOrigin?,
     ): ToolExecutionResult {
         val sourceJson = sources.mapIndexed { index, source -> source.toJson(index + 1) }
         return ToolExecutionResult(
@@ -236,6 +249,7 @@ class WebSearchTool(
                     sources.forEach { source -> add(source.toCitationJson()) }
                 })
             },
+            origin = origin,
         )
     }
 

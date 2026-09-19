@@ -234,6 +234,7 @@ private fun projectRuntime(
         sessionId = if (runtime.phase == AgentSessionPhase.NEW) null else runtime.sessionId.value,
         messages = messages,
         status = status,
+        stopReason = if (state != null) state.stopReason?.toChatbotStopReason() else eventProjection.stopReason,
         failure = when {
             runtime.phase == AgentSessionPhase.RECOVERY_BLOCKED -> ChatbotFailure.RECOVERY_BLOCKED
             runtimeFailure != null -> runtimeFailure.toChatbotFailure()

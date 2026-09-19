@@ -393,10 +393,16 @@ public final class saien/magrathea/runtime/search/WebSearchBackendRequest {
 
 public final class saien/magrathea/runtime/search/WebSearchBackendResponse {
 	public fun <init> (Ljava/util/List;)V
+	public fun <init> (Ljava/util/List;Lsaien/magrathea/core/ToolOrigin;)V
+	public synthetic fun <init> (Ljava/util/List;Lsaien/magrathea/core/ToolOrigin;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Lsaien/magrathea/core/ToolOrigin;
 	public final fun copy (Ljava/util/List;)Lsaien/magrathea/runtime/search/WebSearchBackendResponse;
+	public final fun copy (Ljava/util/List;Lsaien/magrathea/core/ToolOrigin;)Lsaien/magrathea/runtime/search/WebSearchBackendResponse;
 	public static synthetic fun copy$default (Lsaien/magrathea/runtime/search/WebSearchBackendResponse;Ljava/util/List;ILjava/lang/Object;)Lsaien/magrathea/runtime/search/WebSearchBackendResponse;
+	public static synthetic fun copy$default (Lsaien/magrathea/runtime/search/WebSearchBackendResponse;Ljava/util/List;Lsaien/magrathea/core/ToolOrigin;ILjava/lang/Object;)Lsaien/magrathea/runtime/search/WebSearchBackendResponse;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getOrigin ()Lsaien/magrathea/core/ToolOrigin;
 	public final fun getResults ()Ljava/util/List;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;

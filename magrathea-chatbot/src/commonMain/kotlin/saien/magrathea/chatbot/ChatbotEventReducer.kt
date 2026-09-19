@@ -9,6 +9,7 @@ internal class ChatbotEventReducer {
             status = ChatbotStatus.RUNNING,
             failure = null,
             interruption = null,
+            stopReason = null,
         )
         is AgentEvent.TurnStarted,
         is AgentEvent.ContextTransformed,
@@ -17,6 +18,7 @@ internal class ChatbotEventReducer {
             val messages = event.checkpoint.state.messages.map { it.toChatbotMessageSnapshot() }
             state.copy(
                 messages = messages,
+                stopReason = event.checkpoint.state.stopReason?.toChatbotStopReason(),
                 usage = event.checkpoint.state.usage.toChatbotUsage(),
                 latestRequestUsage = event.checkpoint.state.latestRequestUsage.toChatbotUsage(),
                 contextManagement = event.checkpoint.state.contextManagement
@@ -47,6 +49,7 @@ internal class ChatbotEventReducer {
             state.copy(
                 messages = messages,
                 status = ChatbotStatus.COMPLETED,
+                stopReason = event.state.stopReason?.toChatbotStopReason(),
                 failure = null,
                 interruption = null,
                 usage = event.state.usage.toChatbotUsage(),
@@ -62,6 +65,7 @@ internal class ChatbotEventReducer {
         }
         is AgentEvent.Failed -> state.copy(
             status = ChatbotStatus.FAILED,
+            stopReason = ChatbotStopReason.ERROR,
             failure = event.code.toChatbotFailure(),
             interruption = null,
             toolActivities = state.toolActivities.withUnresolvedToolActivities(
@@ -70,6 +74,7 @@ internal class ChatbotEventReducer {
         )
         is AgentEvent.Cancelled -> state.copy(
             status = ChatbotStatus.CANCELLED,
+            stopReason = ChatbotStopReason.CANCELLED,
             interruption = null,
             toolActivities = state.toolActivities.withUnresolvedToolActivities(
                 ChatbotToolActivityStatus.CANCELLED,
@@ -80,6 +85,7 @@ internal class ChatbotEventReducer {
             state.copy(
                 messages = messages,
                 status = ChatbotStatus.INTERRUPTED,
+                stopReason = event.state.stopReason?.toChatbotStopReason(),
                 failure = null,
                 interruption = event.interruption.toChatbotInterruption(),
                 usage = event.state.usage.toChatbotUsage(),

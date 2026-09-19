@@ -28,8 +28,8 @@ Gradle tasks.
 1. Keep a change within one documented layer or explain any new dependency direction.
 2. Implement the behavior and add the smallest reasonable contract or regression test that would
    fail without it.
-3. Add a consumer-visible summary under `CHANGELOG.md`'s `Unreleased` section when the change
-   affects shipped behavior or a public contract.
+3. Follow the [Conventional Commits and Release PR workflow](#release-changes) for changes to
+   shipped behavior or public contracts.
 4. Run the narrow module test while iterating, then the smallest relevant repository gate.
 5. Update public documentation, serialization fixtures, or ABI baselines only when the contract
    intentionally changes.

@@ -343,8 +343,11 @@ public final class saien/magrathea/chatbot/ChatbotSessionConfiguration {
 public final class saien/magrathea/chatbot/ChatbotSnapshot {
 	public fun <init> (Lsaien/magrathea/chatbot/ChatbotSessionConfiguration;Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotStatus;Lsaien/magrathea/chatbot/ChatbotFailure;Lsaien/magrathea/chatbot/ChatbotInterruption;Lsaien/magrathea/chatbot/ChatbotUsage;Lsaien/magrathea/chatbot/ChatbotUsage;Lsaien/magrathea/chatbot/ChatbotContextManagementSnapshot;Ljava/util/List;)V
 	public synthetic fun <init> (Lsaien/magrathea/chatbot/ChatbotSessionConfiguration;Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotStatus;Lsaien/magrathea/chatbot/ChatbotFailure;Lsaien/magrathea/chatbot/ChatbotInterruption;Lsaien/magrathea/chatbot/ChatbotUsage;Lsaien/magrathea/chatbot/ChatbotUsage;Lsaien/magrathea/chatbot/ChatbotContextManagementSnapshot;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lsaien/magrathea/chatbot/ChatbotSessionConfiguration;Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotStatus;Lsaien/magrathea/chatbot/ChatbotFailure;Lsaien/magrathea/chatbot/ChatbotInterruption;Lsaien/magrathea/chatbot/ChatbotUsage;Lsaien/magrathea/chatbot/ChatbotUsage;Lsaien/magrathea/chatbot/ChatbotContextManagementSnapshot;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotStopReason;)V
+	public synthetic fun <init> (Lsaien/magrathea/chatbot/ChatbotSessionConfiguration;Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotStatus;Lsaien/magrathea/chatbot/ChatbotFailure;Lsaien/magrathea/chatbot/ChatbotInterruption;Lsaien/magrathea/chatbot/ChatbotUsage;Lsaien/magrathea/chatbot/ChatbotUsage;Lsaien/magrathea/chatbot/ChatbotContextManagementSnapshot;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotStopReason;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Lsaien/magrathea/chatbot/ChatbotSessionConfiguration;
 	public final fun component10 ()Ljava/util/List;
+	public final fun component11 ()Lsaien/magrathea/chatbot/ChatbotStopReason;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/util/List;
 	public final fun component4 ()Lsaien/magrathea/chatbot/ChatbotStatus;
@@ -354,7 +357,9 @@ public final class saien/magrathea/chatbot/ChatbotSnapshot {
 	public final fun component8 ()Lsaien/magrathea/chatbot/ChatbotUsage;
 	public final fun component9 ()Lsaien/magrathea/chatbot/ChatbotContextManagementSnapshot;
 	public final fun copy (Lsaien/magrathea/chatbot/ChatbotSessionConfiguration;Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotStatus;Lsaien/magrathea/chatbot/ChatbotFailure;Lsaien/magrathea/chatbot/ChatbotInterruption;Lsaien/magrathea/chatbot/ChatbotUsage;Lsaien/magrathea/chatbot/ChatbotUsage;Lsaien/magrathea/chatbot/ChatbotContextManagementSnapshot;Ljava/util/List;)Lsaien/magrathea/chatbot/ChatbotSnapshot;
+	public final fun copy (Lsaien/magrathea/chatbot/ChatbotSessionConfiguration;Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotStatus;Lsaien/magrathea/chatbot/ChatbotFailure;Lsaien/magrathea/chatbot/ChatbotInterruption;Lsaien/magrathea/chatbot/ChatbotUsage;Lsaien/magrathea/chatbot/ChatbotUsage;Lsaien/magrathea/chatbot/ChatbotContextManagementSnapshot;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotStopReason;)Lsaien/magrathea/chatbot/ChatbotSnapshot;
 	public static synthetic fun copy$default (Lsaien/magrathea/chatbot/ChatbotSnapshot;Lsaien/magrathea/chatbot/ChatbotSessionConfiguration;Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotStatus;Lsaien/magrathea/chatbot/ChatbotFailure;Lsaien/magrathea/chatbot/ChatbotInterruption;Lsaien/magrathea/chatbot/ChatbotUsage;Lsaien/magrathea/chatbot/ChatbotUsage;Lsaien/magrathea/chatbot/ChatbotContextManagementSnapshot;Ljava/util/List;ILjava/lang/Object;)Lsaien/magrathea/chatbot/ChatbotSnapshot;
+	public static synthetic fun copy$default (Lsaien/magrathea/chatbot/ChatbotSnapshot;Lsaien/magrathea/chatbot/ChatbotSessionConfiguration;Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotStatus;Lsaien/magrathea/chatbot/ChatbotFailure;Lsaien/magrathea/chatbot/ChatbotInterruption;Lsaien/magrathea/chatbot/ChatbotUsage;Lsaien/magrathea/chatbot/ChatbotUsage;Lsaien/magrathea/chatbot/ChatbotContextManagementSnapshot;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotStopReason;ILjava/lang/Object;)Lsaien/magrathea/chatbot/ChatbotSnapshot;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getConfiguration ()Lsaien/magrathea/chatbot/ChatbotSessionConfiguration;
 	public final fun getContextManagement ()Lsaien/magrathea/chatbot/ChatbotContextManagementSnapshot;
@@ -364,6 +369,7 @@ public final class saien/magrathea/chatbot/ChatbotSnapshot {
 	public final fun getMessages ()Ljava/util/List;
 	public final fun getSessionId ()Ljava/lang/String;
 	public final fun getStatus ()Lsaien/magrathea/chatbot/ChatbotStatus;
+	public final fun getStopReason ()Lsaien/magrathea/chatbot/ChatbotStopReason;
 	public final fun getToolActivities ()Ljava/util/List;
 	public final fun getUsage ()Lsaien/magrathea/chatbot/ChatbotUsage;
 	public fun hashCode ()I

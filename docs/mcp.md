@@ -148,16 +148,28 @@ independent from server-authored text.
 
 `McpConnectionOptions` bounds initialization and Tool-list time, pagination, Tool count, individual
 and aggregate Tool definitions, server instructions, and Tool results. A
-`notifications/tools/list_changed` event immediately removes the old advertised contracts while a
-conflated refresh runs; a failed refresh leaves the registry empty and reports a sanitized failure.
-An executor captured before a contract refresh cannot execute after the descriptor or host policy
-has changed. These checks are in addition to Runtime timeout, result-size, permission, approval, and
-call-budget enforcement.
+`notifications/tools/list_changed` event schedules a conflated refresh. The refresh removes old
+advertised contracts before loading replacements; a failed refresh leaves the registry empty and
+reports a sanitized failure. Previously resolved executors reject changed descriptors or disabled
+Tools before calling the server. Other policy values are captured when the executor is resolved.
+These checks are in addition to Runtime timeout, result-size, permission, approval, and call-budget
+enforcement.
 
 `connect`, `refreshTools`, and Tool-call transport/protocol failures expose only
 `McpOperationException` with stable operation and failure categories. The original exception is not
 retained as a cause because SDK/server messages may contain response bodies, endpoints, or
-authentication material. Coroutine cancellation still propagates unchanged.
+authentication material. HTTP 429 maps to `RATE_LIMITED`, including when the MCP transport wraps
+the HTTP error. HTTP 401/403 remain `AUTHENTICATION`; other HTTP failures and wrapped I/O failures
+map to `TRANSPORT`.
+The current upstream transport does not retain `Retry-After`, so hosts must not infer a reset time
+from `RATE_LIMITED` alone. Hosts switching exhaustively on `McpConnectionFailure` must handle the
+new `RATE_LIMITED` case.
+
+Only the adapter's own initialization and Tool-list deadlines become sanitized transport failures.
+Parent deadlines and coroutine cancellation propagate unchanged. Fatal `Error` values, including
+ones wrapped in exception causes, escape unchanged after all independent cleanup steps have been
+attempted; a cleanup failure cannot hide a fatal primary failure. Cleanup remains subject to the
+caller's cancellation and deadline; owners may provide a bounded cleanup scope when needed.
 
 The owner must call `disconnect` or `close` on each connection and close its HTTP client.
 Connection ownership remains with the host; `McpToolRegistry` only aggregates them.
