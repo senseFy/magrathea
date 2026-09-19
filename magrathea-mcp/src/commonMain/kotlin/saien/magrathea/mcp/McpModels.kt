@@ -123,6 +123,7 @@ enum class McpConnectionFailure {
     AUTHENTICATION,
     PROTOCOL,
     CLOSED,
+    RATE_LIMITED,
 }
 
 /** Public MCP operation names used by sanitized failures. */

@@ -287,7 +287,43 @@ data class ChatbotSnapshot(
     val latestRequestUsage: ChatbotUsage = ChatbotUsage(),
     val contextManagement: ChatbotContextManagementSnapshot = ChatbotContextManagementSnapshot(),
     val toolActivities: List<ChatbotToolActivitySnapshot> = emptyList(),
+    /** Current run's canonical stop reason, independent of individual message reasons; cleared on a new run. */
+    val stopReason: ChatbotStopReason? = null,
 ) {
+    /** Retains the original constructor and its default-argument signature for compiled hosts. */
+    constructor(
+        configuration: ChatbotSessionConfiguration,
+        sessionId: String? = null,
+        messages: List<ChatbotMessageSnapshot> = emptyList(),
+        status: ChatbotStatus = ChatbotStatus.IDLE,
+        failure: ChatbotFailure? = null,
+        interruption: ChatbotInterruption? = null,
+        usage: ChatbotUsage = ChatbotUsage(),
+        latestRequestUsage: ChatbotUsage = ChatbotUsage(),
+        contextManagement: ChatbotContextManagementSnapshot = ChatbotContextManagementSnapshot(),
+        toolActivities: List<ChatbotToolActivitySnapshot> = emptyList(),
+    ) : this(
+        configuration, sessionId, messages, status, failure, interruption, usage,
+        latestRequestUsage, contextManagement, toolActivities, stopReason = null,
+    )
+
+    /** Retains the original copy/default-copy signatures while preserving the run's stop reason. */
+    fun copy(
+        configuration: ChatbotSessionConfiguration = this.configuration,
+        sessionId: String? = this.sessionId,
+        messages: List<ChatbotMessageSnapshot> = this.messages,
+        status: ChatbotStatus = this.status,
+        failure: ChatbotFailure? = this.failure,
+        interruption: ChatbotInterruption? = this.interruption,
+        usage: ChatbotUsage = this.usage,
+        latestRequestUsage: ChatbotUsage = this.latestRequestUsage,
+        contextManagement: ChatbotContextManagementSnapshot = this.contextManagement,
+        toolActivities: List<ChatbotToolActivitySnapshot> = this.toolActivities,
+    ): ChatbotSnapshot = ChatbotSnapshot(
+        configuration, sessionId, messages, status, failure, interruption, usage,
+        latestRequestUsage, contextManagement, toolActivities, stopReason = stopReason,
+    )
+
     val isRunning: Boolean
         get() = status == ChatbotStatus.RUNNING || status == ChatbotStatus.WAITING_FOR_TOOL
 }
@@ -498,7 +534,7 @@ private fun ReasoningContentKind.toChatbotReasoningKind(): ChatbotReasoningKind 
     ReasoningContentKind.TEXT -> ChatbotReasoningKind.TEXT
 }
 
-private fun StopReason.toChatbotStopReason(): ChatbotStopReason = when (this) {
+internal fun StopReason.toChatbotStopReason(): ChatbotStopReason = when (this) {
     StopReason.COMPLETED -> ChatbotStopReason.COMPLETED
     StopReason.TOOL_CALLS -> ChatbotStopReason.TOOL_CALLS
     StopReason.CANCELLED -> ChatbotStopReason.CANCELLED

@@ -20,8 +20,9 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,7 +30,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.io.IOException
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonObject
 import saien.magrathea.core.ToolExecutionRequest
@@ -67,11 +69,11 @@ class McpServerConnection(
         for (ignored in refreshRequests) {
             try {
                 refreshTools()
-            } catch (_: TimeoutCancellationException) {
-                // refreshTools already published a sanitized failure.
             } catch (cancelled: CancellationException) {
+                cancelled.rethrowMcpFatalError()
                 throw cancelled
-            } catch (_: Throwable) {
+            } catch (failure: Throwable) {
+                failure.rethrowMcpFatalError()
                 // refreshTools publishes a sanitized failure and clears stale Tool contracts.
             }
         }
@@ -101,8 +103,13 @@ class McpServerConnection(
                     requestToolRefresh()
                     CompletableDeferred(Unit)
                 }
-                withTimeout(options.initializeTimeoutMs) {
-                    client.connect(handle.transport)
+                val transport = McpFailureGuardTransport(handle.transport)
+                try {
+                    withMcpTimeout(options.initializeTimeoutMs) {
+                        client.connect(transport)
+                    }
+                } finally {
+                    transport.finishInitialization()
                 }
                 activeTransport = handle
                 activeClient = client
@@ -110,17 +117,13 @@ class McpServerConnection(
                 val connectedState = connectedState(client, descriptors.size)
                 publishTools(descriptors)
                 mutableState.value = connectedState
-            } catch (timeout: TimeoutCancellationException) {
-                closeFailedConnection(client, handle)
-                val reason = McpConnectionFailure.TRANSPORT
-                mutableState.value = McpConnectionState.Failed(reason)
-                throw McpOperationException(McpOperation.CONNECT, reason)
-            } catch (cancelled: CancellationException) {
-                closeFailedConnection(client, handle)
-                mutableState.value = McpConnectionState.Disconnected
-                throw cancelled
             } catch (failure: Throwable) {
-                closeFailedConnection(client, handle)
+                mutableState.value = McpConnectionState.Disconnected
+                val failures = McpCleanupFailures(failure)
+                closeFailedConnection(client, handle, failures)
+                failures.failureOrNull()?.rethrowMcpFatalError()
+                if (failure is CancellationException) throw failure
+                currentCoroutineContext().ensureActive()
                 val reason = failure.toConnectionFailure()
                 mutableState.value = McpConnectionState.Failed(reason)
                 throw McpOperationException(McpOperation.CONNECT, reason)
@@ -137,14 +140,13 @@ class McpServerConnection(
                 val connectedState = connectedState(client, descriptors.size)
                 publishTools(descriptors)
                 mutableState.value = connectedState
-            } catch (timeout: TimeoutCancellationException) {
-                val reason = McpConnectionFailure.TRANSPORT
-                mutableState.value = McpConnectionState.Failed(reason)
-                throw McpOperationException(McpOperation.REFRESH_TOOLS, reason)
             } catch (cancelled: CancellationException) {
+                cancelled.rethrowMcpFatalError()
                 mutableState.value = McpConnectionState.Failed(McpConnectionFailure.TRANSPORT)
                 throw cancelled
             } catch (failure: Throwable) {
+                failure.rethrowMcpFatalError()
+                currentCoroutineContext().ensureActive()
                 val reason = failure.toConnectionFailure()
                 mutableState.value = McpConnectionState.Failed(reason)
                 throw McpOperationException(McpOperation.REFRESH_TOOLS, reason)
@@ -236,15 +238,18 @@ class McpServerConnection(
                 toolCallId = request.toolCall.toolCallId,
             )
         } catch (cancelled: CancellationException) {
+            cancelled.rethrowMcpFatalError()
             throw cancelled
         } catch (failure: Throwable) {
+            failure.rethrowMcpFatalError()
+            currentCoroutineContext().ensureActive()
             throw McpOperationException(McpOperation.CALL_TOOL, failure.toConnectionFailure())
         }
     }
 
     private suspend fun listAllTools(client: Client): List<Tool> {
         if (client.serverCapabilities?.tools == null) return emptyList()
-        return withTimeout(options.listToolsTimeoutMs) {
+        return withMcpTimeout(options.listToolsTimeoutMs) {
             collectMcpToolPages(options) { cursor ->
                 client.listTools(ListToolsRequest(cursor?.let(::PaginatedRequestParams)))
             }
@@ -287,41 +292,35 @@ class McpServerConnection(
         activeTransport = null
         publishTools(emptyList())
 
-        try {
-            handle?.terminate()
-        } catch (_: Throwable) {
-            // Transport/session termination is best effort; resources are still closed below.
+        val failures = McpCleanupFailures()
+        failures.capture {
+            try {
+                handle?.terminate()
+            } catch (failure: Exception) {
+                failure.rethrowMcpFatalError()
+                if (failure is CancellationException) throw failure
+                // Ordinary remote session-termination failures remain best effort.
+            }
         }
-        try {
-            client?.close()
-        } finally {
-            handle?.release()
-        }
+        failures.capture { client?.close() }
+        failures.capture { handle?.release() }
+        failures.failureOrNull()?.let { throw it }
     }
 
     private suspend fun closeFailedConnection(
         client: Client?,
         handle: McpTransportHandle?,
+        failures: McpCleanupFailures,
     ) {
         activeClient = null
         activeTransport = null
         publishTools(emptyList())
-        try {
+        // Keep the caller's cancellation/deadline. Owners may supply their own bounded cleanup scope.
+        failures.capture {
             handle?.terminate()
-        } catch (_: Throwable) {
-            // Preserve the connection failure.
         }
-        try {
-            client?.close()
-        } catch (_: Throwable) {
-            // Preserve the connection failure.
-        } finally {
-            try {
-                handle?.release()
-            } catch (_: Throwable) {
-                // Preserve the connection failure.
-            }
-        }
+        failures.capture { client?.close() }
+        failures.capture { handle?.release() }
     }
 
     private class McpToolExecutor(
@@ -419,15 +418,27 @@ private fun Implementation.toInfo() = McpImplementationInfo(
     websiteUrl = websiteUrl,
 )
 
-private fun Throwable.toConnectionFailure(): McpConnectionFailure = when (this) {
-    is StreamableHttpError -> when (code) {
+private fun Throwable.toConnectionFailure(): McpConnectionFailure {
+    val causes = mcpCauseChain()
+    val httpFailure = causes.filterIsInstance<StreamableHttpError>().firstOrNull()
+    if (httpFailure != null) return when (httpFailure.code) {
         401, 403 -> McpConnectionFailure.AUTHENTICATION
+        429 -> McpConnectionFailure.RATE_LIMITED
         else -> McpConnectionFailure.TRANSPORT
     }
-    is McpException,
-    is SerializationException,
-    is IllegalArgumentException,
-    is IllegalStateException,
-    -> McpConnectionFailure.PROTOCOL
-    else -> McpConnectionFailure.TRANSPORT
+    if (causes.any { it is IOException }) return McpConnectionFailure.TRANSPORT
+    return when (this) {
+        is McpException,
+        is SerializationException,
+        is IllegalArgumentException,
+        is IllegalStateException,
+        -> McpConnectionFailure.PROTOCOL
+        else -> McpConnectionFailure.TRANSPORT
+    }
 }
+
+/** Only this boundary's timer is translated; an ancestor's timeout remains cancellation. */
+private suspend fun <T : Any> withMcpTimeout(timeoutMs: Long, block: suspend () -> T): T =
+    withTimeoutOrNull(timeoutMs) { block() } ?: throw McpOperationTimeout()
+
+private class McpOperationTimeout : Exception()

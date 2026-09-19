@@ -17,7 +17,7 @@ function-call contract across Providers.
 2. The Tool executor is registered in the Runtime `ToolRegistry` and its immutable definition is
    advertised in the `AgentRequest`.
 3. The model decides whether to call `web_search` and supplies only a search query.
-4. Runtime validates and authorizes the call, enforces its run-level call budget and timeout, and
+4. Runtime validates and authorizes the call, enforces any configured call budget and timeout, and
    invokes the backend.
 5. The Tool validates and bounds backend output, removes malformed or disallowed URLs, and returns
    canonical JSON plus `Citation` metadata.
@@ -34,7 +34,7 @@ execution guarantee.
 
 | Setting | Default | Contract |
 |---|---:|---|
-| `maxSearchCallsPerRun` | `3` | `1..20`; hard Runtime limit for one user-request Agent run |
+| `maxSearchCallsPerRun` | `3` | `0` disables the search-specific call ceiling; `1..20` sets a hard Runtime limit for one user-request Agent run |
 | `maxResultsPerQuery` | `8` | `1..50`; hard raw-candidate limit and backend request limit |
 | `maxSourcesInContext` | `6` | `1..maxResultsPerQuery`; hard post-retrieval limit returned to the model |
 | `maxQueryChars` | `512` | `1..2048`; hard input limit before backend execution |
@@ -59,11 +59,13 @@ The four different budgets remain separate:
 - citations presented by the product.
 
 They must not be collapsed into one ambiguous `maxSearchResults` value.
-The Tool-call budget persists across model turns, injected steering/follow-up messages, and
+When configured, the Tool-call budget persists across model turns, injected steering/follow-up messages, and
 `resume`; a new `AgentRunner.run` request starts a new logical run. `RuntimeConfig.maxTurns`
-independently bounds the number of model/tool cycles in that run. The same numeric ceiling is also
+independently bounds the number of model/tool cycles in that run. A positive numeric ceiling is also
 applied to one model response as a defense-in-depth batch limit; it does not reset or enlarge the
-run-level budget.
+run-level budget. Setting `maxSearchCallsPerRun = 0` leaves both `ToolDefinition.maxCallsPerTurn`
+and `maxCallsPerRun` unset (`null`). Global Runtime limits, Tool timeouts, and any separately
+configured request-level Tool limit still apply.
 Citation presentation is product-owned and intentionally is not another `WebSearchPolicy` field;
 the Tool preserves citation metadata for every source admitted into model context.
 
@@ -88,6 +90,18 @@ Every accepted source becomes both a structured Tool result and canonical citati
 `title`, HTTPS `url`, and bounded `snippet`. The Chatbot facade already projects this metadata into
 `ChatbotToolResult.citations`, allowing a product to render sources independently of whether the
 model repeats them inline.
+
+A backend may set `WebSearchBackendResponse.origin` to a bounded `ToolOrigin` identifying the
+service that actually produced that response. `WebSearchTool` carries it unchanged in
+`ToolExecutionResult.origin`, including successful empty results and results reduced by
+normalization. This is presentation metadata only: it is not added to the model-facing search
+JSON or citation metadata. Missing origins remain `null`; failed searches do not invent or reuse
+a previous origin. Aggregating backends choose the successful service's identity per response,
+not from mutable shared state or the user's configured default.
+
+The original single-list response constructor and `copy(results)`/default-copy signatures remain
+available for previously compiled hosts. Copying results preserves an existing origin; hosts can
+explicitly replace or clear it with `copy(origin = ...)`.
 
 ## Security and failure behavior
 

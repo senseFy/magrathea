@@ -89,8 +89,9 @@ fun jvmStdioMcpTransportFactory(
             releaseResources = { destroyMcpProcess(child) },
         )
     } catch (failure: Throwable) {
-        destroyMcpProcess(child)
-        throw failure
+        val failures = McpCleanupFailures(failure)
+        failures.capture { destroyMcpProcess(child) }
+        throw checkNotNull(failures.failureOrNull())
     }
 }
 
