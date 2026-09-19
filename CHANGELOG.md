@@ -5,6 +5,17 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## [0.1.0-alpha.13](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.12...v0.1.0-alpha.13) (2026-09-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* Exhaustive switches over McpConnectionFailure must handle the new RATE_LIMITED case for HTTP 429 responses.
+
+### Features
+
+* expose search origins and run stop reasons ([#13](https://github.com/senseFy/magrathea/issues/13)) ([732328a](https://github.com/senseFy/magrathea/commit/732328a28cde08c2a8c5a10692c0f18477ac67ed))
+
 ## [0.1.0-alpha.12](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.11...v0.1.0-alpha.12) (2026-09-06)
 
 
