@@ -95,6 +95,10 @@ the Runner. Pass `closeResources` when the composition owns Provider transports 
 Use `createChatbotClient(manager, ...)` to borrow an existing managed-session root; closing that
 client releases only its own Chatbot facades.
 
+`ChatbotClient.history()` lists persisted sessions as compact items whose status reflects recovery
+of orphaned runs. Hosts that derive their own summaries from stored messages use
+`historyRecords()`, which pairs each complete stored snapshot with that status in one storage read.
+
 `ChatbotException.invalidationScope` distinguishes an ordinary operation failure from a failed
 destructive operation that already closed one or all registered facades.
 

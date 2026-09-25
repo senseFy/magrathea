@@ -293,9 +293,15 @@ class ChatbotClient internal constructor(
 
     @Throws(ChatbotException::class, CancellationException::class)
     suspend fun history(): List<ChatbotHistoryItem> = facadeOperation {
+        historyRecords().map { record -> record.snapshot.toHistoryItem(record.status) }
+    }
+
+    /** Lists the sessions and statuses of [history] with each complete stored snapshot. */
+    @Throws(ChatbotException::class, CancellationException::class)
+    suspend fun historyRecords(): List<ChatbotHistoryRecord> = facadeOperation {
         clientOperation {
             sessionManager.listSessions().map { snapshot ->
-                snapshot.toHistoryItem(resolveHistoryStatus(snapshot))
+                ChatbotHistoryRecord(snapshot, resolveHistoryStatus(snapshot))
             }
         }
     }

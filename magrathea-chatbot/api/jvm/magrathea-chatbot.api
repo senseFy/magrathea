@@ -35,6 +35,7 @@ public final class saien/magrathea/chatbot/ChatbotClient {
 	public final fun createSession (Lsaien/magrathea/chatbot/ChatbotSessionConfiguration;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun deleteSession (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun history (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun historyRecords (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun restoreSession (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun resumeSession (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
@@ -105,6 +106,19 @@ public final class saien/magrathea/chatbot/ChatbotHistoryItem {
 	public final fun getSessionId ()Ljava/lang/String;
 	public final fun getStatus ()Lsaien/magrathea/chatbot/ChatbotStatus;
 	public final fun getUpdatedAtEpochMs ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/chatbot/ChatbotHistoryRecord {
+	public fun <init> (Lsaien/magrathea/core/AgentSessionSnapshot;Lsaien/magrathea/chatbot/ChatbotStatus;)V
+	public final fun component1 ()Lsaien/magrathea/core/AgentSessionSnapshot;
+	public final fun component2 ()Lsaien/magrathea/chatbot/ChatbotStatus;
+	public final fun copy (Lsaien/magrathea/core/AgentSessionSnapshot;Lsaien/magrathea/chatbot/ChatbotStatus;)Lsaien/magrathea/chatbot/ChatbotHistoryRecord;
+	public static synthetic fun copy$default (Lsaien/magrathea/chatbot/ChatbotHistoryRecord;Lsaien/magrathea/core/AgentSessionSnapshot;Lsaien/magrathea/chatbot/ChatbotStatus;ILjava/lang/Object;)Lsaien/magrathea/chatbot/ChatbotHistoryRecord;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSnapshot ()Lsaien/magrathea/core/AgentSessionSnapshot;
+	public final fun getStatus ()Lsaien/magrathea/chatbot/ChatbotStatus;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

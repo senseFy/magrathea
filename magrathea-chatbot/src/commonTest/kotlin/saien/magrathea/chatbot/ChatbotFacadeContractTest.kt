@@ -361,6 +361,50 @@ class ChatbotFacadeContractTest {
     }
 
     @Test
+    fun historyRecordsPairStoredSnapshotsWithHistoryStatusesFromOneListing() = runTest {
+        val store = InMemoryAgentPersistence()
+        var listCalls = 0
+        val countingStore = object : AgentPersistence by store {
+            override suspend fun listSessions(): List<AgentSessionSnapshot> {
+                listCalls += 1
+                return store.listSessions()
+            }
+        }
+        val sessionId = AgentSessionId("history-record")
+        val request = AgentRequest(
+            sessionId = sessionId,
+            messages = listOf(
+                AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("question"))),
+            ),
+            model = ModelDescriptor("test", "test-model"),
+        )
+        val runId = AgentRunId("history-record-run")
+        val state = AgentStateSnapshot(messages = request.messages, status = AgentStatus.RUNNING)
+        store.commit(
+            AgentSessionSnapshot(sessionId = sessionId, runId = runId, request = request, state = state),
+            AgentCheckpoint(
+                sessionId = sessionId,
+                runId = runId,
+                cursor = AgentResumeCursor(0, AgentResumePhase.MODEL_PENDING),
+                state = state,
+            ),
+        )
+        val client = testClient(
+            runner = CompletingRunner(store, recoveryDisposition = AgentRecoveryDisposition.RESUMABLE),
+            store = countingStore,
+        )
+
+        val record = client.historyRecords().single()
+
+        assertEquals(1, listCalls)
+        assertEquals(sessionId, record.snapshot.sessionId)
+        assertEquals(request.messages, record.snapshot.state.messages)
+        assertEquals(ChatbotStatus.INTERRUPTED, record.status)
+        assertEquals(record.status, client.history().single().status)
+        client.close()
+    }
+
+    @Test
     fun updatingConfigurationWhileGeneratingFailsBusyWithoutCancellingTheRun() = runTest {
         val store = InMemoryAgentPersistence()
         val runner = BlockingRunner()
@@ -523,6 +567,10 @@ class ChatbotFacadeContractTest {
         assertEquals(
             ChatbotFailure.CLOSED,
             assertFailsWith<ChatbotException> { client.history() }.failure,
+        )
+        assertEquals(
+            ChatbotFailure.CLOSED,
+            assertFailsWith<ChatbotException> { client.historyRecords() }.failure,
         )
         assertEquals(1, listCalls)
     }

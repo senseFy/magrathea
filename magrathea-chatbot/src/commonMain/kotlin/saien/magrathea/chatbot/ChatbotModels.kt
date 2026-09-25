@@ -6,6 +6,7 @@ import saien.magrathea.core.AgentFailureCode
 import saien.magrathea.core.AgentInterruption
 import saien.magrathea.core.AgentInterruptionReason
 import saien.magrathea.core.AgentMessage
+import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AttachmentPart
 import saien.magrathea.core.CredentialRef
 import saien.magrathea.core.ContextManagementState
@@ -340,6 +341,15 @@ data class ChatbotHistoryItem(
     val updatedAtEpochMs: Long,
     val status: ChatbotStatus,
     val lastMessageText: String,
+)
+
+/**
+ * A persisted session with the status [ChatbotClient.history] reports for it. Hosts that derive
+ * their own summaries from stored messages read these instead of listing persistence again.
+ */
+data class ChatbotHistoryRecord(
+    val snapshot: AgentSessionSnapshot,
+    val status: ChatbotStatus,
 )
 
 enum class ChatbotFailure {
