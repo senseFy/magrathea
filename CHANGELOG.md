@@ -5,6 +5,13 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## [0.1.0-alpha.14](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.13...v0.1.0-alpha.14) (2026-09-26)
+
+
+### Features
+
+* expose history records with stored snapshots ([#15](https://github.com/senseFy/magrathea/issues/15)) ([ffc3eab](https://github.com/senseFy/magrathea/commit/ffc3eabfe211a9e3cc650b9439c90a7f6d76a123))
+
 ## [0.1.0-alpha.13](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.12...v0.1.0-alpha.13) (2026-09-19)
 
 
