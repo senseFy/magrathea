@@ -409,6 +409,7 @@ val verifyResumePublishSdkContract = tasks.register<Exec>("verifyResumePublishSd
     description = "Rehearse exact-coordinate recovery after an interrupted immutable publication."
     inputs.file("scripts/extract-completed-publication-coordinates")
     inputs.file("scripts/resume-publish-sdk")
+    inputs.file("scripts/maven-transfer.py")
     inputs.file("scripts/verify-resume-publish-sdk-contract")
     inputs.file("scripts/verify-remote-version-absent")
     inputs.file("scripts/verify-remote-version-present")

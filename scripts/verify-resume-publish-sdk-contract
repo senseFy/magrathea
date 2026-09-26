@@ -455,6 +455,41 @@ exact_resume_output="$(
   exit 1
 }
 
+# A retry may contain both a partial coordinate and a wholly absent one.
+absent_artifact="magrathea-gateway-server"
+absent_remote="$REPOSITORY/$GROUP_PATH/$absent_artifact/$VERSION"
+rm "$exact_partial_file"
+rm -rf "$absent_remote"
+run_exact_resume() {
+  env \
+    -u MAGRATHEA_PUBLISH_USERNAME -u MAGRATHEA_PUBLISH_PASSWORD \
+    -u GITHUB_SAIEN_MAVEN_USERNAME -u GITHUB_SAIEN_MAVEN_TOKEN \
+    -u MAGRATHEA_SIGNING_KEY \
+    MAGRATHEA_REMOTE_VERIFY_ATTEMPTS=1 \
+    MAGRATHEA_REMOTE_VERIFY_RETRY_SECONDS=0 \
+    /bin/bash "$ROOT_DIR/scripts/resume-publish-sdk" \
+      --project-dir "$PROJECT" --repository-url "$repository_url" \
+      --coordinates-file "$COORDINATES" \
+      --local-maven-repository "$LOCAL_REPOSITORY" \
+      --manifest-file "$MAVEN_MANIFEST" --exact-files "$@"
+}
+exact_mixed_plan="$(run_exact_resume --plan-only)"
+[[ "$exact_mixed_plan" == *"partial=1 missing=1 version=$VERSION"* &&
+  ! -e "$exact_partial_file" && ! -d "$absent_remote" ]] || {
+  printf 'resume publication contract failed: exact plan mutated the repository\n' >&2
+  exit 1
+}
+exact_mixed_output="$(run_exact_resume)"
+[[ "$exact_mixed_output" == *"published=1 published_files=4 repaired_files=1 version=$VERSION"* &&
+  "$(wc -l < "$GRADLE_LOG" | tr -d ' ')" -eq 1 ]] || {
+  printf 'resume publication contract failed: mixed exact recovery was incorrect: %s\n' \
+    "$exact_mixed_output" >&2
+  exit 1
+}
+"$ROOT_DIR/scripts/write-maven-manifest" \
+  "$REPOSITORY" "$COORDINATES" "$FIXTURE/remote-manifest.sha256" >/dev/null
+cmp "$MAVEN_MANIFEST" "$FIXTURE/remote-manifest.sha256"
+
 incomplete_manifest="$FIXTURE/incomplete-maven-files.sha256"
 tail -n +2 "$MAVEN_MANIFEST" > "$incomplete_manifest"
 if manifest_output="$(
