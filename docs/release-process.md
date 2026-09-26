@@ -53,6 +53,10 @@ from earlier attempts of that same run. Candidate preparation assembles signed a
 repeating the platform matrix; upload shards and retries use the same candidate bytes. Restoring
 an existing candidate does not depend on the source CI artifact still being available.
 
+Maven shards upload and verify candidate files with two concurrent requests by default.
+Set `MAGRATHEA_MAVEN_WORKERS=1` for serial transfers. Exact-file transfers require Python 3
+and curl 7.75 or newer; logs report phase timings, connection counts, and retries.
+
 ## Recover
 
 ```bash
