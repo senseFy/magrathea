@@ -213,6 +213,7 @@ private fun projectRuntime(
     (runtime.lastEvent as? AgentEvent.ToolCompleted)?.let { event ->
         toolActivities = toolActivities.withToolCompleted(event.result)
     }
+    toolActivities = toolActivities.withToolExecutions(messages, runtime.toolExecutions)
     val terminalToolStatus = when (status) {
         ChatbotStatus.CANCELLED -> ChatbotToolActivityStatus.CANCELLED
         ChatbotStatus.COMPLETED,

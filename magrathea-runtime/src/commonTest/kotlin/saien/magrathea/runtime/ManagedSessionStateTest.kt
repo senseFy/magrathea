@@ -8,9 +8,12 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import saien.magrathea.core.AgentCheckpoint
 import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentFailureCode
+import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentPersistenceRecord
 import saien.magrathea.core.AgentRecoveryDisposition
 import saien.magrathea.core.AgentRecoveryInfo
@@ -22,8 +25,13 @@ import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.AgentStatus
+import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.StopReason
+import saien.magrathea.core.ToolCallPart
+import saien.magrathea.core.ToolExecutionRecord
+import saien.magrathea.core.ToolExecutionResult
+import saien.magrathea.core.ToolExecutionState
 
 /** No runner, persistence implementation, scheduler, or coroutine execution is needed here. */
 class ManagedSessionStateTest {
@@ -234,6 +242,119 @@ class ManagedSessionStateTest {
                 assertFailsWith<AgentSessionException> { closed.begin(request, resume = false) }.code,
             )
         }
+    }
+
+    @Test
+    fun toolJournalFollowsCheckpointsWhileActiveAndClearsOnTerminal() {
+        val before = active()
+        val attempt = assertNotNull(before.execution)
+        val runId = assertNotNull(before.result.runId)
+        val batch = toolBatch()
+        val journaled = assertNotNull(before.recordEvent(
+            attempt,
+            AgentEvent.CheckpointSaved(batch.checkpoint(runId, batch.pendingJournal)),
+        ))
+        assertEquals(batch.pendingJournal, journaled.snapshot(0).toolExecutions)
+
+        val startedJournal = batch.pendingJournal.map { record ->
+            if (record.toolCallId == "call-1") {
+                record.copy(state = ToolExecutionState.STARTED)
+            } else {
+                record
+            }
+        }
+        val progressed = assertNotNull(journaled.recordEvent(
+            attempt,
+            AgentEvent.CheckpointSaved(batch.checkpoint(runId, startedJournal)),
+        ))
+        assertEquals(startedJournal, progressed.snapshot(0).toolExecutions)
+        assertEquals(AgentSessionPhase.ACTIVE, progressed.snapshot(0).phase)
+
+        val completed = assertNotNull(progressed.recordEvent(
+            attempt,
+            AgentEvent.Completed(
+                sessionId,
+                batch.waiting.copy(status = AgentStatus.COMPLETED, stopReason = StopReason.COMPLETED),
+            ),
+        ))
+        assertEquals(emptyList(), completed.result.toolExecutions)
+        assertEquals(AgentSessionPhase.TERMINAL, completed.snapshot(0).phase)
+        assertEquals(emptyList(), completed.snapshot(0).toolExecutions)
+
+        val resumable = SessionMachine(sessionId, SessionResult(
+            resolution = SessionResolution.RESUMABLE,
+            toolExecutions = batch.pendingJournal,
+        ))
+        assertEquals(AgentSessionPhase.RESUMABLE, resumable.snapshot(0).phase)
+        assertEquals(emptyList(), resumable.snapshot(0).toolExecutions)
+    }
+
+    @Test
+    fun midBatchCheckpointDropsCompletedCallsFromPendingToolCalls() {
+        val before = active()
+        val attempt = assertNotNull(before.execution)
+        val runId = assertNotNull(before.result.runId)
+        val batch = toolBatch()
+        val journaled = assertNotNull(before.recordEvent(
+            attempt,
+            AgentEvent.CheckpointSaved(batch.checkpoint(runId, batch.pendingJournal)),
+        ))
+
+        val completedFirst = batch.pendingJournal.map { record ->
+            if (record.toolCallId == "call-1") {
+                record.copy(
+                    state = ToolExecutionState.COMPLETED,
+                    result = ToolExecutionResult("call-1", "first", JsonPrimitive("done")),
+                )
+            } else {
+                record
+            }
+        }
+        val updated = assertNotNull(journaled.recordEvent(
+            attempt,
+            AgentEvent.CheckpointSaved(batch.checkpoint(runId, completedFirst)),
+        ))
+
+        assertEquals(listOf(batch.calls[1]), updated.result.state?.pendingToolCalls)
+        assertEquals(completedFirst, updated.snapshot(0).toolExecutions)
+    }
+
+    private class ToolBatch(
+        val calls: List<ToolCallPart>,
+        val waiting: AgentStateSnapshot,
+        val pendingJournal: List<ToolExecutionRecord>,
+    ) {
+        fun checkpoint(runId: AgentRunId, journal: List<ToolExecutionRecord>) = AgentCheckpoint(
+            sessionId = AgentSessionId("pure-session-state"),
+            runId = runId,
+            cursor = AgentResumeCursor(0, AgentResumePhase.TOOLS_PENDING),
+            state = waiting,
+            toolExecutions = journal,
+        )
+    }
+
+    private fun toolBatch(): ToolBatch {
+        val calls = listOf(
+            ToolCallPart("call-1", "first", buildJsonObject { }),
+            ToolCallPart("call-2", "second", buildJsonObject { }),
+        )
+        val waiting = AgentStateSnapshot(
+            messages = listOf(
+                AgentMessage(id = "assistant-tools", role = MessageRole.ASSISTANT, parts = calls),
+            ),
+            pendingToolCalls = calls,
+            status = AgentStatus.WAITING_FOR_TOOLS,
+        )
+        val pendingJournal = calls.mapIndexed { index, call ->
+            ToolExecutionRecord(
+                executionId = "exec-${index + 1}",
+                toolCallId = call.toolCallId,
+                toolName = call.toolName,
+                callOrdinal = index + 1,
+                state = ToolExecutionState.PENDING,
+            )
+        }
+        return ToolBatch(calls, waiting, pendingJournal)
     }
 
     private fun active(): SessionMachine {

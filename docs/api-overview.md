@@ -102,9 +102,11 @@ of orphaned runs. Hosts that derive their own summaries from stored messages use
 `ChatbotException.invalidationScope` distinguishes an ordinary operation failure from a failed
 destructive operation that already closed one or all registered facades.
 
-`ChatbotSnapshot.toolActivities` derives Tool lifecycle from canonical messages and live events
-while using the canonical persisted state. Typed user-audience image results and their stable
-`MediaReference` values are available through `ChatbotToolResult.images`.
+`ChatbotSnapshot.toolActivities` derives Tool lifecycle from canonical messages, the active
+execution's Tool journal, and live events. A call is `PENDING` until execution is admitted (for
+example while waiting on a shared permit or approval), `RUNNING` once started, and terminal as
+soon as that call completes. Typed user-audience image results and their stable `MediaReference`
+values are available through `ChatbotToolResult.images`.
 
 `ChatbotSnapshot.stopReason` exposes the canonical run-level reason, separately from each
 message's stop reason. A `COMPLETED` status may carry `MAX_TURNS` when the runtime exhausted

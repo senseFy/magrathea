@@ -1021,13 +1021,16 @@ class DefaultAgentRunner(
                             val persistRecord: suspend (ToolExecutionRecord) -> Unit = { record ->
                                 journalMutex.withLock {
                                     journal = journal.replace(record)
-                                    safeCheckpoint = safeCheckpoint.copy(toolExecutions = journal)
+                                    val journalCheckpoint =
+                                        safeCheckpoint.copy(toolExecutions = journal)
+                                    safeCheckpoint = journalCheckpoint
                                     commitState(
                                         activeRequest,
                                         runId,
                                         runState.value,
-                                        safeCheckpoint,
+                                        journalCheckpoint,
                                     )
+                                    send(AgentEvent.CheckpointSaved(journalCheckpoint))
                                 }
                             }
                             val toolResults = executeToolCalls(
@@ -2119,13 +2122,15 @@ class DefaultAgentRunner(
 
         return if (request.engine.runtime.toolExecutionMode == ToolExecutionMode.PARALLEL) {
             toolCalls.forEach { emit(AgentEvent.ToolRequested(request.sessionId, it)) }
-            val results = coroutineScope {
+            coroutineScope {
                 executions.map { entry ->
-                    async { execute(entry) }
+                    async {
+                        execute(entry).also { result ->
+                            emit(AgentEvent.ToolCompleted(request.sessionId, result))
+                        }
+                    }
                 }.awaitAll()
             }
-            results.forEach { emit(AgentEvent.ToolCompleted(request.sessionId, it)) }
-            results
         } else {
             buildList {
                 executions.forEach { entry ->

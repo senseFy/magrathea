@@ -1,7 +1,9 @@
 package saien.magrathea.chatbot
 
 import saien.magrathea.core.ToolCallPart
+import saien.magrathea.core.ToolExecutionRecord
 import saien.magrathea.core.ToolExecutionResult
+import saien.magrathea.core.ToolExecutionState
 
 /**
  * Rebuilds Tool activities from canonical message snapshots while retaining live lifecycle evidence
@@ -81,6 +83,41 @@ internal fun List<ChatbotToolActivitySnapshot>.withToolCompleted(
         status = chatbotResult.terminalStatus,
         result = chatbotResult,
     )
+}
+
+/** Applies the active execution's durable Tool journal to the current Tool batch. */
+internal fun List<ChatbotToolActivitySnapshot>.withToolExecutions(
+    messages: List<ChatbotMessageSnapshot>,
+    toolExecutions: List<ToolExecutionRecord>,
+): List<ChatbotToolActivitySnapshot> {
+    if (toolExecutions.isEmpty()) return this
+    val batchMessage = messages.lastOrNull { it.role == ChatbotMessageRole.ASSISTANT }
+        ?: return this
+    val records = toolExecutions.associateBy { it.toolCallId to it.toolName }
+    return map { activity ->
+        if (activity.key.messageId != batchMessage.id || activity.resultMessageId != null) {
+            return@map activity
+        }
+        val record = records[activity.call.id to activity.call.name] ?: return@map activity
+        when (record.state) {
+            ToolExecutionState.PENDING -> activity.copy(
+                status = if (activity.call.partial) {
+                    ChatbotToolActivityStatus.PREPARING
+                } else {
+                    ChatbotToolActivityStatus.PENDING
+                },
+                result = null,
+            )
+            ToolExecutionState.STARTED -> activity.copy(
+                status = ChatbotToolActivityStatus.RUNNING,
+                result = null,
+            )
+            ToolExecutionState.COMPLETED -> {
+                val result = checkNotNull(record.result).toChatbotToolResult()
+                activity.copy(status = result.terminalStatus, result = result)
+            }
+        }
+    }
 }
 
 internal fun List<ChatbotToolActivitySnapshot>.withUnresolvedToolActivities(

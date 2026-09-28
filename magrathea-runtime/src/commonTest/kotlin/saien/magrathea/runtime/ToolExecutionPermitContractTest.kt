@@ -18,14 +18,17 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import saien.magrathea.core.AgentCheckpoint
 import saien.magrathea.core.AgentEngineConfig
 import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentRequest
+import saien.magrathea.core.AgentResumePhase
 import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.MessageRole
@@ -347,6 +350,67 @@ class ToolExecutionPermitContractTest {
         collection.cancelAndJoin()
         assertFalse(executed)
         assertEquals(0, releaseCount)
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun queuedCallsStayPendingInTheJournalUntilAdmitted() = runTest {
+        val permit = SharedToolExecutionPermit(maxConcurrentExecutions = 1)
+        val firstStarted = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
+        val first = permittedTool("gated_first", permit) { request ->
+            firstStarted.complete(Unit)
+            releaseFirst.await()
+            successfulResult(request)
+        }
+        val second = permittedTool("gated_second", permit, ::successfulResult)
+        val provider = ToolThenDoneProvider(listOf(first.definition, second.definition))
+        val checkpoints = mutableListOf<AgentCheckpoint>()
+        val collection = launch {
+            runner(
+                provider = provider,
+                tools = listOf(first, second),
+                dispatcher = StandardTestDispatcher(testScheduler),
+            ).run(request(provider, listOf(first, second))).collect { event ->
+                (event as? AgentEvent.CheckpointSaved)?.let { checkpoints += it.checkpoint }
+            }
+        }
+        firstStarted.await()
+        runCurrent()
+
+        val midBatch = checkpoints
+            .last { it.cursor.phase == AgentResumePhase.TOOLS_PENDING }
+            .toolExecutions
+        assertEquals(
+            ToolExecutionState.STARTED,
+            midBatch.single { it.toolName == "gated_first" }.state,
+        )
+        assertEquals(
+            ToolExecutionState.PENDING,
+            midBatch.single { it.toolName == "gated_second" }.state,
+        )
+
+        releaseFirst.complete(Unit)
+        collection.join()
+
+        val journalCheckpoints = checkpoints
+            .filter { it.cursor.phase == AgentResumePhase.TOOLS_PENDING }
+        val lifecycle = listOf(
+            ToolExecutionState.PENDING,
+            ToolExecutionState.STARTED,
+            ToolExecutionState.COMPLETED,
+        )
+        for (toolName in listOf("gated_first", "gated_second")) {
+            val states = journalCheckpoints.map { checkpoint ->
+                checkpoint.toolExecutions.single { it.toolName == toolName }.state
+            }
+            assertEquals(lifecycle.toSet(), states.toSet())
+            assertEquals(states, states.sortedBy(lifecycle::indexOf))
+        }
+        assertTrue(
+            journalCheckpoints.last().toolExecutions
+                .all { it.state == ToolExecutionState.COMPLETED },
+        )
     }
 
     @Test

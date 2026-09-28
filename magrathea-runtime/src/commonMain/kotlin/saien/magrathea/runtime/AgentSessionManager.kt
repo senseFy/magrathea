@@ -38,6 +38,7 @@ import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.AgentStatus
+import saien.magrathea.core.ToolExecutionRecord
 
 /** Process-local lifecycle of one canonical live Agent session runtime. */
 enum class AgentSessionPhase {
@@ -69,7 +70,44 @@ data class AgentSessionRuntimeSnapshot(
     val recovery: AgentRecoveryInfo? = null,
     val failure: AgentFailureCode? = null,
     val lastEvent: AgentEvent? = null,
+    /**
+     * Durable Tool execution journal from the active execution's latest checkpoint; empty unless
+     * [phase] is [AgentSessionPhase.ACTIVE].
+     */
+    val toolExecutions: List<ToolExecutionRecord> = emptyList(),
 ) {
+    /** Retains the original constructor and its default-argument signature for compiled hosts. */
+    constructor(
+        revision: Long,
+        sessionId: AgentSessionId,
+        request: AgentRequest? = null,
+        runId: AgentRunId? = null,
+        state: AgentStateSnapshot? = null,
+        phase: AgentSessionPhase = AgentSessionPhase.NEW,
+        recovery: AgentRecoveryInfo? = null,
+        failure: AgentFailureCode? = null,
+        lastEvent: AgentEvent? = null,
+    ) : this(
+        revision, sessionId, request, runId, state, phase, recovery, failure, lastEvent,
+        toolExecutions = emptyList(),
+    )
+
+    /** Retains the original copy/default-copy signatures while preserving the Tool journal. */
+    fun copy(
+        revision: Long = this.revision,
+        sessionId: AgentSessionId = this.sessionId,
+        request: AgentRequest? = this.request,
+        runId: AgentRunId? = this.runId,
+        state: AgentStateSnapshot? = this.state,
+        phase: AgentSessionPhase = this.phase,
+        recovery: AgentRecoveryInfo? = this.recovery,
+        failure: AgentFailureCode? = this.failure,
+        lastEvent: AgentEvent? = this.lastEvent,
+    ): AgentSessionRuntimeSnapshot = AgentSessionRuntimeSnapshot(
+        revision, sessionId, request, runId, state, phase, recovery, failure, lastEvent,
+        toolExecutions = toolExecutions,
+    )
+
     val isExecuting: Boolean
         get() = phase == AgentSessionPhase.ACTIVE
 }

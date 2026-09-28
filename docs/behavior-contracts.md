@@ -46,6 +46,7 @@ substitute for the public API or the tests themselves.
 | R-023 | Ordinary exceptions may become typed Agent failures, cancellation remains cancellation, and a direct or wrapped `Error` escapes unchanged only after owned execution and cleanup settle; cancellation or fatal failure without a terminal event cannot leave an unowned active projection; independent cleanup continues and a fatal cleanup failure has priority | Runtime fatal-failure, cancellation, and managed-session contracts |
 | R-024 | Managed execution ownership settles independently of recovery-read success; unavailable or inconsistent recovery and failed checkpoint-removal commits cannot authorize fresh work, and delayed ACTIVE observations cannot resurrect ownership | Managed-session state-machine and fatal-failure contracts |
 | R-025 | Managed-session snapshots are one-way projections of explicit result knowledge; equal-value copies and presentation-only events do not invalidate recovery observations, while changed-then-restored facts and old execution plans remain fenced | Pure managed-session state tests |
+| R-026 | Parallel Tool calls emit `ToolRequested` in request order and each `ToolCompleted` as soon as that call finishes, while the committed Tool result message keeps request order; every durable Tool journal transition is announced by `CheckpointSaved`, and managed-session snapshots expose the active execution's journal only while `ACTIVE` | Runtime behavior, Tool permit, and pure managed-session state contracts |
 
 ## Chatbot, storage, and credentials
 
@@ -62,6 +63,7 @@ substitute for the public API or the tests themselves.
 | S-009 | Session Provider profile/model selection drives requests, history, persistence, switching, and resume; profile Provider identity must match the model, and active generation rejects switching without cancellation | Chatbot facade and browser contracts |
 | S-010 | Same-ID leases share one process-local runtime; releasing a lease never stops active work, while delete, clear, and root close fence old leases; committed destructive invalidation survives persistence failure and is reported as typed scope metadata | Managed-session and Chatbot destructive-failure contracts |
 | S-011 | Envelope schema is classified before current-payload decoding; schema 6 is the migration baseline, every later revision requires a contiguous adjacent migration, and incompatible records are surfaced without filtering or rewriting their stored bytes | Core migration registry, Room integration, and browser storage contracts |
+| S-012 | Chatbot Tool activities follow the active execution's journal: a call is `PENDING` until execution is admitted, `RUNNING` once started, and terminal as soon as it completes, while canonical Tool result messages always take precedence and older turns are never rewritten | Chatbot Tool journal contracts |
 
 ## Gateway and Web
 

@@ -395,7 +395,7 @@ class RuntimeBehaviorContractTest {
     }
 
     @Test
-    fun parallelToolEventsRemainInRequestOrder() = runTest {
+    fun parallelToolCompletionsFollowCompletionOrder() = runTest {
         val secondFinished = CompletableDeferred<Unit>()
         val first = object : ToolExecutor {
             override val definition = toolDefinition("first")
@@ -425,7 +425,14 @@ class RuntimeBehaviorContractTest {
             .toList()
 
         assertEquals(listOf("first", "second"), events.filterIsInstance<AgentEvent.ToolRequested>().map { it.toolCall.toolName })
-        assertEquals(listOf("first", "second"), events.filterIsInstance<AgentEvent.ToolCompleted>().map { it.result.toolName })
+        assertEquals(listOf("second", "first"), events.filterIsInstance<AgentEvent.ToolCompleted>().map { it.result.toolName })
+        val toolMessage = events.filterIsInstance<AgentEvent.MessageEmitted>()
+            .map { it.message }
+            .single { it.role == MessageRole.TOOL }
+        assertEquals(
+            listOf("first", "second"),
+            toolMessage.parts.filterIsInstance<ToolResultPart>().map { it.toolName },
+        )
     }
 
     @Test

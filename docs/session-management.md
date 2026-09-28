@@ -86,7 +86,9 @@ handle admission, events, recovery, cancellation planning, and settlement. The m
 locking, Runner/storage calls, publication, and completion delivery around those transitions.
 Cancellation planning produces the chosen result and any required persistence commit without
 performing either effect. Domain failure data drives failure resolution; `lastEvent` is diagnostic
-presentation and never decides the execution outcome.
+presentation and never decides the execution outcome. While a run is `ACTIVE`, the snapshot's
+`toolExecutions` exposes the durable `PENDING` / `STARTED` / `COMPLETED` Tool journal committed
+with the latest checkpoint; it is empty in every other phase.
 
 `delete` and `clear` attempt every independent runtime shutdown before deciding their result;
 destructive storage removal runs only after those lifetimes have settled successfully. Manager
