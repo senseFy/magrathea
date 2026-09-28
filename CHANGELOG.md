@@ -5,6 +5,17 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## [0.1.0-alpha.15](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.14...v0.1.0-alpha.15) (2026-09-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* Parallel ToolCompleted events follow completion order instead of request order. Tool batches emit additional CheckpointSaved events, and Chatbot Tool activities waiting on approval, permission, or a shared execution permit report PENDING instead of RUNNING.
+
+### Features
+
+* report parallel Tool progress per call ([#18](https://github.com/senseFy/magrathea/issues/18)) ([9a80100](https://github.com/senseFy/magrathea/commit/9a801007c85f5d625accd52c432281b7a8c8dd2e))
+
 ## [0.1.0-alpha.14](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.13...v0.1.0-alpha.14) (2026-09-26)
 
 
