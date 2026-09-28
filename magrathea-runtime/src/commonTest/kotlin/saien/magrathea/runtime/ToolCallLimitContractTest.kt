@@ -245,7 +245,9 @@ class ToolCallLimitContractTest {
             ),
         ).toList()
 
-        val results = events.filterIsInstance<AgentEvent.ToolCompleted>().map { it.result }
+        val results = events.filterIsInstance<AgentEvent.ToolCompleted>()
+            .map { it.result }
+            .sortedBy { it.toolCallId }
         assertEquals(1, tool.calls)
         assertEquals(3, results.size)
         assertEquals(listOf(false, true, true), results.map { it.isError })

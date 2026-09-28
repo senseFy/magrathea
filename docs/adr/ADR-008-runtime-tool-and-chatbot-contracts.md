@@ -29,7 +29,8 @@
 - A tool interceptor may change arguments but not session, call ID, or tool name.
 - Ordinary executor failures and timeouts become typed error results; external cancellation
   propagates unchanged.
-- Parallel execution preserves request order in public Tool events.
+- Parallel execution emits `ToolRequested` in request order and each `ToolCompleted` as soon as
+  that call finishes, while the Tool result message commits in request order.
 - A Tool may declare a positive per-turn call limit. Runtime counts calls by Tool name in model
   order, applies the stricter registered/request limit, and returns an error result without executing
   excess calls.
@@ -38,9 +39,10 @@
   `AgentRunner.run` request starts a fresh logical-run budget.
 - Unknown tools and permissions fail closed. An installed approval gateway is consulted for every
   tool call, and `ASK_ONCE_PER_SESSION` grants are scoped by session, tool, and policy version.
-- Tool execution uses a durable `PENDING` / `STARTED` / `COMPLETED` journal. Completed results are
-  reused, pending calls may start, and a started call blocks recovery unless its executor declares
-  `REPLAY_SAFE`.
+- Tool execution uses a durable `PENDING` / `STARTED` / `COMPLETED` journal. Every journal
+  transition is committed with its checkpoint and announced by `CheckpointSaved`. Completed
+  results are reused, pending calls may start, and a started call blocks recovery unless its
+  executor declares `REPLAY_SAFE`.
 - Tool results may carry typed text and image content with explicit `MODEL` and `USER` audiences.
   Runtime validates the complete canonical result, strips user-only content before Provider calls,
   and retains it for persistence and product projection. Model-directed images require an explicit
@@ -55,7 +57,8 @@
 
 - `AgentSessionManager` owns execution collectors and canonicalizes process-local runtimes by
   session ID. Independently releasable leases expose a replay-one full-state projection; edge
-  events are best-effort and cannot rebuild state.
+  events are best-effort and cannot rebuild state. Managed snapshots expose the active
+  execution's Tool journal, so hosts render queued, started, and completed calls from state.
 - Commands serialize per session without blocking different session IDs. Recoverable work must be
   resumed or cancelled before a fresh run, and destructive catalog mutations fence old leases.
 - Chatbot state is projected from the managed runtime snapshot. The Chatbot layer does not own or

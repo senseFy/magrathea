@@ -13,6 +13,8 @@ import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.AgentStatus
 import saien.magrathea.core.StopReason
+import saien.magrathea.core.ToolExecutionRecord
+import saien.magrathea.core.ToolExecutionState
 
 /** Result knowledge only: execution and lifetime are deliberately not result states. */
 internal enum class SessionResolution {
@@ -55,13 +57,8 @@ internal class SessionMachine private constructor(
         get() = lifecycle == SessionLifecycle.OPEN && execution != null && !result.isConfirmed
     val hasPendingWork: Boolean get() = !result.resolution.allowsStart
 
-    fun snapshot(revision: Long): AgentSessionRuntimeSnapshot = AgentSessionRuntimeSnapshot(
-        revision = revision,
-        sessionId = sessionId,
-        request = result.request,
-        runId = result.runId,
-        state = result.state,
-        phase = when (lifecycle) {
+    fun snapshot(revision: Long): AgentSessionRuntimeSnapshot {
+        val phase = when (lifecycle) {
             SessionLifecycle.CLOSED -> AgentSessionPhase.CLOSED
             SessionLifecycle.DELETED -> AgentSessionPhase.DELETED
             SessionLifecycle.OPEN -> when (result.resolution) {
@@ -76,11 +73,24 @@ internal class SessionMachine private constructor(
                 SessionResolution.BLOCKED -> AgentSessionPhase.RECOVERY_BLOCKED
                 SessionResolution.TERMINAL -> AgentSessionPhase.TERMINAL
             }
-        },
-        recovery = result.recovery,
-        failure = result.failure,
-        lastEvent = result.lastEvent,
-    )
+        }
+        return AgentSessionRuntimeSnapshot(
+            revision = revision,
+            sessionId = sessionId,
+            request = result.request,
+            runId = result.runId,
+            state = result.state,
+            phase = phase,
+            recovery = result.recovery,
+            failure = result.failure,
+            lastEvent = result.lastEvent,
+            toolExecutions = if (phase == AgentSessionPhase.ACTIVE) {
+                result.toolExecutions
+            } else {
+                emptyList()
+            },
+        )
+    }
 
     fun requireOpen() {
         when (lifecycle) {
@@ -148,6 +158,7 @@ internal class SessionMachine private constructor(
             recovery = null,
             failure = failure.code,
             lastEvent = failure,
+            toolExecutions = emptyList(),
         ))
     }
 
@@ -352,6 +363,7 @@ internal data class SessionResult(
     /** Domain failure, independent of the diagnostic last event. */
     val failure: AgentFailureCode? = null,
     val lastEvent: AgentEvent? = null,
+    val toolExecutions: List<ToolExecutionRecord> = emptyList(),
     val executionToken: Long? = null,
 ) {
     val isConfirmed: Boolean get() = resolution != SessionResolution.UNKNOWN
@@ -409,6 +421,11 @@ internal data class SessionResult(
         },
         failure = (event as? AgentEvent.Failed)?.code,
         lastEvent = event,
+        toolExecutions = when {
+            event is AgentEvent.CheckpointSaved -> event.checkpoint.toolExecutions
+            event is AgentEvent.Started || event.isTerminal() -> emptyList()
+            else -> toolExecutions
+        },
         executionToken = token,
     )
 
@@ -517,7 +534,19 @@ private fun reduceSessionState(
         is AgentEvent.RetryScheduled -> state?.copy(
             retryCount = if (state.retryCount == Int.MAX_VALUE) Int.MAX_VALUE else state.retryCount + 1,
         )
-        is AgentEvent.CheckpointSaved -> event.checkpoint.state
+        is AgentEvent.CheckpointSaved -> event.checkpoint.state.let { checkpointState ->
+            val completed = event.checkpoint.toolExecutions.mapNotNull { record ->
+                record.toolCallId.takeIf { record.state == ToolExecutionState.COMPLETED }
+            }
+            if (completed.isEmpty()) {
+                checkpointState
+            } else {
+                checkpointState.copy(
+                    pendingToolCalls = checkpointState.pendingToolCalls
+                        .filterNot { call -> call.toolCallId in completed },
+                )
+            }
+        }
         is AgentEvent.Completed -> event.state
         is AgentEvent.Failed -> state?.copy(
             status = AgentStatus.FAILED,
