@@ -18,6 +18,7 @@
 | [Managed Agent sessions](session-management.md) | Canonical runtimes, leases, ownership, and recovery |
 | [Timeouts](timeouts.md) | Provider, Tool, and whole-run deadlines |
 | [Interruption and recovery](recovery.md) | Backgrounding, process loss, resume, and Tool replay safety |
+| [History replay and exclusions](replay.md) | Prepared Provider input, whole-message exclusions, and application visibility |
 | [Tracing contract](adr/ADR-015-runtime-tracing-contract.md) | Chain tracing, host integration, privacy, and telemetry replacement |
 | [Debug recording contract](adr/ADR-016-debug-recording-contract.md) | Typed, default-disabled host diagnostics outside business events |
 | [MCP](mcp.md) | Tool discovery, transports, policy, security, and lifecycle |

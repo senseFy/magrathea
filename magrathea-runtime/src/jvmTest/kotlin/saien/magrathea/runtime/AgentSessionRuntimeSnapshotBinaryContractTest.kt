@@ -12,6 +12,7 @@ import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.ModelDescriptor
+import saien.magrathea.core.ReplayReport
 import saien.magrathea.core.ToolExecutionRecord
 import saien.magrathea.core.ToolExecutionState
 
@@ -62,7 +63,9 @@ class AgentSessionRuntimeSnapshotBinaryContractTest {
 
     @Test
     fun originalCopyAndDefaultCopyPreserveTheJournal() {
-        val original = snapshot(toolExecutions = journal("exec-1"))
+        val original = snapshot(toolExecutions = journal("exec-1")).copy(
+            replay = ReplayReport(AgentRunId("run-1"), 0, "test-provider", "test-model", emptyList()),
+        )
         val replacement = snapshot(sessionId = AgentSessionId("copied-session"))
         val copied = snapshotClass.getMethod("copy", *legacyParameterTypes)
             .invoke(original, *legacyArguments(replacement)) as AgentSessionRuntimeSnapshot
@@ -71,6 +74,7 @@ class AgentSessionRuntimeSnapshotBinaryContractTest {
         assertEquals(replacement.revision, copied.revision)
         assertEquals(replacement.sessionId, copied.sessionId)
         assertEquals(replacement.phase, copied.phase)
+        assertEquals(original.replay, copied.replay)
 
         val defaultCopy = snapshotClass.getDeclaredMethod(
             "copy\$default",
@@ -92,6 +96,23 @@ class AgentSessionRuntimeSnapshotBinaryContractTest {
         assertEquals(journal("exec-2"), updated.toolExecutions)
         assertEquals(original, updated.copy(toolExecutions = journal("exec-1")))
         assertEquals(snapshot(), updated.copy(toolExecutions = emptyList()))
+    }
+
+    @Test
+    fun journalAwareSignaturesRemainCallableAndPreserveReplay() {
+        val parameters = legacyParameterTypes + List::class.java
+        val report = ReplayReport(AgentRunId("run-1"), 0, "test-provider", "test-model", emptyList())
+        val original = snapshot(toolExecutions = journal("exec-1")).copy(replay = report)
+        val arguments = legacyArguments(original).plus(elements = arrayOf<Any?>(original.toolExecutions))
+        val constructed = snapshotClass.getConstructor(*parameters).newInstance(*arguments) as AgentSessionRuntimeSnapshot
+        assertEquals(original.toolExecutions, constructed.toolExecutions)
+        assertNull(constructed.replay)
+        val copied = snapshotClass.getMethod("copy", *parameters).invoke(original, *arguments) as AgentSessionRuntimeSnapshot
+        assertEquals(original, copied)
+        val defaults = snapshotClass.getDeclaredMethod(
+            "copy\$default", snapshotClass, *parameters, Int::class.javaPrimitiveType, Any::class.java,
+        ).invoke(null, original, 0L, *arrayOfNulls<Any?>(9), 1023, null)
+        assertEquals(original, defaults)
     }
 
     private fun journal(executionId: String) = listOf(

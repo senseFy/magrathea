@@ -30,6 +30,11 @@ Agent state, phase, recovery metadata, and last event form one revisioned projec
 best-effort edge stream for diagnostics or transient presentation; it is non-replay and may drop
 events rather than block execution.
 
+`state.replay` retains the latest reported whole-message replay exclusions, independently of
+`lastEvent`. It is presentation metadata, cleared for a new execution or replaced idle request,
+and has no role in admission or recovery. It is not persisted; see
+[History replay and exclusions](replay.md).
+
 Commands are serialized per session:
 
 - `start` admits a fresh run only from new, inactive, or terminal state;

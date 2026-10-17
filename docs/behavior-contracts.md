@@ -47,6 +47,7 @@ substitute for the public API or the tests themselves.
 | R-024 | Managed execution ownership settles independently of recovery-read success; unavailable or inconsistent recovery and failed checkpoint-removal commits cannot authorize fresh work, and delayed ACTIVE observations cannot resurrect ownership | Managed-session state-machine and fatal-failure contracts |
 | R-025 | Managed-session snapshots are one-way projections of explicit result knowledge; equal-value copies and presentation-only events do not invalidate recovery observations, while changed-then-restored facts and old execution plans remain fenced | Pure managed-session state tests |
 | R-026 | Parallel Tool calls emit `ToolRequested` in request order and each `ToolCompleted` as soon as that call finishes, while the committed Tool result message keeps request order; every durable Tool journal transition is announced by `CheckpointSaved`, and managed-session snapshots expose the active execution's journal only while `ACTIVE` | Runtime behavior, Tool permit, and pure managed-session state contracts |
+| R-027 | Replay omits empty transformed assistants without mutating raw history; whole-message exclusions are reported with reasons, retained as the latest process-local managed/Chatbot snapshot, and never drive admission, recovery, or persistence | Replay, request-builder, managed-session, Chatbot, and binary compatibility contracts |
 
 ## Chatbot, storage, and credentials
 

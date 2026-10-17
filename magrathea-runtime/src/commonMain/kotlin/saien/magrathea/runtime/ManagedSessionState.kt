@@ -13,6 +13,7 @@ import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.AgentStatus
 import saien.magrathea.core.StopReason
+import saien.magrathea.core.ReplayReport
 import saien.magrathea.core.ToolExecutionRecord
 import saien.magrathea.core.ToolExecutionState
 
@@ -84,6 +85,7 @@ internal class SessionMachine private constructor(
             recovery = result.recovery,
             failure = result.failure,
             lastEvent = result.lastEvent,
+            replay = result.replay,
             toolExecutions = if (phase == AgentSessionPhase.ACTIVE) {
                 result.toolExecutions
             } else {
@@ -253,6 +255,7 @@ internal class SessionMachine private constructor(
         if (terminal != null) {
             return SessionCancellation(generation, SessionResult.fromStored(terminal).copy(
                 executionToken = token,
+                replay = (currentRun?.replay ?: before.result.replay)?.takeIf { it.runId == terminal.runId },
                 lastEvent = if (terminal.state.status == AgentStatus.COMPLETED) {
                     AgentEvent.Completed(sessionId, terminal.state)
                 } else {
@@ -316,7 +319,7 @@ internal class SessionMachine private constructor(
 
     fun replaceRequest(request: AgentRequest): SessionMachine {
         requireAdmission(resume = false)
-        return update(result = result.copy(request = request))
+        return update(result = result.copy(request = request, replay = null))
     }
 
     fun close(deleted: Boolean): SessionMachine = if (lifecycle == SessionLifecycle.OPEN) {
@@ -364,6 +367,7 @@ internal data class SessionResult(
     val failure: AgentFailureCode? = null,
     val lastEvent: AgentEvent? = null,
     val toolExecutions: List<ToolExecutionRecord> = emptyList(),
+    val replay: ReplayReport? = null,
     val executionToken: Long? = null,
 ) {
     val isConfirmed: Boolean get() = resolution != SessionResolution.UNKNOWN
@@ -421,6 +425,11 @@ internal data class SessionResult(
         },
         failure = (event as? AgentEvent.Failed)?.code,
         lastEvent = event,
+        replay = when (event) {
+            is AgentEvent.Started -> null
+            is AgentEvent.ContextTransformed -> event.replay
+            else -> replay
+        },
         toolExecutions = when {
             event is AgentEvent.CheckpointSaved -> event.checkpoint.toolExecutions
             event is AgentEvent.Started || event.isTerminal() -> emptyList()
@@ -435,6 +444,7 @@ internal data class SessionResult(
         resolution = info.resolution(resolution),
         recovery = info,
         failure = null,
+        replay = replay?.takeIf { info.runId == null || it.runId == info.runId },
         executionToken = token,
     )
 
@@ -459,6 +469,7 @@ internal data class SessionResult(
                         ?: snapshot.state.resolution(),
                     recovery = observation.recovery,
                     executionToken = executionToken.takeIf { snapshot.runId == runId },
+                    replay = replay?.takeIf { it.runId == snapshot.runId },
                 )
             }
         }

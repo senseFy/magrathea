@@ -83,6 +83,7 @@ import saien.magrathea.core.ProviderInterruption
 import saien.magrathea.core.ProviderInterruptionPhase
 import saien.magrathea.core.ProviderRequestPurpose
 import saien.magrathea.core.ReplayPolicy
+import saien.magrathea.core.ReplayReport
 import saien.magrathea.core.ReasoningPart
 import saien.magrathea.core.RetryPolicy
 import saien.magrathea.core.RuntimeConfig
@@ -1269,10 +1270,11 @@ class DefaultAgentRunner(
 
                             val providerMessages =
                                 preparation.messages.withSystemPrompt(activeRequest.systemPrompt)
-                            val transformedMessages = replayPolicy.transform(
+                            val replayResult = replayPolicy.transformWithReport(
                                 contextTransformer.transform(providerMessages),
                                 activeRequest.model,
                             )
+                            val transformedMessages = replayResult.messages
                             validateMessages(
                                 transformedMessages,
                                 activeRequest.engine.runtime,
@@ -1295,6 +1297,15 @@ class DefaultAgentRunner(
                                     request.sessionId,
                                     turn,
                                     projectedMessages.size,
+                                    replay = replayResult.exclusions?.let { exclusions ->
+                                        ReplayReport(
+                                            runId = runId,
+                                            turn = turn,
+                                            provider = activeRequest.model.provider,
+                                            model = activeRequest.model.model,
+                                            exclusions = exclusions,
+                                        )
+                                    },
                                 ),
                             )
                             val inputAnchorId = runState.value.messages.lastOrNull()?.id

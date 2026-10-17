@@ -20,6 +20,7 @@ import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.core.ReasoningContentKind
 import saien.magrathea.core.ReasoningPreference
 import saien.magrathea.core.ReasoningPart
+import saien.magrathea.core.ReplayReport
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.TokenUsage
@@ -290,7 +291,27 @@ data class ChatbotSnapshot(
     val toolActivities: List<ChatbotToolActivitySnapshot> = emptyList(),
     /** Current run's canonical stop reason, independent of individual message reasons; cleared on a new run. */
     val stopReason: ChatbotStopReason? = null,
+    /** Latest whole-message replay decisions, shared with the managed Runtime snapshot. */
+    val replay: ReplayReport? = null,
 ) {
+    /** Retains the constructor published with the run stop reason. */
+    constructor(
+        configuration: ChatbotSessionConfiguration,
+        sessionId: String? = null,
+        messages: List<ChatbotMessageSnapshot> = emptyList(),
+        status: ChatbotStatus = ChatbotStatus.IDLE,
+        failure: ChatbotFailure? = null,
+        interruption: ChatbotInterruption? = null,
+        usage: ChatbotUsage = ChatbotUsage(),
+        latestRequestUsage: ChatbotUsage = ChatbotUsage(),
+        contextManagement: ChatbotContextManagementSnapshot = ChatbotContextManagementSnapshot(),
+        toolActivities: List<ChatbotToolActivitySnapshot> = emptyList(),
+        stopReason: ChatbotStopReason? = null,
+    ) : this(
+        configuration, sessionId, messages, status, failure, interruption, usage,
+        latestRequestUsage, contextManagement, toolActivities, stopReason, replay = null,
+    )
+
     /** Retains the original constructor and its default-argument signature for compiled hosts. */
     constructor(
         configuration: ChatbotSessionConfiguration,
@@ -305,7 +326,25 @@ data class ChatbotSnapshot(
         toolActivities: List<ChatbotToolActivitySnapshot> = emptyList(),
     ) : this(
         configuration, sessionId, messages, status, failure, interruption, usage,
-        latestRequestUsage, contextManagement, toolActivities, stopReason = null,
+        latestRequestUsage, contextManagement, toolActivities, stopReason = null, replay = null,
+    )
+
+    /** Preserves the stop-reason-aware copy/default-copy signatures and the replay report. */
+    fun copy(
+        configuration: ChatbotSessionConfiguration = this.configuration,
+        sessionId: String? = this.sessionId,
+        messages: List<ChatbotMessageSnapshot> = this.messages,
+        status: ChatbotStatus = this.status,
+        failure: ChatbotFailure? = this.failure,
+        interruption: ChatbotInterruption? = this.interruption,
+        usage: ChatbotUsage = this.usage,
+        latestRequestUsage: ChatbotUsage = this.latestRequestUsage,
+        contextManagement: ChatbotContextManagementSnapshot = this.contextManagement,
+        toolActivities: List<ChatbotToolActivitySnapshot> = this.toolActivities,
+        stopReason: ChatbotStopReason? = this.stopReason,
+    ): ChatbotSnapshot = ChatbotSnapshot(
+        configuration, sessionId, messages, status, failure, interruption, usage,
+        latestRequestUsage, contextManagement, toolActivities, stopReason, replay = replay,
     )
 
     /** Retains the original copy/default-copy signatures while preserving the run's stop reason. */
@@ -322,7 +361,7 @@ data class ChatbotSnapshot(
         toolActivities: List<ChatbotToolActivitySnapshot> = this.toolActivities,
     ): ChatbotSnapshot = ChatbotSnapshot(
         configuration, sessionId, messages, status, failure, interruption, usage,
-        latestRequestUsage, contextManagement, toolActivities, stopReason = stopReason,
+        latestRequestUsage, contextManagement, toolActivities, stopReason = stopReason, replay = replay,
     )
 
     val isRunning: Boolean
