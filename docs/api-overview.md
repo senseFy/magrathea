@@ -14,6 +14,7 @@ Chatbot, Provider, Tool, persistence, and browser layers they need.
 | State | `AgentPersistence`, strict snapshot and checkpoint codecs |
 | Credentials | `CredentialRef`, `CredentialProvider`, transient `ProviderCredential` |
 | Infrastructure | Injectable IDs and clocks, tracing primitives, context propagation |
+| Replay | `ReplayPolicy`, optional `ReplayResult` exclusions, and the latest `ReplayReport` |
 
 The application composition root selects the Provider, network engine, database, credential store,
 and UI.
@@ -112,6 +113,11 @@ values are available through `ChatbotToolResult.images`.
 message's stop reason. A `COMPLETED` status may carry `MAX_TURNS` when the runtime exhausted
 its turn budget without a final answer. The reason survives session restoration and is cleared
 when a new run starts; it does not change runtime stopping behavior.
+
+`ChatbotSnapshot.replay` exposes the managed session's latest replay exclusion report. It lets a
+product decide whether to display omitted partial messages without deleting history or implementing
+Provider replay rules. Null means reporting is unavailable, while an empty exclusion list is a
+known result. See [History replay and exclusions](replay.md).
 
 ## Persistence and credentials
 

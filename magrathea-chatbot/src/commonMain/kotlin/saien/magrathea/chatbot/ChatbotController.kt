@@ -250,6 +250,7 @@ private fun projectRuntime(
         contextManagement = state?.contextManagement?.toChatbotContextManagementSnapshot()
             ?: eventProjection.contextManagement,
         toolActivities = toolActivities,
+        replay = runtime.replay,
     )
 }
 

@@ -74,6 +74,7 @@ public final class saien/magrathea/provider/api/DefaultReplayPolicy : saien/magr
 	public fun <init> (Lkotlin/jvm/functions/Function3;)V
 	public synthetic fun <init> (Lkotlin/jvm/functions/Function3;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun transform (Ljava/util/List;Lsaien/magrathea/core/ModelDescriptor;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun transformWithReport (Ljava/util/List;Lsaien/magrathea/core/ModelDescriptor;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class saien/magrathea/provider/api/GeminiTransportConfig : saien/magrathea/provider/api/ProviderTransportConfig {

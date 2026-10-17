@@ -45,6 +45,10 @@ fun interface ContextTransformer {
 
 fun interface ReplayPolicy {
     suspend fun transform(messages: List<AgentMessage>, model: ModelDescriptor): List<AgentMessage>
+
+    /** Existing policies remain callable without claiming that every input message survived. */
+    suspend fun transformWithReport(messages: List<AgentMessage>, model: ModelDescriptor): ReplayResult =
+        ReplayResult(transform(messages, model))
 }
 
 @Serializable
@@ -513,7 +517,23 @@ sealed interface AgentEvent {
 
     @Serializable
     @SerialName("context_transformed")
-    data class ContextTransformed(val sessionId: AgentSessionId, val turn: Int, val messageCount: Int) : AgentEvent
+    data class ContextTransformed(
+        val sessionId: AgentSessionId,
+        val turn: Int,
+        val messageCount: Int,
+        @EncodeDefault(EncodeDefault.Mode.NEVER)
+        val replay: ReplayReport? = null,
+    ) : AgentEvent {
+        constructor(sessionId: AgentSessionId, turn: Int, messageCount: Int) :
+            this(sessionId, turn, messageCount, replay = null)
+
+        /** Preserves the published copy/default-copy signatures and the attached report. */
+        fun copy(
+            sessionId: AgentSessionId = this.sessionId,
+            turn: Int = this.turn,
+            messageCount: Int = this.messageCount,
+        ): ContextTransformed = ContextTransformed(sessionId, turn, messageCount, replay)
+    }
 
     @Serializable
     @SerialName("message_emitted")

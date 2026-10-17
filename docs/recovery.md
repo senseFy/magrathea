@@ -36,6 +36,11 @@ Output-limited assistant turns containing unfinished tool calls are omitted from
 Provider input. Full history retains the partial output for presentation; replay neither fabricates
 tool results for that turn nor sends incomplete arguments to another model.
 
+Replay also skips an assistant whose parts become empty after transformation. This includes a
+stream cut during reasoning before Provider identity was finalized. The original message remains
+in history. Applications observe replay exclusions through the latest process-local report rather
+than infer them from message counts; see [History replay and exclusions](replay.md).
+
 Before either a model call or context-summary call begins, Runtime persists its request ID,
 purpose, input identity, and next physical-attempt ordinal. Reattachment therefore uses the exact
 pending request only while its input is unchanged; a changed or invalidated request claims and

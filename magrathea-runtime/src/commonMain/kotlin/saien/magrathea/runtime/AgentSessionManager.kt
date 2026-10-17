@@ -33,6 +33,7 @@ import saien.magrathea.core.AgentRecoveryDisposition
 import saien.magrathea.core.AgentRecoveryInfo
 import saien.magrathea.core.AgentRequest
 import saien.magrathea.core.AgentRunId
+import saien.magrathea.core.ReplayReport
 import saien.magrathea.core.AgentRunner
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
@@ -75,7 +76,26 @@ data class AgentSessionRuntimeSnapshot(
      * [phase] is [AgentSessionPhase.ACTIVE].
      */
     val toolExecutions: List<ToolExecutionRecord> = emptyList(),
+    /** Latest process-local replay report; null until a reporting policy prepares input. */
+    val replay: ReplayReport? = null,
 ) {
+    /** Retains the constructor published with the Tool journal. */
+    constructor(
+        revision: Long,
+        sessionId: AgentSessionId,
+        request: AgentRequest? = null,
+        runId: AgentRunId? = null,
+        state: AgentStateSnapshot? = null,
+        phase: AgentSessionPhase = AgentSessionPhase.NEW,
+        recovery: AgentRecoveryInfo? = null,
+        failure: AgentFailureCode? = null,
+        lastEvent: AgentEvent? = null,
+        toolExecutions: List<ToolExecutionRecord> = emptyList(),
+    ) : this(
+        revision, sessionId, request, runId, state, phase, recovery, failure, lastEvent,
+        toolExecutions, replay = null,
+    )
+
     /** Retains the original constructor and its default-argument signature for compiled hosts. */
     constructor(
         revision: Long,
@@ -89,7 +109,24 @@ data class AgentSessionRuntimeSnapshot(
         lastEvent: AgentEvent? = null,
     ) : this(
         revision, sessionId, request, runId, state, phase, recovery, failure, lastEvent,
-        toolExecutions = emptyList(),
+        toolExecutions = emptyList(), replay = null,
+    )
+
+    /** Preserves the journal-aware copy/default-copy signatures and the replay report. */
+    fun copy(
+        revision: Long = this.revision,
+        sessionId: AgentSessionId = this.sessionId,
+        request: AgentRequest? = this.request,
+        runId: AgentRunId? = this.runId,
+        state: AgentStateSnapshot? = this.state,
+        phase: AgentSessionPhase = this.phase,
+        recovery: AgentRecoveryInfo? = this.recovery,
+        failure: AgentFailureCode? = this.failure,
+        lastEvent: AgentEvent? = this.lastEvent,
+        toolExecutions: List<ToolExecutionRecord> = this.toolExecutions,
+    ): AgentSessionRuntimeSnapshot = AgentSessionRuntimeSnapshot(
+        revision, sessionId, request, runId, state, phase, recovery, failure, lastEvent,
+        toolExecutions, replay = replay,
     )
 
     /** Retains the original copy/default-copy signatures while preserving the Tool journal. */
@@ -105,7 +142,7 @@ data class AgentSessionRuntimeSnapshot(
         lastEvent: AgentEvent? = this.lastEvent,
     ): AgentSessionRuntimeSnapshot = AgentSessionRuntimeSnapshot(
         revision, sessionId, request, runId, state, phase, recovery, failure, lastEvent,
-        toolExecutions = toolExecutions,
+        toolExecutions = toolExecutions, replay = replay,
     )
 
     val isExecuting: Boolean

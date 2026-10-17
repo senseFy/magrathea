@@ -26,6 +26,9 @@ import saien.magrathea.core.ProviderOptions
 import saien.magrathea.core.ProviderCredential
 import saien.magrathea.core.ProviderTimeoutConfig
 import saien.magrathea.core.ReplayPolicy
+import saien.magrathea.core.ReplayExclusion
+import saien.magrathea.core.ReplayExclusionReason
+import saien.magrathea.core.ReplayResult
 import saien.magrathea.core.ReasoningContentKind
 import saien.magrathea.core.ReasoningPreference
 import saien.magrathea.core.ReasoningPart
@@ -822,14 +825,21 @@ class ToolCallAssembler {
 class DefaultReplayPolicy(
     private val normalizeToolCallId: ((String, ModelDescriptor, AgentMessage) -> String)? = null,
 ) : ReplayPolicy {
-    override suspend fun transform(messages: List<AgentMessage>, model: ModelDescriptor): List<AgentMessage> {
+    override suspend fun transform(messages: List<AgentMessage>, model: ModelDescriptor): List<AgentMessage> =
+        transformWithReport(messages, model).messages
+
+    override suspend fun transformWithReport(messages: List<AgentMessage>, model: ModelDescriptor): ReplayResult {
+        val exclusions = mutableListOf<ReplayExclusion>()
         val toolCallIdMap = linkedMapOf<String, String>()
         val transformed = messages.mapNotNull { message ->
             when (message.role) {
                 MessageRole.USER, MessageRole.SYSTEM, MessageRole.TOOL -> transformToolResultMessage(message, toolCallIdMap)
                 MessageRole.ASSISTANT -> if (message.stopReason == StopReason.MAX_TOKENS &&
                     message.parts.any { it is ToolCallPart && it.partial }
-                ) null else transformAssistantMessage(message, model, toolCallIdMap)
+                ) {
+                    exclusions += ReplayExclusion(message.id, ReplayExclusionReason.UNFINISHED_TOOL_CALLS)
+                    null
+                } else transformAssistantMessage(message, model, toolCallIdMap)
             }
         }
 
@@ -843,7 +853,14 @@ class DefaultReplayPolicy(
                     flushOrphanedToolCalls(result, pendingToolCalls, existingToolResultIds)
                     pendingToolCalls = emptyList()
                     existingToolResultIds.clear()
-                    if (message.stopReason == StopReason.ERROR || message.stopReason == StopReason.CANCELLED) return@forEach
+                    if (message.stopReason == StopReason.ERROR || message.stopReason == StopReason.CANCELLED) {
+                        exclusions += ReplayExclusion(message.id, ReplayExclusionReason.CANCELLED_OR_FAILED)
+                        return@forEach
+                    }
+                    if (message.parts.isEmpty()) {
+                        exclusions += ReplayExclusion(message.id, ReplayExclusionReason.EMPTY_AFTER_TRANSFORMATION)
+                        return@forEach
+                    }
                     pendingToolCalls = message.parts.filterIsInstance<ToolCallPart>()
                     result += message
                 }
@@ -860,7 +877,7 @@ class DefaultReplayPolicy(
             }
         }
 
-        return result
+        return ReplayResult(result, exclusions)
     }
 
     private fun transformAssistantMessage(

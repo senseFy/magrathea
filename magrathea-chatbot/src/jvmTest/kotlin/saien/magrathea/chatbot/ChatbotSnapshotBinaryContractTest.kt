@@ -4,6 +4,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import saien.magrathea.core.ModelDescriptor
+import saien.magrathea.core.AgentRunId
+import saien.magrathea.core.ReplayReport
 
 class ChatbotSnapshotBinaryContractTest {
     private val snapshotClass = ChatbotSnapshot::class.java
@@ -54,12 +56,14 @@ class ChatbotSnapshotBinaryContractTest {
 
     @Test
     fun originalCopyAndDefaultCopyPreserveTheStopReason() {
-        val original = snapshot(stopReason = ChatbotStopReason.MAX_TURNS)
+        val original = snapshot(stopReason = ChatbotStopReason.MAX_TURNS).copy(
+            replay = ReplayReport(AgentRunId("run"), 0, "test-provider", "test-model", emptyList()),
+        )
         val replacement = snapshot(sessionId = "copied-session")
         val copied = snapshotClass.getMethod("copy", *legacyParameterTypes)
             .invoke(original, *legacyArguments(replacement)) as ChatbotSnapshot
 
-        assertEquals(replacement.copy(stopReason = ChatbotStopReason.MAX_TURNS), copied)
+        assertEquals(replacement.copy(stopReason = ChatbotStopReason.MAX_TURNS, replay = original.replay), copied)
         assertEquals(ChatbotStopReason.MAX_TURNS, copied.stopReason)
 
         val defaultCopy = snapshotClass.getDeclaredMethod(
@@ -82,6 +86,22 @@ class ChatbotSnapshotBinaryContractTest {
         assertEquals(ChatbotStopReason.MAX_TOKENS, updated.stopReason)
         assertEquals(original, updated.copy(stopReason = ChatbotStopReason.MAX_TURNS))
         assertEquals(snapshot(), updated.copy(stopReason = null))
+    }
+
+    @Test
+    fun stopReasonAwareSignaturesRemainCallableAndPreserveReplay() {
+        val parameters = legacyParameterTypes + ChatbotStopReason::class.java
+        val report = ReplayReport(AgentRunId("run"), 0, "test-provider", "test-model", emptyList())
+        val original = snapshot(stopReason = ChatbotStopReason.MAX_TURNS).copy(replay = report)
+        val arguments = legacyArguments(original).plus(elements = arrayOf<Any?>(original.stopReason))
+        val constructed = snapshotClass.getConstructor(*parameters).newInstance(*arguments) as ChatbotSnapshot
+        assertEquals(original.stopReason, constructed.stopReason)
+        assertNull(constructed.replay)
+        assertEquals(original, snapshotClass.getMethod("copy", *parameters).invoke(original, *arguments))
+        val defaults = snapshotClass.getDeclaredMethod(
+            "copy\$default", snapshotClass, *parameters, Int::class.javaPrimitiveType, Any::class.java,
+        ).invoke(null, original, *arrayOfNulls<Any?>(11), 2047, null)
+        assertEquals(original, defaults)
     }
 
     private fun configuration() = ChatbotSessionConfiguration(
