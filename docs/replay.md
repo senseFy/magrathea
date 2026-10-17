@@ -74,6 +74,6 @@ input it describes rather than a permanent validity label on a message.
 
 Common replay tests cover interrupted reasoning, retained text and Tool semantics, and exclusion
 reasons. Adapter tests exercise replay followed by both Chat Completions and Responses request
-construction. Runtime and Chatbot tests cover late attachment, report replacement/reset, unchanged
-raw history and persistence, and reporting policies versus legacy custom policies. JVM binary
+construction. Runtime and Chatbot tests cover late attachment, report replacement/reset during
+cancellation, unchanged raw history and persistence, and reporting policies versus legacy custom policies. JVM binary
 contracts protect published constructor/copy signatures and the original replay-policy entry point.

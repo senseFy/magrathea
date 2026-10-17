@@ -255,7 +255,7 @@ internal class SessionMachine private constructor(
         if (terminal != null) {
             return SessionCancellation(generation, SessionResult.fromStored(terminal).copy(
                 executionToken = token,
-                replay = (currentRun?.replay ?: before.result.replay)?.takeIf { it.runId == terminal.runId },
+                replay = (currentRun ?: before.result).replay?.takeIf { it.runId == terminal.runId },
                 lastEvent = if (terminal.state.status == AgentStatus.COMPLETED) {
                     AgentEvent.Completed(sessionId, terminal.state)
                 } else {
