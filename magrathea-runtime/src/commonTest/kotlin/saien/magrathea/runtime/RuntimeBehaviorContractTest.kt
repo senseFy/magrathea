@@ -8,6 +8,7 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
@@ -396,18 +397,17 @@ class RuntimeBehaviorContractTest {
 
     @Test
     fun parallelToolCompletionsFollowCompletionOrder() = runTest {
-        val secondFinished = CompletableDeferred<Unit>()
+        val secondCompleted = CompletableDeferred<Unit>()
         val first = object : ToolExecutor {
             override val definition = toolDefinition("first")
             override suspend fun execute(request: ToolExecutionRequest): ToolExecutionResult {
-                secondFinished.await()
+                secondCompleted.await()
                 return successfulResult(request)
             }
         }
         val second = object : ToolExecutor {
             override val definition = toolDefinition("second")
             override suspend fun execute(request: ToolExecutionRequest): ToolExecutionResult {
-                secondFinished.complete(Unit)
                 return successfulResult(request)
             }
         }
@@ -422,6 +422,11 @@ class RuntimeBehaviorContractTest {
                     toolExecutionMode = ToolExecutionMode.PARALLEL,
                 ),
             )
+            .onEach { event ->
+                if (event is AgentEvent.ToolCompleted && event.result.toolName == "second") {
+                    secondCompleted.complete(Unit)
+                }
+            }
             .toList()
 
         assertEquals(listOf("first", "second"), events.filterIsInstance<AgentEvent.ToolRequested>().map { it.toolCall.toolName })
