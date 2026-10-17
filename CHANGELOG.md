@@ -5,6 +5,13 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## [0.1.0-alpha.16](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.15...v0.1.0-alpha.16) (2026-10-17)
+
+
+### Bug Fixes
+
+* omit empty replay messages and expose exclusions ([#20](https://github.com/senseFy/magrathea/issues/20)) ([983ff97](https://github.com/senseFy/magrathea/commit/983ff978905e5fd938ce436e7251fa906b9ec7df))
+
 ## [0.1.0-alpha.15](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.14...v0.1.0-alpha.15) (2026-09-28)
 
 
