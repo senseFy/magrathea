@@ -21,6 +21,9 @@ kotlin {
         commonTest.dependencies {
             implementation(libs.kotlinx.coroutines.test)
         }
+        jvmTest.dependencies {
+            implementation(project(":magrathea-runtime"))
+        }
     }
 }
 

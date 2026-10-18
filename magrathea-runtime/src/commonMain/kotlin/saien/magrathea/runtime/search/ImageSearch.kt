@@ -9,6 +9,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import saien.magrathea.runtime.rethrowFatalError
+import saien.magrathea.runtime.takeAtCodePointBoundary
 import saien.magrathea.core.MediaReference
 import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.core.ToolDefinition
@@ -352,7 +353,7 @@ private fun String.isValidImageQuery(maxChars: Int): Boolean =
     isNotBlank() && length <= maxChars && none { it.code < 0x20 || it.code == 0x7f }
 
 private fun String.normalizedImageText(maxChars: Int): String =
-    trim().replace(IMAGE_EXTERNAL_WHITESPACE, " ").take(maxChars)
+    trim().replace(IMAGE_EXTERNAL_WHITESPACE, " ").takeAtCodePointBoundary(maxChars)
 
 private fun String.imageHttpsHostOrNull(): String? {
     if (length > MAX_IMAGE_URL_CHARS || any { it.isWhitespace() || it.code < 0x20 || it.code == 0x7f }) return null

@@ -172,7 +172,7 @@ class DefaultMagratheaTracer(
             return NoopMagratheaTraceSpan
         }
         try {
-            val boundedName = name.take(limits.nameChars)
+            val boundedName = name.takeAtCodePointBoundary(limits.nameChars)
             val traceId = parent?.traceId ?: idGenerator.nextId()
             val spanId = idGenerator.nextId()
             if (boundedName.isBlank() || traceId.length !in 1..limits.idChars ||
@@ -199,6 +199,18 @@ class DefaultMagratheaTracer(
 
 }
 
+/** Keep the UTF-16 budget without separating a surrogate pair at the cut. */
+private fun String.takeAtCodePointBoundary(maxChars: Int): String {
+    require(maxChars >= 0) { "maxChars must not be negative" }
+    if (length <= maxChars) return this
+    val end = if (maxChars > 0 && this[maxChars - 1].isHighSurrogate() && this[maxChars].isLowSurrogate()) {
+        maxChars - 1
+    } else {
+        maxChars
+    }
+    return substring(0, end)
+}
+
 private class TraceTextBudget(var remaining: Int, private val limits: TraceRecordingLimits) {
     fun attributes(source: Map<String, TraceValue>, count: Int): Map<String, TraceValue> {
         val result = linkedMapOf<String, TraceValue>()
@@ -206,11 +218,11 @@ private class TraceTextBudget(var remaining: Int, private val limits: TraceRecor
         repeat(count) {
             if (!iterator.hasNext()) return result
             val (rawKey, rawValue) = iterator.next()
-            val key = rawKey.take(limits.keyChars)
+            val key = rawKey.takeAtCodePointBoundary(limits.keyChars)
             if (key.isBlank() || key.length > remaining) return@repeat
             val value = when (rawValue) {
                 is TraceValue.StringValue -> TraceValue.StringValue(
-                    rawValue.value.take(minOf(limits.valueChars, remaining - key.length)),
+                    rawValue.value.takeAtCodePointBoundary(minOf(limits.valueChars, remaining - key.length)),
                 )
                 is TraceValue.DoubleValue -> if (rawValue.value.isFinite()) rawValue else return@repeat
                 else -> rawValue
@@ -242,7 +254,7 @@ private class DefaultMagratheaTraceSpan(
     override fun addEvent(name: String, attributes: Map<String, TraceValue>) {
         val current = state.load() ?: return
         if (current.events.size >= limits.events) return
-        val boundedName = name.take(minOf(limits.nameChars, current.remainingText))
+        val boundedName = name.takeAtCodePointBoundary(minOf(limits.nameChars, current.remainingText))
         if (boundedName.isBlank()) return
         val budget = TraceTextBudget(current.remainingText - boundedName.length, limits)
         val event = TraceEvent(boundedName, elapsedMillis(), budget.attributes(attributes, limits.eventAttributes))

@@ -32,6 +32,37 @@ import kotlin.test.assertTrue
 
 class WebSearchToolContractTest {
     @Test
+    fun resultAndCitationTextKeepEmojiWholeAtDefaultLengthLimits() = runTest {
+        for (prefixOffset in listOf(-1, -2, 0)) {
+            val titlePrefix = "a".repeat(300 + prefixOffset)
+            val snippetPrefix = "b".repeat(1_200 + prefixOffset)
+            val result = WebSearchTool(WebSearchBackend {
+                WebSearchBackendResponse(listOf(WebSearchSource(
+                    title = titlePrefix + "😀tail",
+                    url = "https://example.com/result",
+                    snippet = snippetPrefix + "😀tail",
+                    publishedAt = "c".repeat(63) + "😀tail",
+                )))
+            }).execute(executionRequest("query"))
+
+            assertFalse(result.isError)
+            val source = result.result.jsonObject.getValue("sources").jsonArray.single().jsonObject
+            val expectedTitle = titlePrefix + if (prefixOffset == -2) "😀" else ""
+            val expectedSnippet = snippetPrefix + if (prefixOffset == -2) "😀" else ""
+            assertEquals(expectedTitle, source.getValue("title").jsonPrimitive.content)
+            assertEquals(expectedSnippet, source.getValue("snippet").jsonPrimitive.content)
+            assertEquals("c".repeat(63), source.getValue("publishedAt").jsonPrimitive.content)
+            assertEquals(expectedTitle, result.citations().single().title)
+            assertEquals(expectedSnippet, result.citations().single().snippet)
+            // Transport encoding must accept both model-visible results and persisted citation metadata.
+            for (json in listOf(result.result, result.metadata)) {
+                val text = json.toString()
+                assertEquals(text, text.encodeToByteArray(throwOnInvalidSequence = true).decodeToString())
+            }
+        }
+    }
+
+    @Test
     fun toolDelegatesRequestAdmissionToItsBackend() {
         val permit = SharedToolExecutionPermit(maxConcurrentExecutions = 1)
         val backend = object : WebSearchBackend {
