@@ -317,7 +317,7 @@ internal fun projectMessages(
 }
 
 private fun ContextCompaction.toSummaryMessage(): AgentMessage = AgentMessage(
-    id = "context-summary-$generation-${summarizedThroughMessageId.take(12)}",
+    id = "context-summary-$generation-${summarizedThroughMessageId.takeAtCodePointBoundary(12)}",
     role = MessageRole.USER,
     parts = listOf(
         TextPart(
@@ -602,7 +602,7 @@ private val CONTEXT_PROJECTION_CAPABILITIES = ProviderInputCapabilities(
 
 private fun String.limit(maxChars: Int): String {
     if (length <= maxChars) return this
-    return take(maxChars) + "…"
+    return takeAtCodePointBoundary(maxChars) + "…"
 }
 
 internal fun contextRequestFingerprint(request: saien.magrathea.core.AgentRequest): String {

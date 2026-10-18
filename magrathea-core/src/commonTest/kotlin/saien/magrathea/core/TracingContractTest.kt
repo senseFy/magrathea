@@ -165,6 +165,31 @@ class TracingContractTest {
     }
 
     @Test
+    fun unicodeTextBudgetsPreserveCompleteSurrogatePairsInExportedSpans() {
+        for ((source, expected) in listOf("abc😀tail" to "abc😀", "abcd😀tail" to "abcd")) {
+            val spans = mutableListOf<TraceSpanData>()
+            val tracer = DefaultMagratheaTracer(
+                sink = MagratheaTraceSink(spans::add),
+                idGenerator = SequenceIdGenerator("trace", "span"),
+                limits = TraceRecordingLimits(nameChars = 5, keyChars = 5, valueChars = 5),
+            )
+            val attributes = mapOf(source to TraceValue.StringValue(source))
+
+            val span = tracer.startSpan(source, attributes = attributes)
+            span.addEvent(source, attributes)
+            span.end()
+
+            val completed = spans.single()
+            val expectedAttributes = mapOf(expected to TraceValue.StringValue(expected))
+            assertEquals(expected, completed.name)
+            assertEquals(expectedAttributes, completed.attributes)
+            assertEquals(expected, completed.events.single().name)
+            assertEquals(expectedAttributes, completed.events.single().attributes)
+            completed.toString().encodeToByteArray(throwOnInvalidSequence = true)
+        }
+    }
+
+    @Test
     fun cancellationAndWrappedFatalSinkFailuresEscapeAndReleaseTheActivePermit() {
         val cancellation = CancellationException("cancel")
         var failure: Throwable = cancellation

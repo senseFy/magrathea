@@ -31,6 +31,30 @@ import saien.magrathea.runtime.TestFatalError
 
 class ImageSearchToolContractTest {
     @Test
+    fun imageMetadataKeepsEmojiWholeAtLengthLimits() = runTest {
+        val result = ImageSearchTool(ImageSearchBackend {
+            ImageSearchBackendResponse(listOf(ImageSearchSource(
+                imageUrl = "https://example.com/image.jpg",
+                sourcePageUrl = "https://example.com/source",
+                title = "a".repeat(299) + "😀tail",
+                description = "b".repeat(599) + "😀tail",
+                publisher = "c".repeat(159) + "😀tail",
+                license = "d".repeat(159) + "😀tail",
+            )))
+        }).execute(executionRequest("query"))
+
+        assertFalse(result.isError)
+        val source = result.result.jsonObject.getValue("sources").jsonArray.single().jsonObject
+        assertEquals("a".repeat(299), source.getValue("title").jsonPrimitive.content)
+        assertEquals("b".repeat(599), source.getValue("description").jsonPrimitive.content)
+        assertEquals("c".repeat(159), source.getValue("publisher").jsonPrimitive.content)
+        assertEquals("d".repeat(159), source.getValue("license").jsonPrimitive.content)
+        assertEquals("a".repeat(299), result.citations().single().title)
+        val text = result.result.toString()
+        assertEquals(text, text.encodeToByteArray(throwOnInvalidSequence = true).decodeToString())
+    }
+
+    @Test
     fun policyRejectsAmbiguousOrUnboundedConfiguration() {
         assertFailsWith<IllegalArgumentException> { ImageSearchPolicy(maxSearchCallsPerRun = 0) }
         assertFailsWith<IllegalArgumentException> { ImageSearchPolicy(maxResultsPerQuery = 51) }

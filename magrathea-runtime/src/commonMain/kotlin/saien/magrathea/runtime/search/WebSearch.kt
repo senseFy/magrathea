@@ -9,6 +9,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import saien.magrathea.runtime.rethrowFatalError
+import saien.magrathea.runtime.takeAtCodePointBoundary
 import saien.magrathea.core.ToolDefinition
 import saien.magrathea.core.ToolExecutionPermit
 import saien.magrathea.core.ToolExecutionRequest
@@ -337,7 +338,7 @@ private fun String.isValidQuery(maxChars: Int): Boolean {
 }
 
 private fun String.normalizedExternalText(maxChars: Int): String {
-    return trim().replace(EXTERNAL_WHITESPACE, " ").take(maxChars)
+    return trim().replace(EXTERNAL_WHITESPACE, " ").takeAtCodePointBoundary(maxChars)
 }
 
 private fun String.httpsHostOrNull(): String? {

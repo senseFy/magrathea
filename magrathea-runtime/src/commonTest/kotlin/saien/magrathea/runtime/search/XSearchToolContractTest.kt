@@ -29,6 +29,29 @@ import kotlin.test.assertTrue
 
 class XSearchToolContractTest {
     @Test
+    fun evidenceAndCitationsKeepEmojiWholeAtLengthLimits() = runTest {
+        val result = XSearchTool(XSearchBackend {
+            XSearchEvidence(
+                text = "a".repeat(15_999) + "😀tail",
+                citations = listOf(Citation(
+                    title = "b".repeat(299) + "😀tail",
+                    url = "https://x.com/example/status/1",
+                    snippet = "c".repeat(1_199) + "😀tail",
+                )),
+            )
+        }).execute(executionRequest(buildJsonObject { put("query", "query") }))
+
+        assertFalse(result.isError)
+        assertEquals("a".repeat(15_999), result.result.jsonObject.getValue("text").jsonPrimitive.content)
+        assertEquals("b".repeat(299), result.citations().single().title)
+        assertEquals("c".repeat(1_199), result.citations().single().snippet)
+        for (json in listOf(result.result, result.metadata)) {
+            val text = json.toString()
+            assertEquals(text, text.encodeToByteArray(throwOnInvalidSequence = true).decodeToString())
+        }
+    }
+
+    @Test
     fun policyRejectsAmbiguousOrUnboundedConfiguration() {
         assertFailsWith<IllegalArgumentException> { XSearchPolicy(maxSearchCallsPerRun = 0) }
         assertFailsWith<IllegalArgumentException> { XSearchPolicy(maxHandlesPerRequest = 21) }

@@ -49,6 +49,48 @@ import kotlin.test.assertTrue
 
 class ContextManagementTest {
     @Test
+    fun summaryInputKeepsEmojiWholeWhenClippingToolText() {
+        val serialized = serializeContextConversation(
+            messages = listOf(toolResultMessage(
+                result = JsonPrimitive("1234567😀tail"),
+                content = listOf(ToolResultTextContent(
+                    text = "abcdefg😀tail",
+                    audiences = setOf(ToolResultAudience.MODEL),
+                )),
+            )),
+            maxToolResultChars = 8,
+            modelInputModalities = setOf(ModelInputModality.TEXT),
+        )
+
+        assertTrue(serialized.contains("1234567…"))
+        assertTrue(serialized.contains("abcdefg…"))
+        assertEquals(serialized, serialized.encodeToByteArray(throwOnInvalidSequence = true).decodeToString())
+    }
+
+    @Test
+    fun summaryMessageIdKeepsEmojiWholeInCustomMessageIdPrefix() {
+        val summarizedId = "x".repeat(11) + "😀tail"
+        val messages = listOf(
+            message(summarizedId, MessageRole.USER, "old"),
+            message("kept", MessageRole.USER, "recent"),
+        )
+        val compaction = ContextCompaction(
+            summary = "summary",
+            firstKeptMessageId = "kept",
+            summarizedThroughMessageId = summarizedId,
+            sourcePrefixDigest = historyPrefixDigest(messages.take(1)),
+            tokensBefore = 100,
+            generation = 1,
+            summaryModel = request(messages).model,
+        )
+
+        val id = projectMessages(messages, compaction).first().id
+
+        assertEquals("context-summary-1-${"x".repeat(11)}", id)
+        assertEquals(id, id.encodeToByteArray(throwOnInvalidSequence = true).decodeToString())
+    }
+
+    @Test
     fun providerRequestIdentityExcludesTransientCredentialAndTransportMaterial() {
         val logicalRequest = ProviderRequest(
             model = ModelDescriptor(provider = "test", model = "test-model"),

@@ -9,6 +9,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import saien.magrathea.runtime.rethrowFatalError
+import saien.magrathea.runtime.takeAtCodePointBoundary
 import saien.magrathea.core.Citation
 import saien.magrathea.core.ToolDefinition
 import saien.magrathea.core.ToolExecutionRequest
@@ -410,10 +411,10 @@ private fun Int.isLeapYear(): Boolean = this % 400 == 0 || (this % 4 == 0 && thi
 private fun String.normalizedEvidenceText(maxChars: Int): String =
     trim().map { character ->
         if (character.isUnsafeControl() && character !in setOf('\n', '\r', '\t')) ' ' else character
-    }.joinToString(separator = "").take(maxChars)
+    }.joinToString(separator = "").takeAtCodePointBoundary(maxChars)
 
 private fun String.normalizedExternalText(maxChars: Int): String =
-    trim().replace(EXTERNAL_WHITESPACE, " ").take(maxChars)
+    trim().replace(EXTERNAL_WHITESPACE, " ").takeAtCodePointBoundary(maxChars)
 
 private fun String.validHttpsUrlOrNull(): String? {
     if (

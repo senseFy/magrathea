@@ -3,21 +3,153 @@ package saien.magrathea.storage.room
 import androidx.room.Room
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.AgentCheckpointCodec
+import saien.magrathea.core.AgentEvent
+import saien.magrathea.core.AgentMessage
+import saien.magrathea.core.AgentRequest
+import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshotCodec
 import saien.magrathea.core.CURRENT_STORAGE_SCHEMA_VERSION
 import saien.magrathea.core.MINIMUM_READABLE_STORAGE_SCHEMA_VERSION
+import saien.magrathea.core.MessageRole
+import saien.magrathea.core.ModelDescriptor
+import saien.magrathea.core.StopReason
 import saien.magrathea.core.StoredEnvelopeDecodeFailure
+import saien.magrathea.core.TextPart
+import saien.magrathea.core.ToolCallPart
+import saien.magrathea.core.ToolResultPart
+import saien.magrathea.core.citations
+import saien.magrathea.provider.api.InMemoryProviderRegistry
+import saien.magrathea.provider.api.ProviderAdapter
+import saien.magrathea.provider.api.ProviderChunk
+import saien.magrathea.provider.api.ProviderEvent
+import saien.magrathea.provider.api.ProviderNetworkException
+import saien.magrathea.provider.api.ProviderRequest
+import saien.magrathea.runtime.DefaultAgentRunner
+import saien.magrathea.runtime.InMemoryToolRegistry
+import saien.magrathea.runtime.search.WebSearchBackend
+import saien.magrathea.runtime.search.WebSearchBackendResponse
+import saien.magrathea.runtime.search.WebSearchSource
+import saien.magrathea.runtime.search.WebSearchTool
 
 class JvmRoomDatabaseIntegrationTest {
+    @Test
+    fun searchSnippetCutAtAnEmojiSurvivesRoomReopenAndRuntimeResume() = runTest {
+        val directory = Files.createTempDirectory("magrathea-room-search-unicode-")
+        val database = directory.resolve("magrathea.db")
+        val sessionId = AgentSessionId("search-unicode-resume")
+        val prefix = "a".repeat(1_199)
+        var backendCalls = 0
+        val search = WebSearchTool(WebSearchBackend {
+            backendCalls++
+            WebSearchBackendResponse(listOf(WebSearchSource(
+                title = "Search result",
+                url = "https://example.com/result",
+                // The default 1200-unit snippet budget falls between this emoji's surrogates.
+                snippet = prefix + "😀 trailing text",
+                publishedAt = "2026-10-18",
+            )))
+        })
+        var providerCalls = 0
+        val provider = object : ProviderAdapter {
+            override val key = "search-unicode-provider"
+
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                when (++providerCalls) {
+                    1 -> {
+                        val call = ToolCallPart(
+                            toolCallId = "search-1",
+                            toolName = WebSearchTool.NAME,
+                            arguments = buildJsonObject { put("query", "latest release") },
+                        )
+                        emit(ProviderChunk(listOf(
+                            ProviderEvent.ToolCallStart(call.copy(partial = true)),
+                            ProviderEvent.ToolCallEnd(call),
+                            ProviderEvent.Completed(stopReason = StopReason.TOOL_CALLS),
+                        )))
+                    }
+                    2 -> throw ProviderNetworkException("Offline after search")
+                    else -> {
+                        val result = assertIs<ToolResultPart>(request.messages.last().parts.single())
+                        assertEquals(prefix, result.result.jsonObject.getValue("sources").jsonArray
+                            .single().jsonObject.getValue("snippet").jsonPrimitive.content)
+                        // Match transports which reject malformed UTF-16 rather than replacing it.
+                        result.result.toString().encodeToByteArray(throwOnInvalidSequence = true)
+                        emit(ProviderChunk(listOf(
+                            ProviderEvent.TextStart(),
+                            ProviderEvent.TextDelta("Grounded answer"),
+                            ProviderEvent.TextEnd(),
+                            ProviderEvent.Completed(stopReason = StopReason.COMPLETED),
+                        )))
+                    }
+                }
+            }
+        }
+        val providers = InMemoryProviderRegistry(listOf(provider))
+        val tools = InMemoryToolRegistry(listOf(search))
+        val reporter = StoredRecordCorruptionReporter { error("Unexpected corruption: $it") }
+        try {
+            val first = JvmMagratheaRoom.open(database.toString(), reporter)
+            try {
+                val events = DefaultAgentRunner(providers, tools, first.persistence).run(AgentRequest(
+                    sessionId = sessionId,
+                    messages = listOf(AgentMessage(
+                        role = MessageRole.USER,
+                        parts = listOf(TextPart("Find the latest release")),
+                    )),
+                    model = ModelDescriptor(provider.key, "model", supportsToolCalls = true),
+                    tools = listOf(search.definition),
+                )).toList()
+                assertIs<AgentEvent.Interrupted>(events.last())
+            } finally {
+                first.close()
+            }
+
+            val reopened = JvmMagratheaRoom.open(database.toString(), reporter)
+            try {
+                val record = assertNotNull(reopened.persistence.load(sessionId))
+                val checkpoint = assertNotNull(record.checkpoint)
+                for (state in listOf(record.snapshot.state, checkpoint.state)) {
+                    val result = assertIs<ToolResultPart>(state.messages
+                        .single { it.role == MessageRole.TOOL }.parts.single())
+                    assertEquals(prefix, result.citations().single().snippet)
+                    Json.encodeToString(ToolResultPart.serializer(), result)
+                        .encodeToByteArray(throwOnInvalidSequence = true)
+                }
+
+                val resumed = DefaultAgentRunner(providers, tools, reopened.persistence)
+                    .resume(sessionId).toList()
+                val completed = assertIs<AgentEvent.Completed>(resumed.last())
+                assertEquals("Grounded answer", assertIs<TextPart>(completed.state.messages.last().parts.single()).text)
+                assertEquals(1, backendCalls)
+                assertEquals(3, providerCalls)
+                assertNull(assertNotNull(reopened.persistence.load(sessionId)).checkpoint)
+            } finally {
+                reopened.close()
+            }
+        } finally {
+            check(directory.toFile().deleteRecursively()) { "Failed to remove Room Unicode-test directory" }
+        }
+    }
+
     @Test
     fun realDatabase_closeAndReopen_preservesCurrentSessionAndCheckpoint() = runTest {
         val directory = Files.createTempDirectory("magrathea-room-")
