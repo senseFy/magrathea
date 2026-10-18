@@ -5,6 +5,13 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## [0.1.0-alpha.17](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.16...v0.1.0-alpha.17) (2026-10-18)
+
+
+### Bug Fixes
+
+* preserve Unicode boundaries in bounded text ([#22](https://github.com/senseFy/magrathea/issues/22)) ([ba6d1d3](https://github.com/senseFy/magrathea/commit/ba6d1d3c46bd96bd8218f7e9b3cc77bddd286b58))
+
 ## [0.1.0-alpha.16](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.15...v0.1.0-alpha.16) (2026-10-17)
 
 
