@@ -37,11 +37,13 @@ import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentSessionSnapshotCodec
 import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.CURRENT_STORAGE_SCHEMA_VERSION
+import saien.magrathea.core.ContextEstimationUnit
 import saien.magrathea.core.MINIMUM_READABLE_STORAGE_SCHEMA_VERSION
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.StoredEnvelopeDecodeFailure
 import saien.magrathea.core.TextPart
+import saien.magrathea.core.ToolResultContextConfig
 
 class WebStorageBrowserContractTest {
     @Test
@@ -79,7 +81,7 @@ class WebStorageBrowserContractTest {
     fun schemaV6SessionAndCheckpointAreRewrittenAfterAValidatedLoad() = runTest {
         withIsolatedDatabase { databaseName ->
             val database = IndexedDbRecordDatabase(databaseName)
-            val session = testSnapshot("web-v6-migration", updatedAtEpochMs = 25L)
+            val session = testSnapshot("web-v6-migration", updatedAtEpochMs = 25L).withSchema7ContextManagement()
             val checkpoint = testCheckpoint(session, turn = 2)
             val v6Session = AgentSessionSnapshotCodec().encode(session).toSchemaV6()
             val v6Checkpoint = AgentCheckpointCodec().encode(checkpoint).toSchemaV6()
@@ -93,9 +95,10 @@ class WebStorageBrowserContractTest {
             val rewritten = assertNotNull(database.get(session.sessionId.value))
             val rewrittenSession = assertNotNull(rewritten.session.payload)
             val rewrittenCheckpoint = assertNotNull(assertNotNull(rewritten.checkpoint).payload)
-            assertTrue("\"schemaVersion\":7" in rewrittenSession)
+            assertTrue("\"schemaVersion\":8" in rewrittenSession)
             assertTrue("\"maxOutputTokens\":null" in rewrittenSession)
-            assertTrue("\"schemaVersion\":7" in rewrittenCheckpoint)
+            assertTrue("\"estimationUnit\":\"UTF16_CHARS\"" in rewrittenSession)
+            assertTrue("\"schemaVersion\":8" in rewrittenCheckpoint)
             store.close()
         }
     }
@@ -700,9 +703,32 @@ class WebStorageBrowserContractTest {
     private fun configuration(databaseName: String) = MagratheaWebStoreConfiguration(databaseName)
 }
 
-private fun String.toSchemaV6(): String =
-    replaceFirst("\"schemaVersion\":7", "\"schemaVersion\":6")
+private fun String.toSchemaV6(): String {
+    val schema7Fields = listOf(
+        ",\"toolResults\":{\"budget\":null,\"clearing\":null,\"maxStubChars\":2000},\"estimationUnit\":\"UTF16_CHARS\"",
+        ",\"toolResultClearing\":null",
+    )
+    return schema7Fields
+        .fold(replaceFirst("\"schemaVersion\":8", "\"schemaVersion\":6")) { payload, field -> payload.replace(field, "") }
         .replace(",\"maxOutputTokens\":null", "")
+}
+
+/** What a session persisted before schema 8 decodes to: Tool-result stages off, UTF-16 estimation. */
+private fun AgentSessionSnapshot.withSchema7ContextManagement(): AgentSessionSnapshot {
+    val runtime = request.engine.runtime
+    return copy(
+        request = request.copy(
+            engine = request.engine.copy(
+                runtime = runtime.copy(
+                    contextManagement = runtime.contextManagement.copy(
+                        toolResults = ToolResultContextConfig.DISABLED,
+                        estimationUnit = ContextEstimationUnit.UTF16_CHARS,
+                    ),
+                ),
+            ),
+        ),
+    )
+}
 
 private suspend fun withIsolatedDatabase(block: suspend (String) -> Unit) {
     val databaseName = "magrathea-test-${Uuid.random()}"

@@ -116,6 +116,7 @@ fun ToolResultPart.sanitizedForModelBoundary(): ToolResultPart = copy(
     },
     providerMetadata = null,
     origin = null,
+    contextHints = null,
 )
 
 private fun ToolResultPart.neutralModelResult(): JsonPrimitive = JsonPrimitive(

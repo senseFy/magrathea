@@ -2,7 +2,8 @@
   "ledgerFormatVersion": 1,
   "policyDocument": "docs/adr/ADR-005-persistence-contracts.md#schema-evolution",
   "migrationIds": [
-    "agent-storage-v6-to-v7-max-output-tokens"
+    "agent-storage-v6-to-v7-max-output-tokens",
+    "agent-storage-v7-to-v8-tool-result-context"
   ],
   "descriptorRefreezes": [
     {
@@ -21,7 +22,7 @@
       "id": "agent-storage-envelopes",
       "owner": "magrathea-core",
       "versionField": "schemaVersion",
-      "currentVersion": 7,
+      "currentVersion": 8,
       "migrationBaselineVersion": 6,
       "minimumReadableVersion": 6,
       "versionProbe": {
@@ -31,10 +32,10 @@
       "currentCodecProbe": {
         "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/CoreContracts.kt",
         "requiredPatterns": [
-          "StorageSchemaV7Adapter.encodeSession",
-          "StorageSchemaV7Adapter.decodeSession",
-          "StorageSchemaV7Adapter.encodeCheckpoint",
-          "StorageSchemaV7Adapter.decodeCheckpoint"
+          "StorageSchemaV8Adapter.encodeSession",
+          "StorageSchemaV8Adapter.decodeSession",
+          "StorageSchemaV8Adapter.encodeCheckpoint",
+          "StorageSchemaV8Adapter.decodeCheckpoint"
         ]
       },
       "migrationProbe": {
@@ -139,6 +140,31 @@
               "sha256": "191f10498699ecfc8e1f7c93f06d5ee2e52baaee7b9a7ac2c7a530a813b0e623"
             }
           ]
+        },
+        {
+          "version": 8,
+          "adapter": {
+            "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/StorageSchemaV8.kt",
+            "sha256": "83391d30aac9df3353aafd376e356020dc25de75ee13824330f84b5175d6e3a2",
+            "symbol": "StorageSchemaV8Adapter",
+            "versionPattern": "internal\\s+const\\s+val\\s+STORAGE_SCHEMA_V8_VERSION\\s*:\\s*Int\\s*=\\s*([0-9]+)",
+            "descriptorFixture": {
+              "path": "serialization-fixtures/v8/core/storage-schema-descriptor.sha256",
+              "sha256": "8556c8ba6794a382c1e39d8dd786587e400fba27dceb817f8ed19990659fe634"
+            }
+          },
+          "fixtures": [
+            {
+              "kind": "session",
+              "path": "serialization-fixtures/v8/core/stored-session-envelope.json",
+              "sha256": "c8c5f00956df7089b4d7cdc53082672fa34f4daa04236afe7dd4313b40a0cfe9"
+            },
+            {
+              "kind": "checkpoint",
+              "path": "serialization-fixtures/v8/core/stored-checkpoint-envelope.json",
+              "sha256": "72ada61274411ac095ba74c0789d390532ce5e5ab16c2bb8e722201abfc4e6a5"
+            }
+          ]
         }
       ],
       "transitions": [
@@ -172,6 +198,17 @@
             "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/StorageSchemaV6ToV7Migration.kt",
             "sha256": "3e54d648c1ec6a5249cfcd8c781bd6271918559f1940d29751e7bc2a4c1f77cb",
             "symbol": "StorageSchemaV6ToV7Migration"
+          }
+        },
+        {
+          "from": 7,
+          "to": 8,
+          "kind": "migration",
+          "migrationId": "agent-storage-v7-to-v8-tool-result-context",
+          "implementation": {
+            "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/StorageSchemaV7ToV8Migration.kt",
+            "sha256": "838d3b7f3b388529868c39308b3ed1383a985ae8173e8f30feb1d08f79f37b57",
+            "symbol": "StorageSchemaV7ToV8Migration"
           }
         }
       ]

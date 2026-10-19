@@ -194,11 +194,15 @@ class XSearchTool(
         }
         val normalized = response.normalized(policy.maxCitationsInContext)
             ?: return failure(request, XSearchFailureCode.MALFORMED_RESPONSE)
+        val citations = normalized.evidence.citations.admittedWithinBudget(
+            budgetTokens = request.resultBudgetTokens,
+            envelopeChars = X_RESULT_ENVELOPE_CHARS + query.length + normalized.evidence.text.length,
+        ) { _, citation -> citation.toJson().toString() }
         return success(
             request = request,
             query = query,
-            evidence = normalized.evidence,
-            truncated = normalized.truncated,
+            evidence = XSearchEvidence(text = normalized.evidence.text, citations = citations),
+            truncated = normalized.truncated || citations.size < normalized.evidence.citations.size,
         )
     }
 
@@ -254,6 +258,10 @@ class XSearchTool(
                 }
             })
         },
+        contextHints = searchResultContextHints(
+            query = query,
+            pages = evidence.citations.map { SearchPageReference(title = it.title, url = it.url) },
+        ),
     )
 
     private fun failure(
@@ -464,6 +472,7 @@ private const val MAX_CITATIONS_IN_CONTEXT = 100
 private const val MIN_TIMEOUT_MS = 100L
 private const val MAX_TIMEOUT_MS = 120_000L
 private const val MAX_EVIDENCE_CHARS = 16_000
+private const val X_RESULT_ENVELOPE_CHARS = 160
 private const val MAX_CITATION_TITLE_CHARS = 300
 private const val MAX_CITATION_SNIPPET_CHARS = 1_200
 private const val MAX_URL_CHARS = 2_048

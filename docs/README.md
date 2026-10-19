@@ -14,7 +14,7 @@
 
 | Document | Purpose |
 |---|---|
-| [Context management](context-management.md) | Token budgets, semantic compaction, and overflow recovery |
+| [Context management](context-management.md) | Token budgets, Tool-result bounding and clearing, semantic compaction, and overflow recovery |
 | [Managed Agent sessions](session-management.md) | Canonical runtimes, leases, ownership, and recovery |
 | [Timeouts](timeouts.md) | Provider, Tool, and whole-run deadlines |
 | [Interruption and recovery](recovery.md) | Backgrounding, process loss, resume, and Tool replay safety |

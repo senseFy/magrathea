@@ -26,8 +26,10 @@ import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentRequest
 import saien.magrathea.core.AgentSessionId
+import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentSessionSnapshotCodec
 import saien.magrathea.core.CURRENT_STORAGE_SCHEMA_VERSION
+import saien.magrathea.core.ContextEstimationUnit
 import saien.magrathea.core.MINIMUM_READABLE_STORAGE_SCHEMA_VERSION
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
@@ -35,6 +37,7 @@ import saien.magrathea.core.StopReason
 import saien.magrathea.core.StoredEnvelopeDecodeFailure
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
+import saien.magrathea.core.ToolResultContextConfig
 import saien.magrathea.core.ToolResultPart
 import saien.magrathea.core.citations
 import saien.magrathea.provider.api.InMemoryProviderRegistry
@@ -201,7 +204,7 @@ class JvmRoomDatabaseIntegrationTest {
     fun schemaV6SessionAndCheckpointAreRewrittenAfterAValidatedLoad() = runTest {
         val directory = Files.createTempDirectory("magrathea-room-v6-migration-")
         val databasePath = directory.resolve("magrathea.db")
-        val session = roomTestSnapshot("v6-migration", updatedAtEpochMs = 88L)
+        val session = roomTestSnapshot("v6-migration", updatedAtEpochMs = 88L).withSchema7ContextManagement()
         val checkpoint = roomTestCheckpoint(session, turn = 2)
         val v6Session = AgentSessionSnapshotCodec().encode(session).toSchemaV6()
         val v6Checkpoint = AgentCheckpointCodec().encode(checkpoint).toSchemaV6()
@@ -234,9 +237,10 @@ class JvmRoomDatabaseIntegrationTest {
         val rewrittenCheckpoint = assertNotNull(
             rewrittenDatabase.checkpointDao().findById(session.sessionId.value),
         ).payload
-        assertTrue("\"schemaVersion\":7" in rewrittenSession)
+        assertTrue("\"schemaVersion\":8" in rewrittenSession)
         assertTrue("\"maxOutputTokens\":null" in rewrittenSession)
-        assertTrue("\"schemaVersion\":7" in rewrittenCheckpoint)
+        assertTrue("\"estimationUnit\":\"UTF16_CHARS\"" in rewrittenSession)
+        assertTrue("\"schemaVersion\":8" in rewrittenCheckpoint)
         rewrittenDatabase.close()
 
         check(directory.toFile().deleteRecursively()) {
@@ -630,6 +634,29 @@ class JvmRoomDatabaseIntegrationTest {
     }
 }
 
-private fun String.toSchemaV6(): String =
-    replaceFirst("\"schemaVersion\":7", "\"schemaVersion\":6")
+private fun String.toSchemaV6(): String {
+    val schema7Fields = listOf(
+        ",\"toolResults\":{\"budget\":null,\"clearing\":null,\"maxStubChars\":2000},\"estimationUnit\":\"UTF16_CHARS\"",
+        ",\"toolResultClearing\":null",
+    )
+    return schema7Fields
+        .fold(replaceFirst("\"schemaVersion\":8", "\"schemaVersion\":6")) { payload, field -> payload.replace(field, "") }
         .replace(",\"maxOutputTokens\":null", "")
+}
+
+/** What a session persisted before schema 8 decodes to: Tool-result stages off, UTF-16 estimation. */
+private fun AgentSessionSnapshot.withSchema7ContextManagement(): AgentSessionSnapshot {
+    val runtime = request.engine.runtime
+    return copy(
+        request = request.copy(
+            engine = request.engine.copy(
+                runtime = runtime.copy(
+                    contextManagement = runtime.contextManagement.copy(
+                        toolResults = ToolResultContextConfig.DISABLED,
+                        estimationUnit = ContextEstimationUnit.UTF16_CHARS,
+                    ),
+                ),
+            ),
+        ),
+    )
+}

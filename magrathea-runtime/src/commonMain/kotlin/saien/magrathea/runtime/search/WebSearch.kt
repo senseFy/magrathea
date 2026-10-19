@@ -211,7 +211,7 @@ class WebSearchTool(
             failure.rethrowFatalError()
             return failure(request, WebSearchFailureCode.UNAVAILABLE)
         }
-        val normalized = response.results.normalized(policy)
+        val normalized = response.results.normalized(policy, query, request.resultBudgetTokens)
         return success(
             request = request,
             query = query,
@@ -251,6 +251,10 @@ class WebSearchTool(
                 })
             },
             origin = origin,
+            contextHints = searchResultContextHints(
+                query = query,
+                pages = sources.map { SearchPageReference(title = it.title, url = it.url) },
+            ),
         )
     }
 
@@ -283,7 +287,11 @@ private data class NormalizedSources(
     val truncated: Boolean,
 )
 
-private fun List<WebSearchSource>.normalized(policy: WebSearchPolicy): NormalizedSources {
+private fun List<WebSearchSource>.normalized(
+    policy: WebSearchPolicy,
+    query: String,
+    resultBudgetTokens: Long?,
+): NormalizedSources {
     val seenUrls = mutableSetOf<String>()
     val eligible = take(policy.maxResultsPerQuery).mapNotNull { source ->
         val host = source.url.httpsHostOrNull() ?: return@mapNotNull null
@@ -298,7 +306,10 @@ private fun List<WebSearchSource>.normalized(policy: WebSearchPolicy): Normalize
             publishedAt = source.publishedAt?.normalizedExternalText(MAX_PUBLISHED_AT_CHARS)?.takeIf(String::isNotBlank),
         )
     }
-    val included = eligible.take(policy.maxSourcesInContext)
+    val included = eligible.take(policy.maxSourcesInContext).admittedWithinBudget(
+        budgetTokens = resultBudgetTokens,
+        envelopeChars = RESULT_ENVELOPE_CHARS + query.length,
+    ) { index, source -> source.toJson(index + 1).toString() }
     return NormalizedSources(
         sources = included,
         truncated = included.size != size,
@@ -401,6 +412,7 @@ private val WebSearchFailureCode.serialName: String
     }
 
 private val EXTERNAL_WHITESPACE = Regex("[\\s\\u0000-\\u001F\\u007F]+")
+private const val RESULT_ENVELOPE_CHARS = 160
 private const val MAX_SEARCH_CALLS_PER_RUN = 20
 private const val MAX_RESULTS_PER_QUERY = 50
 private const val MAX_QUERY_CHARS = 2_048

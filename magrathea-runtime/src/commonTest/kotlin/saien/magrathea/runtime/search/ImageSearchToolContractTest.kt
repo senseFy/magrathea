@@ -288,6 +288,33 @@ class ImageSearchToolContractTest {
         assertSame(fatal, escaped)
     }
 
+    @Test
+    fun imageResultsCarryAStubWithSourcePagesAndRespectTheResultBudget() = runTest {
+        val sources = (1..6).map { index ->
+            source(
+                imageUrl = "https://images.example.com/$index.jpg",
+                sourcePageUrl = "https://example.com/page-$index",
+                title = "Image $index",
+                description = "d".repeat(500),
+            )
+        }
+        val tool = ImageSearchTool(ImageSearchBackend { ImageSearchBackendResponse(sources) })
+
+        val unbounded = tool.execute(executionRequest("diagrams"))
+        val bounded = tool.execute(executionRequest("diagrams").copy(resultBudgetTokens = 150))
+
+        val stub = assertNotNull(unbounded.contextHints?.stub).jsonObject
+        assertEquals("diagrams", stub.getValue("query").jsonPrimitive.content)
+        assertEquals(
+            "https://example.com/page-1",
+            stub.getValue("sources").jsonArray.first().jsonObject.getValue("url").jsonPrimitive.content,
+        )
+        assertFalse("d".repeat(100) in stub.toString())
+        assertEquals(1, bounded.result.jsonObject.getValue("sources").jsonArray.size)
+        assertEquals(1, bounded.content.size)
+        assertEquals("true", bounded.result.jsonObject.getValue("truncated").jsonPrimitive.content)
+    }
+
     private fun executionRequest(
         query: String,
         arguments: JsonObject = buildJsonObject { put("query", query) },

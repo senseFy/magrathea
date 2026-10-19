@@ -218,6 +218,10 @@ Adapters may add children but cannot rename or end Runtime-owned spans.
 | Context | `magrathea.context.failure` | String | Typed preparation failure |
 | Context | `magrathea.context.estimated_input_tokens` | Long | Estimate, when known |
 | Context | `magrathea.context.input_limit_tokens` | Long | Limit, when known |
+| Context | `magrathea.context.tool_results_reduced` | Long | Tool results reduced to the per-result budget |
+| Context | `magrathea.context.tool_results_cleared` | Long | Tool results cleared by a pass in this preparation |
+| Context | `magrathea.context.tool_result_tokens_freed` | Long | Estimated tokens freed by that pass |
+| Context | `magrathea.context.clearing_trigger` | String | `pressure`, `idle`, or `overflow_recovery`, when a pass ran |
 | Tool | `magrathea.tool.name` | String | Registered name |
 | Tool | `magrathea.tool.call_id` | String | Model call identity |
 | Tool | `magrathea.tool.execution_id` | String | Durable execution identity |

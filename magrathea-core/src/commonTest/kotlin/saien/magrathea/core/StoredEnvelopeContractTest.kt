@@ -3,6 +3,9 @@ package saien.magrathea.core
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -30,7 +33,7 @@ class StoredEnvelopeContractTest {
         val encoded = sessionCodec.encode(expected)
         val envelope = json.parseToJsonElement(encoded).jsonObject
 
-        assertEquals(STORAGE_SCHEMA_V7_VERSION, CURRENT_STORAGE_SCHEMA_VERSION)
+        assertEquals(STORAGE_SCHEMA_V8_VERSION, CURRENT_STORAGE_SCHEMA_VERSION)
         assertEquals(CURRENT_STORAGE_SCHEMA_VERSION, envelope.getValue("schemaVersion").jsonPrimitive.content.toInt())
         assertEquals("test-sdk", envelope.getValue("sdkVersion").jsonPrimitive.content)
         assertEquals(expected, sessionCodec.decode(encoded))
@@ -54,7 +57,7 @@ class StoredEnvelopeContractTest {
 
     @Test
     fun schemaV6MigrationAddsUnknownCapabilityToRequestAndCompactionModels() {
-        val original = snapshot()
+        val original = snapshot(contextManagement = MIGRATED_CONTEXT_MANAGEMENT)
         val withCompaction = original.copy(
             state = original.state.copy(
                 contextManagement = ContextManagementState(
@@ -72,9 +75,7 @@ class StoredEnvelopeContractTest {
             ),
         )
         val current = sessionCodec.encode(withCompaction)
-        val v6 = current
-            .replaceFirst("\"schemaVersion\":7", "\"schemaVersion\":6")
-            .replace(",\"maxOutputTokens\":null", "")
+        val v6 = current.downgradedToSchema7().downgradedToSchema6()
 
         assertEquals(2, current.split("\"maxOutputTokens\":null").size - 1)
         val migrated = sessionCodec.decodeResult(v6)
@@ -85,9 +86,89 @@ class StoredEnvelopeContractTest {
     }
 
     @Test
+    fun schemaV7MigrationDisablesToolResultStagesAndDropsUsageObservations() {
+        val original = toolResultContextSnapshot()
+        val v7 = sessionCodec.encode(original).downgradedToSchema7()
+
+        val migrated = sessionCodec.decodeResult(v7)
+
+        assertEquals(7, migrated.sourceSchemaVersion)
+        val expected = original.copy(
+            request = original.request.copy(
+                engine = original.request.engine.copy(
+                    runtime = original.request.engine.runtime.copy(
+                        contextManagement = MIGRATED_CONTEXT_MANAGEMENT,
+                    ),
+                ),
+                messages = original.request.messages.map { it.withoutContextHints() },
+            ),
+            state = original.state.copy(
+                messages = original.state.messages.map { it.withoutContextHints() },
+                contextManagement = ContextManagementState(),
+            ),
+        )
+        assertEquals(expected, migrated.value)
+        val rewrite = requireNotNull(migrated.rewritePayload)
+        assertTrue(rewrite.contains("\"estimationUnit\":\"UTF16_CHARS\""))
+        assertTrue(rewrite.contains("\"contextHints\":null"))
+    }
+
+    @Test
+    fun schemaV7MigrationRejectsAPrematureSchemaV8TargetField() {
+        val mislabeled = sessionCodec.encode(snapshot())
+            .replaceFirst("\"schemaVersion\":8", "\"schemaVersion\":7")
+
+        val failure = assertFailsWith<StoredEnvelopeDecodeException> {
+            sessionCodec.decode(mislabeled)
+        }
+
+        assertEquals(StoredEnvelopeDecodeFailure.MIGRATION_FAILED, failure.failure)
+        assertEquals(7, failure.storedSchemaVersion)
+    }
+
+    @Test
+    fun schemaV7CheckpointMigrationAddsHintsToJournalResults() {
+        val snapshot = snapshot()
+        val result = ToolExecutionResult(
+            toolCallId = "call-contract",
+            toolName = "lookup",
+            result = JsonPrimitive("found"),
+            contextHints = ToolResultContextHints(retention = ToolResultRetention.PINNED),
+        )
+        val checkpoint = checkpoint(snapshot, turn = 2).copy(
+            toolExecutions = listOf(
+                ToolExecutionRecord(
+                    executionId = "execution-contract",
+                    toolCallId = "call-contract",
+                    toolName = "lookup",
+                    callOrdinal = 1,
+                    state = ToolExecutionState.COMPLETED,
+                    result = result,
+                ),
+            ),
+        )
+        val v7 = checkpointCodec.encode(checkpoint).downgradedToSchema7()
+
+        val migrated = checkpointCodec.decodeResult(v7)
+
+        assertEquals(7, migrated.sourceSchemaVersion)
+        assertEquals(
+            null,
+            migrated.value.toolExecutions.single().result?.contextHints,
+        )
+    }
+
+    @Test
+    fun sessionCodec_roundTripsToolResultContextState() {
+        val expected = toolResultContextSnapshot()
+
+        assertEquals(expected, sessionCodec.decode(sessionCodec.encode(expected)))
+    }
+
+    @Test
     fun schemaV6MigrationRejectsAPrematureSchemaV7TargetField() {
         val mislabeled = sessionCodec.encode(snapshot())
-            .replaceFirst("\"schemaVersion\":7", "\"schemaVersion\":6")
+            .replaceFirst("\"schemaVersion\":8", "\"schemaVersion\":6")
 
         val failure = assertFailsWith<StoredEnvelopeDecodeException> {
             sessionCodec.decode(mislabeled)
@@ -484,8 +565,73 @@ class StoredEnvelopeContractTest {
         assertFailsWith<SerializationException> { checkpointCodec.decode(corrupt) }
     }
 
+    private fun toolResultContextSnapshot(): AgentSessionSnapshot {
+        val base = snapshot()
+        val call = AgentMessage(
+            id = "assistant-contract",
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                ToolCallPart(
+                    toolCallId = "call-contract",
+                    toolName = "lookup",
+                    arguments = JsonObject(mapOf("query" to JsonPrimitive("kmp"))),
+                ),
+            ),
+            createdAtEpochMs = 3L,
+        )
+        val result = AgentMessage(
+            id = "tool-contract",
+            role = MessageRole.TOOL,
+            parts = listOf(
+                ToolResultPart(
+                    toolCallId = "call-contract",
+                    toolName = "lookup",
+                    result = JsonPrimitive("found"),
+                    contextHints = ToolResultContextHints(
+                        stub = JsonObject(mapOf("query" to JsonPrimitive("kmp"))),
+                    ),
+                ),
+            ),
+            createdAtEpochMs = 4L,
+        )
+        val messages = base.state.messages + call + result
+        return base.copy(
+            request = base.request.copy(messages = messages),
+            state = base.state.copy(
+                messages = messages,
+                contextManagement = ContextManagementState(
+                    usageObservation = ContextUsageObservation(
+                        inputTokens = 40,
+                        throughMessageId = "tool-contract",
+                        historyPrefixDigest = "prefix-digest",
+                        compactionGeneration = 0,
+                        provider = "test",
+                        model = "test",
+                        requestFingerprint = "fingerprint",
+                        clearingGeneration = 1,
+                        resultBudgetTokens = 12_000,
+                    ),
+                    toolResultClearing = ToolResultClearing(
+                        clearedThroughMessageId = "message-contract",
+                        sourcePrefixDigest = "clearing-digest",
+                        generation = 1,
+                        clearedResults = 1,
+                        freedTokens = 100,
+                        trigger = ToolResultClearingTrigger.PRESSURE,
+                        createdAtEpochMs = 5L,
+                    ),
+                ),
+            ),
+        )
+    }
+
+    private fun AgentMessage.withoutContextHints(): AgentMessage = copy(
+        parts = parts.map { part -> if (part is ToolResultPart) part.copy(contextHints = null) else part },
+    )
+
     private fun snapshot(
         requestSessionId: AgentSessionId = AgentSessionId("session-contract"),
+        contextManagement: ContextManagementConfig = ContextManagementConfig(),
     ): AgentSessionSnapshot {
         val sessionId = AgentSessionId("session-contract")
         val message = AgentMessage(
@@ -498,6 +644,7 @@ class StoredEnvelopeContractTest {
             sessionId = requestSessionId,
             messages = listOf(message),
             model = ModelDescriptor(provider = "test", model = "test"),
+            engine = AgentEngineConfig(runtime = RuntimeConfig(contextManagement = contextManagement)),
         )
         return AgentSessionSnapshot(
             sessionId = sessionId,
@@ -517,4 +664,74 @@ class StoredEnvelopeContractTest {
         cursor = AgentResumeCursor(turn, AgentResumePhase.MODEL_PENDING),
         state = snapshot.state.copy(turn = turn),
     )
+}
+
+/** What a schema-7 request decodes to after migration. */
+private val MIGRATED_CONTEXT_MANAGEMENT = ContextManagementConfig(
+    toolResults = ToolResultContextConfig.DISABLED,
+    estimationUnit = ContextEstimationUnit.UTF16_CHARS,
+)
+
+/** Rebuilds the schema-7 shape of a current envelope by removing every schema-8 field. */
+private fun String.downgradedToSchema7(): String {
+    val envelope = Json.parseToJsonElement(this).jsonObject
+    require(envelope.getValue("schemaVersion").jsonPrimitive.content == "8")
+    val payload = envelope.getValue("payload").jsonObject
+        .mapIfPresent("request") { request ->
+            request.jsonObject
+                .mapIfPresent("messages") { it.withoutToolResultHints() }
+                .mapIfPresent("engine") { engine ->
+                    engine.jsonObject.mapIfPresent("runtime") { runtime ->
+                        runtime.jsonObject.mapIfPresent("contextManagement") {
+                            it.jsonObject.without("toolResults", "estimationUnit")
+                        }
+                    }
+                }
+        }
+        .mapIfPresent("state") { state ->
+            state.jsonObject
+                .mapIfPresent("messages") { it.withoutToolResultHints() }
+                .mapIfPresent("contextManagement") { contextManagement ->
+                    contextManagement.jsonObject
+                        .without("toolResultClearing")
+                        .mapIfPresent("usageObservation") { observation ->
+                            (observation as? JsonObject)?.without("clearingGeneration", "resultBudgetTokens")
+                                ?: observation
+                        }
+                }
+        }
+        .mapIfPresent("toolExecutions") { records ->
+            JsonArray(
+                records.jsonArray.map { record ->
+                    record.jsonObject.mapIfPresent("result") { result ->
+                        (result as? JsonObject)?.without("contextHints") ?: result
+                    }
+                },
+            )
+        }
+    return JsonObject(envelope + mapOf("schemaVersion" to JsonPrimitive(7), "payload" to payload)).toString()
+}
+
+private fun String.downgradedToSchema6(): String =
+    replaceFirst("\"schemaVersion\":7", "\"schemaVersion\":6")
+        .replace(",\"maxOutputTokens\":null", "")
+
+private fun JsonElement.withoutToolResultHints(): JsonElement = JsonArray(
+    jsonArray.map { message ->
+        message.jsonObject.mapIfPresent("parts") { parts ->
+            JsonArray(
+                parts.jsonArray.map { part ->
+                    val value = part.jsonObject
+                    if (value["type"]?.jsonPrimitive?.content == "tool_result") value.without("contextHints") else value
+                },
+            )
+        }
+    },
+)
+
+private fun JsonObject.without(vararg keys: String): JsonObject = JsonObject(this - keys.toSet())
+
+private fun JsonObject.mapIfPresent(key: String, transform: (JsonElement) -> JsonElement): JsonObject {
+    val value = this[key] ?: return this
+    return JsonObject(this + (key to transform(value)))
 }

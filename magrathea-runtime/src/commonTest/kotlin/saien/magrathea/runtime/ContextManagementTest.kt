@@ -35,6 +35,7 @@ import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolMediaAttribution
 import saien.magrathea.core.ToolResultAudience
 import saien.magrathea.core.ToolResultContent
+import saien.magrathea.core.ToolResultContextConfig
 import saien.magrathea.core.ToolResultImageContent
 import saien.magrathea.core.ToolResultPart
 import saien.magrathea.core.ToolResultTextContent
@@ -662,9 +663,11 @@ class ContextManagementTest {
         reason = reason,
     )
 
+    // These cases exercise semantic compaction alone; ToolResultContextTest covers the Tool-result stages.
     private fun request(
         messages: List<AgentMessage>,
         contextWindowTokens: Long = 220,
+        toolResults: ToolResultContextConfig = ToolResultContextConfig.DISABLED,
     ) = AgentRequest(
         sessionId = AgentSessionId("context-test"),
         messages = messages,
@@ -682,6 +685,7 @@ class ContextManagementTest {
                     summaryMaxTokens = 32,
                     charsPerTokenEstimate = 4,
                     overflowRetryLimit = 1,
+                    toolResults = toolResults,
                 ),
             ),
         ),

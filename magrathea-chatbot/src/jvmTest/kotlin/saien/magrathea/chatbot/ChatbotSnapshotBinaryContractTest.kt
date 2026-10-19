@@ -104,6 +104,39 @@ class ChatbotSnapshotBinaryContractTest {
         assertEquals(original, defaults)
     }
 
+    @Test
+    fun contextManagementSnapshotRetainsItsPublishedSignatures() {
+        val type = ChatbotContextManagementSnapshot::class.java
+        val parameters = arrayOf(Long::class.javaPrimitiveType, Long::class.javaObjectType)
+        assertEquals(
+            ChatbotContextManagementSnapshot(compactionGeneration = 2, tokensBeforeLastCompaction = 500),
+            type.getConstructor(*parameters).newInstance(2L, 500L),
+        )
+        assertEquals(
+            ChatbotContextManagementSnapshot(),
+            type.getConstructor(
+                *parameters,
+                Int::class.javaPrimitiveType,
+                Class.forName("kotlin.jvm.internal.DefaultConstructorMarker"),
+            ).newInstance(0L, null, 0b11, null),
+        )
+
+        val cleared = ChatbotContextManagementSnapshot(
+            compactionGeneration = 1,
+            clearingGeneration = 3,
+            clearedToolResults = 4,
+        )
+        val copied = type.getMethod("copy", *parameters)
+            .invoke(cleared, 2L, null) as ChatbotContextManagementSnapshot
+        assertEquals(2, copied.compactionGeneration)
+        assertEquals(3, copied.clearingGeneration)
+        assertEquals(4, copied.clearedToolResults)
+        val defaults = type.getDeclaredMethod(
+            "copy\$default", type, *parameters, Int::class.javaPrimitiveType, Any::class.java,
+        ).invoke(null, cleared, 0L, null, 0b11, null)
+        assertEquals(cleared, defaults)
+    }
+
     private fun configuration() = ChatbotSessionConfiguration(
         model = ModelDescriptor(provider = "test-provider", model = "test-model"),
     )

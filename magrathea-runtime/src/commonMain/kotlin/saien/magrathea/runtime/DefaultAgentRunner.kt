@@ -892,6 +892,8 @@ class DefaultAgentRunner(
         require(initialCheckpoint.runId == runId)
         val runState = RunState(initialCheckpoint.state)
         var activeRequest = request.copy(messages = initialCheckpoint.state.messages)
+        // The run's own input starts at its last user message; projection strategies protect it.
+        val activeRunStartMessageId = request.messages.lastOrNull { it.role == MessageRole.USER }?.id
         var safeCheckpoint = initialCheckpoint
         var pendingRecoveryAccountingState = recoveryAccountingState
         var terminalStatePersisted = false
@@ -1190,6 +1192,7 @@ class DefaultAgentRunner(
                                                 state = runState.value,
                                                 turn = turn,
                                                 reason = preparationReason,
+                                                activeRunStartMessageId = activeRunStartMessageId,
                                             ),
                                         )
                                     }
@@ -1202,6 +1205,12 @@ class DefaultAgentRunner(
                                     "magrathea.context.failure" to result.failure?.name?.lowercase(),
                                     "magrathea.context.estimated_input_tokens" to result.estimatedInputTokens,
                                     "magrathea.context.input_limit_tokens" to result.inputLimitTokens,
+                                    "magrathea.context.tool_results_reduced" to result.toolResults.reducedResults.toLong(),
+                                    "magrathea.context.tool_results_cleared" to
+                                        result.toolResults.newlyClearedResults.toLong(),
+                                    "magrathea.context.tool_result_tokens_freed" to result.toolResults.freedTokens,
+                                    "magrathea.context.clearing_trigger" to
+                                        result.toolResults.clearingTrigger?.name?.lowercase(),
                                 )
                                 result
                             } catch (cancelled: CancellationException) {
@@ -1252,7 +1261,10 @@ class DefaultAgentRunner(
                             ) {
                                 throw AgentRuntimeFailure(AgentFailureCode.CONTEXT_LIMIT)
                             }
-                            if (preparation.action == ContextPreparationAction.COMPACTED) {
+                            if (
+                                preparation.action == ContextPreparationAction.COMPACTED ||
+                                preparation.toolResults.clearingTrigger != null
+                            ) {
                                 safeCheckpoint = AgentCheckpoint(
                                     request.sessionId,
                                     runId,
@@ -1291,6 +1303,7 @@ class DefaultAgentRunner(
                                 modelInputModalities = activeRequest.model.inputModalities,
                                 charsPerToken = activeRequest.engine.runtime.contextManagement
                                     .charsPerTokenEstimate,
+                                estimationUnit = activeRequest.engine.runtime.contextManagement.estimationUnit,
                             )
                             send(
                                 AgentEvent.ContextTransformed(
@@ -2250,6 +2263,7 @@ class DefaultAgentRunner(
                 executionId = executionId,
                 assistantMessage = context.assistantMessage,
                 toolCall = context.toolCall,
+                resultBudgetTokens = request.toolResultBudgetTokens(),
             )
             val timeoutMs = definition.timeoutMs ?: request.engine.runtime.defaultToolTimeoutMillis
             val executionPermit = executor.executionPermit(executionRequest)
