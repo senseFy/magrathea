@@ -51,16 +51,20 @@ class AnthropicProviderAdapter(
         val resolvedRequest = request.withResolvedReasoning()
         val credential = requireCredential(resolvedRequest)
         val config = resolvedRequest.anthropicTransportConfig()
-        val payload = AnthropicRequestBuilder(key, json).build(resolvedRequest)
+        val url = resolvedRequest.endpoint ?: credential.endpoint ?: DEFAULT_MESSAGES_ENDPOINT
+        val officialEndpoint = url == DEFAULT_MESSAGES_ENDPOINT
+        val builder = AnthropicRequestBuilder(key, json)
+        val payload = builder.build(resolvedRequest, officialEndpoint)
         val body = json.encodeToString(JsonObject.serializer(), payload)
         val httpRequest = HttpRequestSpec(
             method = HttpMethod.POST,
-            url = resolvedRequest.endpoint ?: credential.endpoint ?: DEFAULT_MESSAGES_ENDPOINT,
+            url = url,
             headers = buildHeaders(
                 resolvedRequest,
                 credential,
                 config.authentication,
                 resolvedRequest.model.supportsStreaming,
+                thinkingBinding = builder.requiresThinkingBlockBinding(resolvedRequest, officialEndpoint),
             ),
             body = body,
             timeouts = resolvedRequest.timeouts.toHttpTimeoutConfig(),
@@ -120,6 +124,7 @@ class AnthropicProviderAdapter(
         credential: ProviderCredential,
         authentication: AnthropicAuthentication,
         streaming: Boolean,
+        thinkingBinding: Boolean,
     ): List<HttpHeader> = buildList {
         val supplied = credential.headers + request.headers
         supplied.forEach { (name, value) ->
@@ -132,6 +137,7 @@ class AnthropicProviderAdapter(
             AnthropicAuthentication.BEARER -> add(HttpHeader("Authorization", "Bearer ${credential.value}"))
         }
         add(HttpHeader("anthropic-version", "2023-06-01"))
+        if (thinkingBinding) add(HttpHeader("anthropic-beta", THINKING_BINDING_BETA))
     }
 }
 
