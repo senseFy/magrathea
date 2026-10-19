@@ -5,6 +5,22 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## [0.1.0-alpha.18](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.17...v0.1.0-alpha.18) (2026-10-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* New requests bound each Tool result and clear stale results in the Provider projection by default, and estimate tokens from UTF-8 bytes. Set ContextManagementConfig.toolResults to ToolResultContextConfig.DISABLED and estimationUnit to UTF16_CHARS to keep the previous projection. Sessions and checkpoints are written with storage schema 8, which earlier SDK versions cannot read; schema 6 and 7 data migrates on load.
+
+### Features
+
+* bound and clear Tool results in the Provider projection ([#25](https://github.com/senseFy/magrathea/issues/25)) ([bb54184](https://github.com/senseFy/magrathea/commit/bb541846bc679a598e36cc09d1736ab7ddd7ccc9))
+
+
+### Bug Fixes
+
+* drop invalid Anthropic thinking blocks after prefix edits ([#24](https://github.com/senseFy/magrathea/issues/24)) ([00c043d](https://github.com/senseFy/magrathea/commit/00c043d46dfaa6c0a03914b2d9d55efb0c0efb68))
+
 ## [0.1.0-alpha.17](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.16...v0.1.0-alpha.17) (2026-10-18)
 
 
