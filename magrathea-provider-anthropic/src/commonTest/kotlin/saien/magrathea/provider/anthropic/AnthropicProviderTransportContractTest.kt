@@ -8,8 +8,12 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.CredentialRef
 import saien.magrathea.core.MessageRole
@@ -313,6 +317,88 @@ class AnthropicProviderTransportContractTest {
         assertFalse("anthropic-thinking-mode" in names)
         assertFalse("anthropic-effort" in names)
         assertTrue("x-gateway-trace" in names)
+    }
+
+    @Test
+    fun adaptiveThinkingReplayOnTheOfficialApiOptsIntoDroppingInvalidThinking() = runTest {
+        val outbound = generateCapturing(thinkingReplayRequest(AnthropicTransportConfig(thinkingMode = "adaptive")))
+
+        assertEquals(
+            "drop_block",
+            outbound.payload.getValue("thinking").jsonObject.getValue("block_binding").jsonObject
+                .getValue("prefix_mismatch_behavior").jsonPrimitive.content,
+        )
+        assertEquals(listOf(THINKING_BINDING_BETA), outbound.betaHeaders)
+    }
+
+    @Test
+    fun thinkingBindingControlsRequireReplayedThinking() = runTest {
+        val outbound = generateCapturing(
+            request(false, "secret").copy(typedConfig = AnthropicTransportConfig(thinkingMode = "adaptive")),
+        )
+
+        assertFalse(outbound.payload.getValue("thinking").jsonObject.containsKey("block_binding"))
+        assertTrue(outbound.betaHeaders.isEmpty())
+    }
+
+    @Test
+    fun compatibleEndpointsNeverReceiveThinkingBindingControls() = runTest {
+        val outbound = generateCapturing(
+            thinkingReplayRequest(AnthropicTransportConfig(thinkingMode = "adaptive"))
+                .copy(endpoint = "https://compatible.example.test/v1/messages"),
+        )
+
+        assertFalse(outbound.payload.getValue("thinking").jsonObject.containsKey("block_binding"))
+        assertTrue(outbound.betaHeaders.isEmpty())
+    }
+
+    @Test
+    fun manuallyBudgetedThinkingKeepsTheDefaultBinding() = runTest {
+        val outbound = generateCapturing(
+            thinkingReplayRequest(
+                AnthropicTransportConfig(thinkingMode = "enabled", thinkingBudgetTokens = 2_048),
+            ),
+        )
+
+        assertFalse(outbound.payload.getValue("thinking").jsonObject.containsKey("block_binding"))
+        assertTrue(outbound.betaHeaders.isEmpty())
+    }
+
+    private class CapturedRequest(val payload: JsonObject, val betaHeaders: List<String>)
+
+    private suspend fun generateCapturing(request: ProviderRequest): CapturedRequest {
+        val transport = ScriptedAnthropicTransport(
+            executeResponses = listOf(HttpResponseSpec(200, body = ANTHROPIC_TEXT_RESPONSE)),
+        )
+        AnthropicProviderAdapter(transport = transport).generate(request).toList()
+        val outbound = transport.requests.single().first
+        return CapturedRequest(
+            payload = Json.parseToJsonElement(outbound.body.orEmpty()).jsonObject,
+            betaHeaders = outbound.headers.filter { it.name.equals("anthropic-beta", ignoreCase = true) }.map { it.value },
+        )
+    }
+
+    private fun thinkingReplayRequest(config: AnthropicTransportConfig): ProviderRequest {
+        val base = request(false, "secret")
+        val replayedContent = Json.parseToJsonElement(
+            """[{"type":"thinking","thinking":"Check the forecast.","signature":"sig-1"},{"type":"text","text":"Sunny."}]""",
+        ).jsonArray
+        return base.copy(
+            maxTokens = 8_192,
+            typedConfig = config,
+            messages = base.messages + listOf(
+                AgentMessage(
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(TextPart("Sunny.")),
+                    metadata = buildJsonObject {
+                        put("provider", "anthropic")
+                        put("model", base.model.model)
+                        put(ANTHROPIC_CONTENT_METADATA, replayedContent)
+                    },
+                ),
+                AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("And tomorrow?"))),
+            ),
+        )
     }
 
     private fun request(streaming: Boolean, secret: String?): ProviderRequest = ProviderRequest(

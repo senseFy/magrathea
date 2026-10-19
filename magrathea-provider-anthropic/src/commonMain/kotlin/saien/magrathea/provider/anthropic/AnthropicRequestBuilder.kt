@@ -41,7 +41,7 @@ internal class AnthropicRequestBuilder(
     private val providerKey: String,
     private val json: Json = Json,
 ) {
-    fun build(request: ProviderRequest): JsonObject = buildJsonObject {
+    fun build(request: ProviderRequest, officialEndpoint: Boolean = false): JsonObject = buildJsonObject {
         val config = request.anthropicTransportConfig()
         validateConfig(config, request)
         put("model", request.model.model)
@@ -56,10 +56,34 @@ internal class AnthropicRequestBuilder(
                 put("type", mode)
                 config.thinkingBudgetTokens?.let { put("budget_tokens", it) }
                 config.thinkingDisplay?.let { put("display", it) }
+                if (requiresThinkingBlockBinding(request, officialEndpoint)) {
+                    put("block_binding", buildJsonObject { put("prefix_mismatch_behavior", "drop_block") })
+                }
             })
         }
         config.effort?.let { effort ->
             put("output_config", buildJsonObject { put("effort", effort) })
+        }
+    }
+
+    /**
+     * Current Claude models reject a replayed thinking block whose prefix changed, which compaction,
+     * Tool-set changes, and context clearing all cause, unless the request opts into dropping it.
+     * The opt-in needs [THINKING_BINDING_BETA], is accepted by every current model only with adaptive
+     * thinking, and is unknown to compatible endpoints.
+     */
+    fun requiresThinkingBlockBinding(request: ProviderRequest, officialEndpoint: Boolean): Boolean =
+        officialEndpoint &&
+            request.anthropicTransportConfig().thinkingMode == "adaptive" &&
+            request.messages.any { message -> message.replaysThinking(request) }
+
+    private fun AgentMessage.replaysThinking(request: ProviderRequest): Boolean {
+        if (role != MessageRole.ASSISTANT) return false
+        if (metadata["provider"]?.jsonPrimitive?.contentOrNull != providerKey) return false
+        if (metadata["model"]?.jsonPrimitive?.contentOrNull != request.model.model) return false
+        val content = metadata[ANTHROPIC_CONTENT_METADATA] as? JsonArray ?: return false
+        return content.any { block ->
+            ((block as? JsonObject)?.get("type") as? JsonPrimitive)?.contentOrNull in THINKING_BLOCK_TYPES
         }
     }
 
@@ -300,7 +324,9 @@ internal fun ProviderRequest.anthropicTransportConfig(): AnthropicTransportConfi
     else -> throw IllegalArgumentException("Anthropic provider received options for another provider family")
 }
 
+internal const val THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
 private const val DEFAULT_MAX_TOKENS = 4_096
+private val THINKING_BLOCK_TYPES = setOf("thinking", "redacted_thinking")
 private val THINKING_MODES = setOf("adaptive", "enabled", "disabled")
 private val THINKING_DISPLAYS = setOf("summarized", "omitted")
 private val EFFORT_LEVELS = setOf("low", "medium", "high", "xhigh", "max")

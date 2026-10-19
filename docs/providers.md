@@ -224,6 +224,19 @@ supports disabling reasoning, also declare its exact
 `OpenAiProviderProfile.disabledReasoningValue`; the adapter does not guess a compatible dialect's
 off value.
 
+## Replay continuity
+
+Reference adapters replay reasoning continuity state only for the Provider and model that produced
+it. Current Claude models also bind a thinking block to its whole prefix: the system prompt, Tools,
+and every earlier message. Compaction and a change of enabled Tools both edit that prefix, and
+accounts created on or after 2026-08-31 receive a 400 error for an invalid block by default. When an
+adaptive-thinking request to the official Claude API replays a thinking block, the Anthropic adapter
+therefore sends the `thinking-binding-controls-2026-08-01` beta header with
+`thinking.block_binding.prefix_mismatch_behavior = "drop_block"`. The API then drops invalid blocks
+and later thinking instead of rejecting the request. Compatible endpoints and manually budgeted
+`enabled` thinking keep the default behavior, because the field is unknown to compatible services
+and some models accept it only with adaptive thinking.
+
 ## Verification
 
 Deterministic protocol tests are part of the normal SDK gates. Controlled remote checks live in the
