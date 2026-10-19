@@ -186,7 +186,18 @@ class ImageSearchTool(
             return failure(request, ImageSearchFailureCode.UNAVAILABLE)
         }
         val normalized = response.results.normalized(policy)
-        return success(request, query, normalized.sources, normalized.truncated)
+        val admitted = normalized.sources.admittedWithinBudget(
+            budgetTokens = request.resultBudgetTokens,
+            envelopeChars = IMAGE_RESULT_ENVELOPE_CHARS + query.length,
+        ) { index, source ->
+            source.toJson(index + 1, MediaReference.forToolResult(request.executionId, index)).toString()
+        }
+        return success(
+            request = request,
+            query = query,
+            sources = admitted,
+            truncated = normalized.truncated || admitted.size < normalized.sources.size,
+        )
     }
 
     private fun success(
@@ -228,6 +239,15 @@ class ImageSearchTool(
         content = sources.mapIndexed { index, source ->
             source.toUserImageContent(MediaReference.forToolResult(request.executionId, index))
         },
+        contextHints = searchResultContextHints(
+            query = query,
+            pages = sources.map { source ->
+                SearchPageReference(
+                    title = source.title ?: source.publisher ?: source.sourcePageUrl,
+                    url = source.sourcePageUrl,
+                )
+            },
+        ),
     )
 
     private fun failure(
@@ -428,6 +448,7 @@ private val ImageSearchFailureCode.serialName: String
     }
 
 private val IMAGE_EXTERNAL_WHITESPACE = Regex("[\\s\\u0000-\\u001F\\u007F]+")
+private const val IMAGE_RESULT_ENVELOPE_CHARS = 160
 private const val MAX_IMAGE_SEARCH_CALLS_PER_RUN = 20
 private const val MAX_IMAGE_RESULTS_PER_QUERY = 50
 private const val MAX_IMAGE_QUERY_CHARS = 2_048

@@ -1,0 +1,191 @@
+{
+  "schemaVersion": 8,
+  "sdkVersion": "0.1.0-alpha.2",
+  "payload": {
+    "sessionId": {
+      "value": "session-fixture-1"
+    },
+    "runId": {
+      "value": "run-fixture-1"
+    },
+    "request": {
+      "sessionId": {
+        "value": "session-fixture-1"
+      },
+      "systemPrompt": "You are concise.",
+      "messages": [
+        {
+          "id": "user-fixture-1",
+          "role": "USER",
+          "parts": [
+            {
+              "type": "text",
+              "text": "hello",
+              "signature": null,
+              "phase": null,
+              "providerMetadata": null
+            }
+          ],
+          "createdAtEpochMs": 1700000000001,
+          "metadata": {},
+          "stopReason": null
+        }
+      ],
+      "model": {
+        "provider": "gemini",
+        "model": "gemini-contract",
+        "displayName": "gemini-contract",
+        "supportsToolCalls": true,
+        "reasoningCapabilities": {
+          "supportedEfforts": [],
+          "supportsDisabled": false
+        },
+        "supportsStreaming": true,
+        "contextWindowTokens": 128000,
+        "inputModalities": [
+          "TEXT"
+        ],
+        "maxOutputTokens": 16384
+      },
+      "reasoningPreference": {
+        "type": "auto"
+      },
+      "tools": [],
+      "metadata": {},
+      "engine": {
+        "provider": {
+          "temperature": 0.2,
+          "maxTokens": null,
+          "options": {
+            "family": "gemini",
+            "values": {
+              "thinkingSummaries": "auto"
+            }
+          },
+          "credentialRef": {
+            "provider": "gemini",
+            "profile": "work"
+          },
+          "timeouts": {
+            "connectTimeoutMillis": 15000,
+            "firstEventTimeoutMillis": 120000,
+            "streamIdleTimeoutMillis": 90000,
+            "callTimeoutMillis": 600000
+          }
+        },
+        "runtime": {
+          "maxTurns": 8,
+          "contextManagement": {
+            "enabled": true,
+            "reserveTokens": 16384,
+            "keepRecentTokens": 20000,
+            "summaryMaxTokens": 4096,
+            "charsPerTokenEstimate": 4,
+            "toolResultSummaryMaxChars": 2000,
+            "contextWindowTokensOverride": null,
+            "overflowRetryLimit": 1,
+            "toolResults": {
+              "budget": {
+                "inputPercent": 20,
+                "maxTokens": 12000
+              },
+              "clearing": {
+                "trigger": {
+                  "inputPercent": 50,
+                  "maxTokens": 100000
+                },
+                "keepRecentResults": 3,
+                "clearAtLeast": {
+                  "inputPercent": 10,
+                  "maxTokens": 10000
+                },
+                "idleAfterMillis": 300000,
+                "protectActiveRun": true
+              },
+              "maxStubChars": 2000
+            },
+            "estimationUnit": "UTF8_BYTES"
+          },
+          "maxProviderRetries": 2,
+          "maxToolResultChars": 1048576,
+          "maxToolResultContentItems": 32,
+          "maxInlineToolResultBytes": 20971520,
+          "maxInlineAttachmentBytes": 20971520,
+          "toolExecutionMode": "PARALLEL",
+          "defaultToolTimeoutMillis": 120000,
+          "runTimeoutMillis": 1800000
+        }
+      }
+    },
+    "state": {
+      "messages": [
+        {
+          "id": "user-fixture-1",
+          "role": "USER",
+          "parts": [
+            {
+              "type": "text",
+              "text": "hello",
+              "signature": null,
+              "phase": null,
+              "providerMetadata": null
+            }
+          ],
+          "createdAtEpochMs": 1700000000001,
+          "metadata": {},
+          "stopReason": null
+        }
+      ],
+      "pendingToolCalls": [],
+      "toolCallCounts": {},
+      "metadata": {},
+      "turn": 2,
+      "status": "INTERRUPTED",
+      "retryCount": 0,
+      "stopReason": "INTERRUPTED",
+      "usage": {
+        "inputTokens": 12,
+        "outputTokens": 4,
+        "reasoningTokens": 2
+      },
+      "latestRequestUsage": {
+        "inputTokens": 9,
+        "outputTokens": 4,
+        "reasoningTokens": 2
+      },
+      "contextManagement": {
+        "compaction": null,
+        "usageObservation": {
+          "inputTokens": 9,
+          "throughMessageId": "user-fixture-1",
+          "historyPrefixDigest": "prefix-digest-fixture-1",
+          "compactionGeneration": 0,
+          "provider": "gemini",
+          "model": "gemini-contract",
+          "requestFingerprint": "request-fingerprint-fixture-1",
+          "clearingGeneration": 1,
+          "resultBudgetTokens": 12000
+        },
+        "toolResultClearing": {
+          "clearedThroughMessageId": "user-fixture-1",
+          "sourcePrefixDigest": "clearing-prefix-digest-fixture-1",
+          "generation": 1,
+          "clearedResults": 2,
+          "freedTokens": 4200,
+          "trigger": "PRESSURE",
+          "createdAtEpochMs": 1700000000004
+        }
+      }
+    },
+    "interruption": {
+      "reason": "PROVIDER_FAILURE",
+      "provider": {
+        "code": "PROVIDER_NETWORK",
+        "phase": "AFTER_FIRST_EVENT",
+        "retryAtEpochMs": 1700000005002
+      },
+      "occurredAtEpochMs": 1700000000002
+    },
+    "updatedAtEpochMs": 1700000000002
+  }
+}

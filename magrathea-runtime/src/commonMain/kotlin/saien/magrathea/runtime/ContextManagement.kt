@@ -10,8 +10,10 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import saien.magrathea.core.AgentMessage
+import saien.magrathea.core.AgentRequest
 import saien.magrathea.core.AttachmentPart
 import saien.magrathea.core.ContextCompaction
+import saien.magrathea.core.ContextEstimationUnit
 import saien.magrathea.core.ContextManagementState
 import saien.magrathea.core.ContextManager
 import saien.magrathea.core.ContextPreparationAction
@@ -22,6 +24,7 @@ import saien.magrathea.core.ContextPreparationResult
 import saien.magrathea.core.ContextSummarizer
 import saien.magrathea.core.ContextSummaryRequest
 import saien.magrathea.core.ContextUsageObservation
+import saien.magrathea.core.EpochClock
 import saien.magrathea.core.InlineToolImageSource
 import saien.magrathea.core.JsonPart
 import saien.magrathea.core.MessageRole
@@ -29,11 +32,13 @@ import saien.magrathea.core.ModelInputModality
 import saien.magrathea.core.ProviderOptions
 import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.core.ReasoningPart
+import saien.magrathea.core.SystemEpochClock
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.TokenUsage
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolDefinition
 import saien.magrathea.core.ToolImageAttachmentReference
+import saien.magrathea.core.ToolResultContextReport
 import saien.magrathea.core.ToolResultImageContent
 import saien.magrathea.core.ToolResultPart
 import saien.magrathea.core.ToolResultTextContent
@@ -46,16 +51,22 @@ import saien.magrathea.provider.api.sanitizedForModelBoundary
 /**
  * Default token-budgeted context manager.
  *
- * Full session history is never mutated. A cumulative summary and recent raw messages form the
- * Provider projection, while a digest invalidates stale summaries after regeneration or edits.
+ * Full session history is never mutated. The Provider projection bounds each Tool result, replaces
+ * stale results with stubs, and only then replaces older history with a cumulative summary.
+ * Digests invalidate stale clearing and summary state after regeneration or edits.
  */
 class TokenAwareContextManager(
     private val summarizer: ContextSummarizer,
+    private val clock: EpochClock,
 ) : ContextManager {
+    constructor(summarizer: ContextSummarizer) : this(summarizer, SystemEpochClock)
+
     override suspend fun prepare(request: ContextPreparationRequest): ContextPreparationResult {
         require(request.turn >= 0) { "Context preparation turn must not be negative" }
         val config = request.request.engine.runtime.contextManagement
         val fullMessages = request.state.messages
+        val estimator = config.textEstimator()
+        val inputLimit = inputLimitTokens(request.request)
         if (!config.enabled) {
             return ContextPreparationResult(
                 messages = fullMessages,
@@ -66,38 +77,60 @@ class TokenAwareContextManager(
                     tools = request.request.tools,
                     providerOptions = request.request.engine.provider.options,
                     modelInputModalities = request.request.model.inputModalities,
-                    charsPerToken = config.charsPerTokenEstimate,
+                    estimator = estimator,
                 ),
-                inputLimitTokens = inputLimitTokens(request),
+                inputLimitTokens = inputLimit,
                 action = ContextPreparationAction.UNCHANGED,
             )
         }
 
-        val normalizedState = normalizeContextState(
+        val toolResults = ToolResultProjector(
+            config = config.toolResults,
+            inputLimitTokens = inputLimit,
+            estimator = estimator,
+            modelInputModalities = request.request.model.inputModalities,
+        )
+        var state = normalizeContextState(
             state = request.state.contextManagement,
             messages = fullMessages,
             request = request,
         )
-        val currentProjection = projectMessages(fullMessages, normalizedState.compaction)
-        val estimatedTokens = estimateCurrentInputTokens(request, normalizedState, currentProjection)
-        val inputLimit = inputLimitTokens(request)
+        var projectedHistory = toolResults.project(fullMessages, state.toolResultClearing)
+        var estimatedTokens = estimateCurrentInputTokens(request, state, projectedHistory.messages, estimator)
+        val clearingPass = toolResults.selectClearing(
+            request = request,
+            state = state,
+            estimatedInputTokens = estimatedTokens,
+            nowEpochMs = clock.nowEpochMs(),
+        )
+        if (clearingPass != null) {
+            // The previous Provider-reported usage describes a projection that no longer exists.
+            state = state.copy(toolResultClearing = clearingPass.clearing, usageObservation = null)
+            projectedHistory = toolResults.project(fullMessages, state.toolResultClearing)
+            estimatedTokens = estimateCurrentInputTokens(request, state, projectedHistory.messages, estimator)
+        }
+        val toolReport = projectedHistory.report(clearingPass, state.toolResultClearing)
+        val compactionSource = projectedHistory.messages
+        val currentProjection = projectMessages(compactionSource, state.compaction)
+
         val shouldCompact = request.reason == ContextPreparationReason.OVERFLOW_RECOVERY ||
             (inputLimit != null && estimatedTokens > inputLimit)
         if (!shouldCompact) {
             return ContextPreparationResult(
                 messages = currentProjection,
-                state = normalizedState,
+                state = state,
                 estimatedInputTokens = estimatedTokens,
                 inputLimitTokens = inputLimit,
-                action = if (normalizedState.compaction == null) {
+                action = if (state.compaction == null) {
                     ContextPreparationAction.UNCHANGED
                 } else {
                     ContextPreparationAction.REUSED
                 },
+                toolResults = toolReport,
             )
         }
 
-        val baseStartIndex = normalizedState.compaction
+        val baseStartIndex = state.compaction
             ?.let { compaction -> fullMessages.indexOfFirst { it.id == compaction.firstKeptMessageId } }
             ?.takeIf { it >= 0 }
             ?: 0
@@ -107,45 +140,47 @@ class TokenAwareContextManager(
             tools = request.request.tools,
             providerOptions = request.request.engine.provider.options,
             modelInputModalities = request.request.model.inputModalities,
-            charsPerToken = config.charsPerTokenEstimate,
+            estimator = estimator,
         )
         val maximumRecentTokens = inputLimit
             ?.minus(fixedInputTokens)
             ?.minus(config.summaryMaxTokens.toLong())
-            ?.minus(summaryProjectionOverheadTokens(config.charsPerTokenEstimate))
+            ?.minus(summaryProjectionOverheadTokens(estimator))
             ?.coerceAtLeast(1)
         val targetRecentTokens = maximumRecentTokens
             ?.let { minOf(config.keepRecentTokens, it) }
             ?: config.keepRecentTokens
         val cutIndex = findSafeCutIndex(
-            messages = fullMessages,
+            messages = compactionSource,
             baseStartIndex = baseStartIndex,
             targetRecentTokens = targetRecentTokens,
             maximumRecentTokens = maximumRecentTokens,
             modelInputModalities = request.request.model.inputModalities,
-            charsPerToken = config.charsPerTokenEstimate,
+            estimator = estimator,
         )
         if (cutIndex == null || request.state.pendingToolCalls.isNotEmpty()) {
             return failedOpen(
                 projection = currentProjection,
-                state = normalizedState,
+                state = state,
                 estimatedTokens = estimatedTokens,
                 inputLimit = inputLimit,
                 failure = ContextPreparationFailure.NO_SAFE_CUT,
+                toolResults = toolReport,
             )
         }
 
-        val sourceMessages = fullMessages.subList(baseStartIndex, cutIndex)
+        val sourceMessages = compactionSource.subList(baseStartIndex, cutIndex)
         if (sourceMessages.isEmpty()) {
             return failedOpen(
                 projection = currentProjection,
-                state = normalizedState,
+                state = state,
                 estimatedTokens = estimatedTokens,
                 inputLimit = inputLimit,
                 failure = ContextPreparationFailure.NO_SAFE_CUT,
+                toolResults = toolReport,
             )
         }
-        val generation = (normalizedState.compaction?.generation ?: 0) + 1
+        val generation = (state.compaction?.generation ?: 0) + 1
         val summaryResult = try {
             summarizer.summarize(
                 ContextSummaryRequest(
@@ -157,7 +192,7 @@ class TokenAwareContextManager(
                         maxToolResultChars = config.toolResultSummaryMaxChars,
                         modelInputModalities = request.request.model.inputModalities,
                     ),
-                    previousSummary = normalizedState.compaction?.summary,
+                    previousSummary = state.compaction?.summary,
                     maxOutputTokens = config.summaryMaxTokens,
                     generation = generation,
                     turn = request.turn,
@@ -174,19 +209,21 @@ class TokenAwareContextManager(
             if (request.reason == ContextPreparationReason.OVERFLOW_RECOVERY) throw failure
             return failedOpen(
                 projection = currentProjection,
-                state = normalizedState,
+                state = state,
                 estimatedTokens = estimatedTokens,
                 inputLimit = inputLimit,
                 failure = ContextPreparationFailure.SUMMARY_FAILED,
+                toolResults = toolReport,
             )
         }
         if (summaryResult.summary.isBlank()) {
             return failedOpen(
                 projection = currentProjection,
-                state = normalizedState,
+                state = state,
                 estimatedTokens = estimatedTokens,
                 inputLimit = inputLimit,
                 failure = ContextPreparationFailure.SUMMARY_FAILED,
+                toolResults = toolReport,
             )
         }
 
@@ -199,24 +236,28 @@ class TokenAwareContextManager(
             generation = generation,
             summaryModel = request.request.model,
         )
-        val updatedState = ContextManagementState(compaction = compaction)
-        val projection = projectMessages(fullMessages, compaction)
+        val updatedState = ContextManagementState(
+            compaction = compaction,
+            toolResultClearing = state.toolResultClearing,
+        )
+        val projection = projectMessages(compactionSource, compaction)
         val projectedTokens = estimateInputTokens(
             messages = projection,
             systemPrompt = request.request.systemPrompt,
             tools = request.request.tools,
             providerOptions = request.request.engine.provider.options,
             modelInputModalities = request.request.model.inputModalities,
-            charsPerToken = config.charsPerTokenEstimate,
+            estimator = estimator,
         )
         if (inputLimit != null && projectedTokens > inputLimit) {
             return failedOpen(
                 projection = currentProjection,
-                state = normalizedState,
+                state = state,
                 estimatedTokens = estimatedTokens,
                 inputLimit = inputLimit,
                 failure = ContextPreparationFailure.NO_SAFE_CUT,
                 summaryUsage = summaryResult.usage,
+                toolResults = toolReport,
             )
         }
         return ContextPreparationResult(
@@ -226,6 +267,7 @@ class TokenAwareContextManager(
             inputLimitTokens = inputLimit,
             action = ContextPreparationAction.COMPACTED,
             summaryUsage = summaryResult.usage,
+            toolResults = toolReport,
         )
     }
 
@@ -236,6 +278,7 @@ class TokenAwareContextManager(
         inputLimit: Long?,
         failure: ContextPreparationFailure,
         summaryUsage: TokenUsage = TokenUsage(),
+        toolResults: ToolResultContextReport,
     ) = ContextPreparationResult(
         messages = projection,
         state = state,
@@ -244,11 +287,12 @@ class TokenAwareContextManager(
         action = ContextPreparationAction.FAILED_OPEN,
         summaryUsage = summaryUsage,
         failure = failure,
+        toolResults = toolResults,
     )
 }
 
 internal fun ContextManagementState.withUsageObservation(
-    request: saien.magrathea.core.AgentRequest,
+    request: AgentRequest,
     messages: List<AgentMessage>,
     throughMessageId: String?,
     inputTokens: Long?,
@@ -268,6 +312,8 @@ internal fun ContextManagementState.withUsageObservation(
             provider = request.model.provider,
             model = request.model.model,
             requestFingerprint = contextRequestFingerprint(request),
+            clearingGeneration = toolResultClearing?.generation ?: 0,
+            resultBudgetTokens = request.toolResultBudgetTokens(),
         ),
     )
 }
@@ -284,14 +330,22 @@ internal fun normalizeContextState(
             historyPrefixDigest(messages.take(firstKeptIndex)) == candidate.sourcePrefixDigest
     }
     val normalized = if (compaction == state.compaction) state else ContextManagementState()
+    val clearing = normalized.toolResultClearing?.takeIf { candidate ->
+        val watermarkIndex = messages.indexOfFirst { it.id == candidate.clearedThroughMessageId }
+        watermarkIndex >= 0 &&
+            historyPrefixDigest(messages.take(watermarkIndex + 1)) == candidate.sourcePrefixDigest
+    }
+    val resultBudget = request.request.toolResultBudgetTokens()
     val usage = normalized.usageObservation?.takeIf { observation ->
         observation.provider == request.request.model.provider &&
             observation.model == request.request.model.model &&
             observation.compactionGeneration == (compaction?.generation ?: 0) &&
+            observation.clearingGeneration == (clearing?.generation ?: 0) &&
+            observation.resultBudgetTokens == resultBudget &&
             observation.requestFingerprint == contextRequestFingerprint(request.request) &&
             usagePrefixIsValid(observation, messages)
     }
-    return normalized.copy(usageObservation = usage)
+    return normalized.copy(usageObservation = usage, toolResultClearing = clearing)
 }
 
 private fun usagePrefixIsValid(
@@ -332,43 +386,51 @@ private fun ContextCompaction.toSummaryMessage(): AgentMessage = AgentMessage(
     metadata = buildJsonObject { put("magrathea.context", JsonPrimitive("compaction")) },
 )
 
+/** [projectedHistory] has the authoritative message order and IDs, with projected Tool results. */
 private fun estimateCurrentInputTokens(
     request: ContextPreparationRequest,
     state: ContextManagementState,
-    projection: List<AgentMessage>,
+    projectedHistory: List<AgentMessage>,
+    estimator: ContextTextEstimator,
 ): Long {
-    val config = request.request.engine.runtime.contextManagement
     val observation = state.usageObservation
     if (observation != null) {
         val anchorIndex = observation.throughMessageId?.let { id ->
-            request.state.messages.indexOfFirst { it.id == id }.takeIf { it >= 0 }
+            projectedHistory.indexOfFirst { it.id == id }.takeIf { it >= 0 }
         } ?: -1
-        val delta = request.state.messages.drop(anchorIndex + 1)
+        val delta = projectedHistory.drop(anchorIndex + 1)
         return observation.inputTokens + estimateMessages(
             messages = delta,
             modelInputModalities = request.request.model.inputModalities,
-            charsPerToken = config.charsPerTokenEstimate,
+            estimator = estimator,
         )
     }
     return estimateInputTokens(
-        messages = projection,
+        messages = projectMessages(projectedHistory, state.compaction),
         systemPrompt = request.request.systemPrompt,
         tools = request.request.tools,
         providerOptions = request.request.engine.provider.options,
         modelInputModalities = request.request.model.inputModalities,
-        charsPerToken = config.charsPerTokenEstimate,
+        estimator = estimator,
     )
 }
 
-private fun inputLimitTokens(request: ContextPreparationRequest): Long? {
-    val config = request.request.engine.runtime.contextManagement
-    val contextWindow = config.contextWindowTokensOverride ?: request.request.model.contextWindowTokens
+internal fun inputLimitTokens(request: AgentRequest): Long? {
+    val config = request.engine.runtime.contextManagement
+    val contextWindow = config.contextWindowTokensOverride ?: request.model.contextWindowTokens
         ?: return null
     val outputReserve = maxOf(
         config.reserveTokens,
-        request.request.engine.provider.maxTokens?.toLong() ?: 0,
+        request.engine.provider.maxTokens?.toLong() ?: 0,
     )
     return (contextWindow - outputReserve).coerceAtLeast(0)
+}
+
+/** Resolved per-result model budget for this request, or null when the stage is off. */
+internal fun AgentRequest.toolResultBudgetTokens(): Long? {
+    val config = engine.runtime.contextManagement
+    if (!config.enabled) return null
+    return config.toolResults.budget?.resolve(inputLimitTokens(this))
 }
 
 internal fun estimateInputTokens(
@@ -378,107 +440,99 @@ internal fun estimateInputTokens(
     providerOptions: ProviderOptions?,
     modelInputModalities: Set<ModelInputModality>,
     charsPerToken: Int,
+    estimationUnit: ContextEstimationUnit = ContextEstimationUnit.UTF16_CHARS,
+): Long = estimateInputTokens(
+    messages = messages,
+    systemPrompt = systemPrompt,
+    tools = tools,
+    providerOptions = providerOptions,
+    modelInputModalities = modelInputModalities,
+    estimator = ContextTextEstimator(estimationUnit, charsPerToken),
+)
+
+internal fun estimateInputTokens(
+    messages: List<AgentMessage>,
+    systemPrompt: String,
+    tools: List<ToolDefinition>,
+    providerOptions: ProviderOptions?,
+    modelInputModalities: Set<ModelInputModality>,
+    estimator: ContextTextEstimator,
 ): Long {
-    val messageTokens = estimateMessages(messages, modelInputModalities, charsPerToken)
-    val systemTokens = estimateChars(systemPrompt.length.toLong(), charsPerToken)
-    val toolChars = tools.sumOf { definition ->
-        definition.name.length.toLong() +
-            definition.description.length +
-            definition.schema.toString().length
-    }
-    val toolTokens = estimateChars(toolChars, charsPerToken) + tools.size * TOOL_DEFINITION_OVERHEAD_TOKENS
+    val messageTokens = estimateMessages(messages, modelInputModalities, estimator)
+    val systemTokens = estimator.tokens(systemPrompt)
+    val toolTokens = tools.sumOf { definition ->
+        estimator.tokens(definition.name) +
+            estimator.tokens(definition.description) +
+            estimator.tokens(definition.schema.toString())
+    } + tools.size * TOOL_DEFINITION_OVERHEAD_TOKENS
     val optionTokens = providerOptions?.let { options ->
-        estimateChars(
-            options.family.length.toLong() + options.values.toString().length,
-            charsPerToken,
-        )
+        estimator.tokens(options.family) + estimator.tokens(options.values.toString())
     } ?: 0
     return messageTokens + systemTokens + toolTokens + optionTokens
 }
 
-private fun estimateMessages(
+internal fun estimateMessages(
     messages: List<AgentMessage>,
     modelInputModalities: Set<ModelInputModality>,
-    charsPerToken: Int,
+    estimator: ContextTextEstimator,
 ): Long {
     return messages.sumOf { message ->
         MESSAGE_OVERHEAD_TOKENS + message.parts.sumOf { part ->
             when (part) {
-                is TextPart -> estimateChars(part.text.length.toLong(), charsPerToken)
-                is ReasoningPart -> if (part.redacted) 0 else estimateChars(part.text.length.toLong(), charsPerToken)
-                is JsonPart -> estimateChars(part.value.toString().length.toLong(), charsPerToken)
-                is ToolCallPart -> estimateChars(
-                    (part.toolName.length + part.arguments.toString().length).toLong(),
-                    charsPerToken,
-                )
+                is TextPart -> estimator.tokens(part.text)
+                is ReasoningPart -> if (part.redacted) 0 else estimator.tokens(part.text)
+                is JsonPart -> estimator.tokens(part.value.toString())
+                is ToolCallPart -> estimator.tokens(part.toolName) + estimator.tokens(part.arguments.toString())
                 is ToolResultPart -> estimateToolResultTokens(
                     part = part,
                     modelInputModalities = modelInputModalities,
-                    charsPerToken = charsPerToken,
+                    estimator = estimator,
                 )
-                is AttachmentPart -> estimateAttachmentTokens(part, charsPerToken)
+                is AttachmentPart -> estimateAttachmentTokens(part, estimator)
             }
         }
     }
 }
 
-private fun estimateToolResultTokens(
+internal fun estimateToolResultTokens(
     part: ToolResultPart,
     modelInputModalities: Set<ModelInputModality>,
-    charsPerToken: Int,
+    estimator: ContextTextEstimator,
 ): Long {
     val projection = part
         .sanitizedForModelBoundary()
         .modelProjection(modelInputModalities, CONTEXT_PROJECTION_CAPABILITIES)
     val canonicalTokens = projection.canonicalResult?.let { result ->
-        estimateChars(
-            result.providerFallbackText().length.toLong(),
-            charsPerToken,
-        )
+        estimator.tokens(result.providerFallbackText())
     } ?: 0L
     val contentTokens = projection.content.sumOf { content ->
         when (content) {
-            is ToolResultTextContent -> estimateChars(
-                content.text.length.toLong(),
-                charsPerToken,
-            )
-            is ToolResultImageContent -> estimateToolImageTokens(content, charsPerToken)
+            is ToolResultTextContent -> estimator.tokens(content.text)
+            is ToolResultImageContent -> estimateToolImageTokens(content, estimator)
         }
     }
-    return estimateChars(part.toolName.length.toLong(), charsPerToken) +
-        canonicalTokens +
-        contentTokens
+    return estimator.tokens(part.toolName) + canonicalTokens + contentTokens
 }
 
-private fun JsonElement.providerFallbackText(): String = when (this) {
+internal fun JsonElement.providerFallbackText(): String = when (this) {
     is JsonPrimitive -> contentOrNull ?: toString()
     else -> toString()
 }
 
-private fun estimateToolImageTokens(content: ToolResultImageContent, charsPerToken: Int): Long {
+private fun estimateToolImageTokens(content: ToolResultImageContent, estimator: ContextTextEstimator): Long {
     val sourceTokens = when (val source = content.source) {
         is InlineToolImageSource -> INLINE_ATTACHMENT_ESTIMATED_TOKENS
-        is RemoteToolImageSource -> REMOTE_ATTACHMENT_ESTIMATED_TOKENS +
-            estimateChars(source.uri.length.toLong(), charsPerToken)
-        is ToolImageAttachmentReference -> REMOTE_ATTACHMENT_ESTIMATED_TOKENS +
-            estimateChars(source.uri.length.toLong(), charsPerToken)
+        is RemoteToolImageSource -> REMOTE_ATTACHMENT_ESTIMATED_TOKENS + estimator.tokens(source.uri)
+        is ToolImageAttachmentReference -> REMOTE_ATTACHMENT_ESTIMATED_TOKENS + estimator.tokens(source.uri)
     }
-    val descriptionTokens = estimateChars(
-        ((content.title?.length ?: 0) + (content.altText?.length ?: 0)).toLong(),
-        charsPerToken,
-    )
+    val descriptionTokens = estimator.tokens(content.title.orEmpty() + content.altText.orEmpty())
     return sourceTokens + descriptionTokens
 }
 
-private fun estimateAttachmentTokens(part: AttachmentPart, charsPerToken: Int): Long {
+private fun estimateAttachmentTokens(part: AttachmentPart, estimator: ContextTextEstimator): Long {
     if (part.dataUrlPayload() != null) return INLINE_ATTACHMENT_ESTIMATED_TOKENS
     return REMOTE_ATTACHMENT_ESTIMATED_TOKENS +
-        estimateChars((part.uri.length + part.mimeType.length + (part.fileName?.length ?: 0)).toLong(), charsPerToken)
-}
-
-private fun estimateChars(chars: Long, charsPerToken: Int): Long {
-    if (chars <= 0) return 0
-    return (chars + charsPerToken - 1) / charsPerToken
+        estimator.tokens(part.uri + part.mimeType + part.fileName.orEmpty())
 }
 
 private fun findSafeCutIndex(
@@ -487,11 +541,11 @@ private fun findSafeCutIndex(
     targetRecentTokens: Long,
     maximumRecentTokens: Long?,
     modelInputModalities: Set<ModelInputModality>,
-    charsPerToken: Int,
+    estimator: ContextTextEstimator,
 ): Int? {
     if (messages.size < 2 || baseStartIndex >= messages.lastIndex) return null
     val messageTokens = messages.map {
-        estimateMessages(listOf(it), modelInputModalities, charsPerToken)
+        estimateMessages(listOf(it), modelInputModalities, estimator)
     }
     val suffixTokens = LongArray(messages.size + 1)
     for (index in messages.lastIndex downTo 0) {
@@ -506,12 +560,8 @@ private fun findSafeCutIndex(
         )
 }
 
-private fun summaryProjectionOverheadTokens(charsPerToken: Int): Long =
-    MESSAGE_OVERHEAD_TOKENS +
-        estimateChars(
-            (CONTEXT_SUMMARY_PREFIX.length + CONTEXT_SUMMARY_SUFFIX.length).toLong(),
-            charsPerToken,
-        )
+private fun summaryProjectionOverheadTokens(estimator: ContextTextEstimator): Long =
+    MESSAGE_OVERHEAD_TOKENS + estimator.tokens(CONTEXT_SUMMARY_PREFIX + CONTEXT_SUMMARY_SUFFIX)
 
 private fun isSafeCut(messages: List<AgentMessage>, cutIndex: Int): Boolean {
     val firstKept = messages.getOrNull(cutIndex) ?: return false
@@ -532,7 +582,6 @@ private fun List<AgentMessage>.toolCallIds(): Set<String> = flatMap { message ->
 private fun List<AgentMessage>.toolResultIds(): Set<String> = flatMap { message ->
     message.parts.filterIsInstance<ToolResultPart>().map { it.toolCallId }
 }.toSet()
-
 internal fun serializeContextConversation(
     messages: List<AgentMessage>,
     maxToolResultChars: Int,
@@ -596,7 +645,7 @@ internal fun serializeContextConversation(
     }
 }
 
-private val CONTEXT_PROJECTION_CAPABILITIES = ProviderInputCapabilities(
+internal val CONTEXT_PROJECTION_CAPABILITIES = ProviderInputCapabilities(
     attachmentMimeTypePrefixes = setOf("image/"),
 )
 

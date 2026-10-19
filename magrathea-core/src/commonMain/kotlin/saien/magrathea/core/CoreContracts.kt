@@ -94,7 +94,29 @@ data class ContextPreparationRequest(
     val state: AgentStateSnapshot,
     val turn: Int,
     val reason: ContextPreparationReason = ContextPreparationReason.PROACTIVE,
-)
+    /**
+     * First message of the current logical run. Projection strategies protect it and every later
+     * message when [ToolResultClearingConfig.protectActiveRun] is set; null means the last user
+     * message.
+     */
+    val activeRunStartMessageId: String? = null,
+) {
+    /** Retains the constructor and default-argument signature published before active-run protection. */
+    constructor(
+        request: AgentRequest,
+        state: AgentStateSnapshot,
+        turn: Int,
+        reason: ContextPreparationReason = ContextPreparationReason.PROACTIVE,
+    ) : this(request, state, turn, reason, activeRunStartMessageId = null)
+
+    /** Retains the published copy/default-copy signatures while preserving the active-run start. */
+    fun copy(
+        request: AgentRequest = this.request,
+        state: AgentStateSnapshot = this.state,
+        turn: Int = this.turn,
+        reason: ContextPreparationReason = this.reason,
+    ): ContextPreparationRequest = ContextPreparationRequest(request, state, turn, reason, activeRunStartMessageId)
+}
 
 data class ContextPreparationResult(
     val messages: List<AgentMessage>,
@@ -104,6 +126,65 @@ data class ContextPreparationResult(
     val action: ContextPreparationAction,
     val summaryUsage: TokenUsage = TokenUsage(),
     val failure: ContextPreparationFailure? = null,
+    val toolResults: ToolResultContextReport = ToolResultContextReport(),
+) {
+    /** Retains the constructor and default-argument signature published before Tool-result reports. */
+    constructor(
+        messages: List<AgentMessage>,
+        state: ContextManagementState,
+        estimatedInputTokens: Long?,
+        inputLimitTokens: Long?,
+        action: ContextPreparationAction,
+        summaryUsage: TokenUsage = TokenUsage(),
+        failure: ContextPreparationFailure? = null,
+    ) : this(
+        messages,
+        state,
+        estimatedInputTokens,
+        inputLimitTokens,
+        action,
+        summaryUsage,
+        failure,
+        toolResults = ToolResultContextReport(),
+    )
+
+    /** Retains the published copy/default-copy signatures while preserving the Tool-result report. */
+    fun copy(
+        messages: List<AgentMessage> = this.messages,
+        state: ContextManagementState = this.state,
+        estimatedInputTokens: Long? = this.estimatedInputTokens,
+        inputLimitTokens: Long? = this.inputLimitTokens,
+        action: ContextPreparationAction = this.action,
+        summaryUsage: TokenUsage = this.summaryUsage,
+        failure: ContextPreparationFailure? = this.failure,
+    ): ContextPreparationResult = ContextPreparationResult(
+        messages,
+        state,
+        estimatedInputTokens,
+        inputLimitTokens,
+        action,
+        summaryUsage,
+        failure,
+        toolResults,
+    )
+}
+
+/** Content-free summary of how one preparation pass projected Tool results. */
+data class ToolResultContextReport(
+    /** Results reduced to the per-result budget in this projection. */
+    val reducedResults: Int = 0,
+    /** Estimated tokens removed by those reductions. */
+    val reducedTokens: Long = 0,
+    /** Results cleared by a pass that ran during this preparation. */
+    val newlyClearedResults: Int = 0,
+    /** Estimated tokens freed by that pass. */
+    val freedTokens: Long = 0,
+    /** Generation of the persisted clearing watermark, or zero when nothing is cleared. */
+    val clearingGeneration: Long = 0,
+    /** Trigger of the pass that ran during this preparation. */
+    val clearingTrigger: ToolResultClearingTrigger? = null,
+    /** Tool-supplied stubs ignored because they exceeded the configured size. */
+    val ignoredStubs: Int = 0,
 )
 
 /**
@@ -317,7 +398,7 @@ data class AgentSessionSnapshot(
     }
 }
 
-const val CURRENT_STORAGE_SCHEMA_VERSION: Int = 7
+const val CURRENT_STORAGE_SCHEMA_VERSION: Int = 8
 
 /** The first schema covered by the SDK-owned migration chain; older schemas are a clean break. */
 const val MINIMUM_READABLE_STORAGE_SCHEMA_VERSION: Int = 6
@@ -330,6 +411,11 @@ private val storageSchemaEvolution = StorageSchemaEvolution(
             id = "agent-storage-v6-to-v7-max-output-tokens",
             fromVersion = 6,
             migration = StorageSchemaV6ToV7Migration,
+        ),
+        RegisteredStorageSchemaMigration(
+            id = "agent-storage-v7-to-v8-tool-result-context",
+            fromVersion = 7,
+            migration = StorageSchemaV7ToV8Migration,
         ),
     ),
 )
@@ -380,7 +466,7 @@ class AgentSessionSnapshotCodec(
 
     fun encode(snapshot: AgentSessionSnapshot): String {
         validateSessionIdentity(snapshot)
-        return StorageSchemaV7Adapter.encodeSession(json, sdkVersion, snapshot)
+        return StorageSchemaV8Adapter.encodeSession(json, sdkVersion, snapshot)
     }
 
     fun decode(payload: String): AgentSessionSnapshot {
@@ -391,7 +477,7 @@ class AgentSessionSnapshotCodec(
     fun decodeResult(payload: String): StoredEnvelopeDecodeResult<AgentSessionSnapshot> {
         val evolved = storageSchemaEvolution.evolve(payload, json)
         return evolved.decodeCurrentResult {
-            val envelope = StorageSchemaV7Adapter.decodeSession(json, evolved.document)
+            val envelope = StorageSchemaV8Adapter.decodeSession(json, evolved.document)
             validateEnvelope(envelope.schemaVersion, envelope.sdkVersion)
             validateSessionIdentity(envelope.payload)
             validateCanonicalEnvelope(
@@ -415,7 +501,7 @@ class AgentCheckpointCodec(
 
     fun encode(checkpoint: AgentCheckpoint): String {
         validateCheckpointIdentity(checkpoint)
-        return StorageSchemaV7Adapter.encodeCheckpoint(json, sdkVersion, checkpoint)
+        return StorageSchemaV8Adapter.encodeCheckpoint(json, sdkVersion, checkpoint)
     }
 
     fun decode(payload: String): AgentCheckpoint {
@@ -426,7 +512,7 @@ class AgentCheckpointCodec(
     fun decodeResult(payload: String): StoredEnvelopeDecodeResult<AgentCheckpoint> {
         val evolved = storageSchemaEvolution.evolve(payload, json)
         return evolved.decodeCurrentResult {
-            val envelope = StorageSchemaV7Adapter.decodeCheckpoint(json, evolved.document)
+            val envelope = StorageSchemaV8Adapter.decodeCheckpoint(json, evolved.document)
             validateEnvelope(envelope.schemaVersion, envelope.sdkVersion)
             validateCheckpointIdentity(envelope.payload)
             validateCanonicalEnvelope(

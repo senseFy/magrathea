@@ -206,6 +206,10 @@ data class ContextManagementConfig(
     val toolResultSummaryMaxChars: Int = 2_000,
     val contextWindowTokensOverride: Long? = null,
     val overflowRetryLimit: Int = 1,
+    /** Bounds and clears Tool results in the Provider projection before semantic compaction. */
+    val toolResults: ToolResultContextConfig = ToolResultContextConfig(),
+    /** Unit counted by the portable estimator; [charsPerTokenEstimate] is the units per token. */
+    val estimationUnit: ContextEstimationUnit = ContextEstimationUnit.UTF8_BYTES,
 ) {
     init {
         require(reserveTokens > 0) { "reserveTokens must be greater than zero" }
@@ -219,6 +223,135 @@ data class ContextManagementConfig(
             "contextWindowTokensOverride must exceed reserveTokens"
         }
         require(overflowRetryLimit >= 0) { "overflowRetryLimit must not be negative" }
+    }
+
+    /** Retains the constructor and default-argument signature published before Tool-result stages. */
+    constructor(
+        enabled: Boolean = true,
+        reserveTokens: Long = 16_384,
+        keepRecentTokens: Long = 20_000,
+        summaryMaxTokens: Int = 4_096,
+        charsPerTokenEstimate: Int = 4,
+        toolResultSummaryMaxChars: Int = 2_000,
+        contextWindowTokensOverride: Long? = null,
+        overflowRetryLimit: Int = 1,
+    ) : this(
+        enabled,
+        reserveTokens,
+        keepRecentTokens,
+        summaryMaxTokens,
+        charsPerTokenEstimate,
+        toolResultSummaryMaxChars,
+        contextWindowTokensOverride,
+        overflowRetryLimit,
+        toolResults = ToolResultContextConfig(),
+        estimationUnit = ContextEstimationUnit.UTF8_BYTES,
+    )
+
+    /** Retains the published copy/default-copy signatures while preserving the Tool-result stages. */
+    fun copy(
+        enabled: Boolean = this.enabled,
+        reserveTokens: Long = this.reserveTokens,
+        keepRecentTokens: Long = this.keepRecentTokens,
+        summaryMaxTokens: Int = this.summaryMaxTokens,
+        charsPerTokenEstimate: Int = this.charsPerTokenEstimate,
+        toolResultSummaryMaxChars: Int = this.toolResultSummaryMaxChars,
+        contextWindowTokensOverride: Long? = this.contextWindowTokensOverride,
+        overflowRetryLimit: Int = this.overflowRetryLimit,
+    ): ContextManagementConfig = ContextManagementConfig(
+        enabled,
+        reserveTokens,
+        keepRecentTokens,
+        summaryMaxTokens,
+        charsPerTokenEstimate,
+        toolResultSummaryMaxChars,
+        contextWindowTokensOverride,
+        overflowRetryLimit,
+        toolResults = toolResults,
+        estimationUnit = estimationUnit,
+    )
+}
+
+/** Text unit counted by the portable token estimator. */
+@Serializable
+enum class ContextEstimationUnit {
+    /** UTF-16 code units; undercounts CJK text. Retained for requests persisted before schema 8. */
+    UTF16_CHARS,
+
+    /** UTF-8 bytes, which approximates tokens for CJK and Latin text alike. */
+    UTF8_BYTES,
+}
+
+/**
+ * Token threshold relative to the resolved Provider input limit, optionally capped.
+ *
+ * It resolves to the smaller of [inputPercent] of the input limit and [maxTokens]. With an unknown
+ * input limit it resolves to [maxTokens], or to nothing when no cap is set.
+ */
+@Serializable
+data class ContextTokenThreshold(
+    val inputPercent: Int? = null,
+    val maxTokens: Long? = null,
+) {
+    init {
+        require(inputPercent != null || maxTokens != null) {
+            "A context threshold requires an input percentage or a maximum"
+        }
+        require(inputPercent == null || inputPercent in 1..100) {
+            "Context threshold percentage must be between 1 and 100"
+        }
+        require(maxTokens == null || maxTokens > 0) { "Context threshold maximum must be positive" }
+    }
+
+    fun resolve(inputLimitTokens: Long?): Long? {
+        val relative = if (inputLimitTokens != null && inputPercent != null) {
+            (inputLimitTokens * inputPercent / 100).coerceAtLeast(1)
+        } else {
+            null
+        }
+        return listOfNotNull(relative, maxTokens).minOrNull()
+    }
+}
+
+/**
+ * Tool-result stages of the Provider projection. A null [budget] or [clearing] disables that stage.
+ * Authoritative history is never changed by either stage.
+ */
+@Serializable
+data class ToolResultContextConfig(
+    /** Maximum model-visible size of one Tool result. */
+    val budget: ContextTokenThreshold? = ContextTokenThreshold(inputPercent = 20, maxTokens = 12_000),
+    val clearing: ToolResultClearingConfig? = ToolResultClearingConfig(),
+    /** A Tool-supplied stub longer than this is ignored in favor of the generic stub. */
+    val maxStubChars: Int = 2_000,
+) {
+    init {
+        require(maxStubChars > 0) { "maxStubChars must be greater than zero" }
+    }
+
+    companion object {
+        /** Projects every Tool result unchanged. */
+        val DISABLED: ToolResultContextConfig = ToolResultContextConfig(budget = null, clearing = null)
+    }
+}
+
+/** When and how stale Tool results are replaced by stubs in the Provider projection. */
+@Serializable
+data class ToolResultClearingConfig(
+    /** Projected input size that triggers a clearing pass. */
+    val trigger: ContextTokenThreshold = ContextTokenThreshold(inputPercent = 50, maxTokens = 100_000),
+    /** Most recent clearable results that always stay intact. */
+    val keepRecentResults: Int = 3,
+    /** A pass that frees less than this is skipped, so each cache restart is worthwhile. */
+    val clearAtLeast: ContextTokenThreshold = ContextTokenThreshold(inputPercent = 10, maxTokens = 10_000),
+    /** Clears after this much inactivity, when the Provider prompt cache is likely cold. */
+    val idleAfterMillis: Long? = null,
+    /** Keeps every result of the current run intact, preserving in-flight reasoning continuity. */
+    val protectActiveRun: Boolean = true,
+) {
+    init {
+        require(keepRecentResults >= 0) { "keepRecentResults must not be negative" }
+        require(idleAfterMillis == null || idleAfterMillis > 0) { "idleAfterMillis must be positive" }
     }
 }
 
@@ -500,7 +633,53 @@ data class AgentStateSnapshot(
 data class ContextManagementState(
     val compaction: ContextCompaction? = null,
     val usageObservation: ContextUsageObservation? = null,
-)
+    val toolResultClearing: ToolResultClearing? = null,
+) {
+    /** Retains the constructor and default-argument signature published before clearing. */
+    constructor(
+        compaction: ContextCompaction? = null,
+        usageObservation: ContextUsageObservation? = null,
+    ) : this(compaction, usageObservation, toolResultClearing = null)
+
+    /** Retains the published copy/default-copy signatures while preserving the clearing state. */
+    fun copy(
+        compaction: ContextCompaction? = this.compaction,
+        usageObservation: ContextUsageObservation? = this.usageObservation,
+    ): ContextManagementState = ContextManagementState(compaction, usageObservation, toolResultClearing)
+}
+
+/** Why a Tool-result clearing pass ran. */
+@Serializable
+enum class ToolResultClearingTrigger {
+    PRESSURE,
+    IDLE,
+    OVERFLOW_RECOVERY,
+}
+
+/**
+ * Monotonic Tool-result clearing watermark. Every eligible result in messages up to and including
+ * [clearedThroughMessageId] is replaced by its stub in the Provider projection. [sourcePrefixDigest]
+ * invalidates the watermark when that message prefix is edited or regenerated.
+ */
+@Serializable
+data class ToolResultClearing(
+    val clearedThroughMessageId: String,
+    val sourcePrefixDigest: String,
+    val generation: Long,
+    val clearedResults: Int,
+    val freedTokens: Long,
+    val trigger: ToolResultClearingTrigger,
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS)
+    val createdAtEpochMs: Long = SystemEpochClock.nowEpochMs(),
+) {
+    init {
+        require(clearedThroughMessageId.isNotBlank()) { "clearedThroughMessageId must not be blank" }
+        require(sourcePrefixDigest.isNotBlank()) { "sourcePrefixDigest must not be blank" }
+        require(generation > 0) { "Clearing generation must be greater than zero" }
+        require(clearedResults >= 0) { "clearedResults must not be negative" }
+        require(freedTokens >= 0) { "freedTokens must not be negative" }
+    }
+}
 
 /**
  * One cumulative semantic compaction. The summary covers the immutable message prefix ending at
@@ -543,15 +722,63 @@ data class ContextUsageObservation(
     val provider: String,
     val model: String,
     val requestFingerprint: String,
+    val clearingGeneration: Long = 0,
+    val resultBudgetTokens: Long? = null,
 ) {
     init {
         require(inputTokens >= 0) { "Context usage inputTokens must not be negative" }
+        require(clearingGeneration >= 0) { "clearingGeneration must not be negative" }
+        require(resultBudgetTokens == null || resultBudgetTokens > 0) {
+            "resultBudgetTokens must be positive when known"
+        }
         require(historyPrefixDigest.isNotBlank()) { "historyPrefixDigest must not be blank" }
         require(compactionGeneration >= 0) { "compactionGeneration must not be negative" }
         require(provider.isNotBlank()) { "Context usage provider must not be blank" }
         require(model.isNotBlank()) { "Context usage model must not be blank" }
         require(requestFingerprint.isNotBlank()) { "requestFingerprint must not be blank" }
     }
+
+    /** Retains the constructor published before clearing generations and result budgets. */
+    constructor(
+        inputTokens: Long,
+        throughMessageId: String?,
+        historyPrefixDigest: String,
+        compactionGeneration: Long,
+        provider: String,
+        model: String,
+        requestFingerprint: String,
+    ) : this(
+        inputTokens,
+        throughMessageId,
+        historyPrefixDigest,
+        compactionGeneration,
+        provider,
+        model,
+        requestFingerprint,
+        clearingGeneration = 0,
+        resultBudgetTokens = null,
+    )
+
+    /** Retains the published copy/default-copy signatures while preserving the newer fields. */
+    fun copy(
+        inputTokens: Long = this.inputTokens,
+        throughMessageId: String? = this.throughMessageId,
+        historyPrefixDigest: String = this.historyPrefixDigest,
+        compactionGeneration: Long = this.compactionGeneration,
+        provider: String = this.provider,
+        model: String = this.model,
+        requestFingerprint: String = this.requestFingerprint,
+    ): ContextUsageObservation = ContextUsageObservation(
+        inputTokens,
+        throughMessageId,
+        historyPrefixDigest,
+        compactionGeneration,
+        provider,
+        model,
+        requestFingerprint,
+        clearingGeneration,
+        resultBudgetTokens,
+    )
 }
 
 @Serializable
@@ -913,11 +1140,88 @@ data class ToolResultPart(
     val modelResultVisible: Boolean = true,
     /** Optional bounded presentation identity of the external Tool source. */
     val origin: ToolOrigin? = null,
+    /** Runtime-only context hints; never sent to a Provider. */
+    val contextHints: ToolResultContextHints? = null,
 ) : MessagePart {
     init {
         requireValidUserErrorCode(userErrorCode, isError)
     }
+
+    /** Retains the constructor and default-argument signature published before context hints. */
+    constructor(
+        toolCallId: String,
+        toolName: String,
+        result: JsonElement,
+        isError: Boolean = false,
+        displayText: String? = null,
+        userErrorCode: String? = null,
+        metadata: JsonObject = buildJsonObject { },
+        content: List<ToolResultContent> = emptyList(),
+        providerMetadata: JsonObject? = null,
+        modelResultVisible: Boolean = true,
+        origin: ToolOrigin? = null,
+    ) : this(
+        toolCallId,
+        toolName,
+        result,
+        isError,
+        displayText,
+        userErrorCode,
+        metadata,
+        content,
+        providerMetadata,
+        modelResultVisible,
+        origin,
+        contextHints = null,
+    )
+
+    /** Retains the published copy/default-copy signatures while preserving context hints. */
+    fun copy(
+        toolCallId: String = this.toolCallId,
+        toolName: String = this.toolName,
+        result: JsonElement = this.result,
+        isError: Boolean = this.isError,
+        displayText: String? = this.displayText,
+        userErrorCode: String? = this.userErrorCode,
+        metadata: JsonObject = this.metadata,
+        content: List<ToolResultContent> = this.content,
+        providerMetadata: JsonObject? = this.providerMetadata,
+        modelResultVisible: Boolean = this.modelResultVisible,
+        origin: ToolOrigin? = this.origin,
+    ): ToolResultPart = ToolResultPart(
+        toolCallId,
+        toolName,
+        result,
+        isError,
+        displayText,
+        userErrorCode,
+        metadata,
+        content,
+        providerMetadata,
+        modelResultVisible,
+        origin,
+        contextHints,
+    )
 }
+
+/** Whether a Tool result may be cleared from the Provider projection. */
+@Serializable
+enum class ToolResultRetention {
+    STANDARD,
+
+    /** Never cleared: instructions, memory, or outcomes of irreversible actions. */
+    PINNED,
+}
+
+/**
+ * How a Tool result may be degraded in the Provider projection. [stub] is the model-visible,
+ * restorable summary kept when the result is cleared, such as a query and the URLs it found.
+ */
+@Serializable
+data class ToolResultContextHints(
+    val retention: ToolResultRetention = ToolResultRetention.STANDARD,
+    val stub: JsonElement? = null,
+)
 
 @Serializable
 @SerialName("attachment")
@@ -1049,10 +1353,40 @@ data class ToolExecutionRequest(
     val executionId: String,
     val assistantMessage: AgentMessage,
     val toolCall: ToolCallPart,
+    /** Model-visible size this result will be reduced to, so a Tool can shape its output. */
+    val resultBudgetTokens: Long? = null,
 ) {
     init {
         require(executionId.isNotBlank()) { "Tool execution ID must not be blank" }
+        require(resultBudgetTokens == null || resultBudgetTokens > 0) {
+            "Tool result budget must be positive when known"
+        }
     }
+
+    /** Retains the constructor published before result budgets. */
+    constructor(
+        sessionId: AgentSessionId,
+        runId: AgentRunId,
+        executionId: String,
+        assistantMessage: AgentMessage,
+        toolCall: ToolCallPart,
+    ) : this(sessionId, runId, executionId, assistantMessage, toolCall, resultBudgetTokens = null)
+
+    /** Retains the published copy/default-copy signatures while preserving the result budget. */
+    fun copy(
+        sessionId: AgentSessionId = this.sessionId,
+        runId: AgentRunId = this.runId,
+        executionId: String = this.executionId,
+        assistantMessage: AgentMessage = this.assistantMessage,
+        toolCall: ToolCallPart = this.toolCall,
+    ): ToolExecutionRequest = ToolExecutionRequest(
+        sessionId,
+        runId,
+        executionId,
+        assistantMessage,
+        toolCall,
+        resultBudgetTokens,
+    )
 }
 
 /** Host-owned assertion about replaying a Tool whose previous outcome is unknown. */
@@ -1076,10 +1410,64 @@ data class ToolExecutionResult(
     val modelResultVisible: Boolean = true,
     /** Optional bounded presentation identity of the external Tool source. */
     val origin: ToolOrigin? = null,
+    /** Runtime-only context hints; never sent to a Provider. */
+    val contextHints: ToolResultContextHints? = null,
 ) {
     init {
         requireValidUserErrorCode(userErrorCode, isError)
     }
+
+    /** Retains the constructor and default-argument signature published before context hints. */
+    constructor(
+        toolCallId: String,
+        toolName: String,
+        result: JsonElement,
+        isError: Boolean = false,
+        displayText: String? = null,
+        userErrorCode: String? = null,
+        metadata: JsonObject = buildJsonObject { },
+        content: List<ToolResultContent> = emptyList(),
+        modelResultVisible: Boolean = true,
+        origin: ToolOrigin? = null,
+    ) : this(
+        toolCallId,
+        toolName,
+        result,
+        isError,
+        displayText,
+        userErrorCode,
+        metadata,
+        content,
+        modelResultVisible,
+        origin,
+        contextHints = null,
+    )
+
+    /** Retains the published copy/default-copy signatures while preserving context hints. */
+    fun copy(
+        toolCallId: String = this.toolCallId,
+        toolName: String = this.toolName,
+        result: JsonElement = this.result,
+        isError: Boolean = this.isError,
+        displayText: String? = this.displayText,
+        userErrorCode: String? = this.userErrorCode,
+        metadata: JsonObject = this.metadata,
+        content: List<ToolResultContent> = this.content,
+        modelResultVisible: Boolean = this.modelResultVisible,
+        origin: ToolOrigin? = this.origin,
+    ): ToolExecutionResult = ToolExecutionResult(
+        toolCallId,
+        toolName,
+        result,
+        isError,
+        displayText,
+        userErrorCode,
+        metadata,
+        content,
+        modelResultVisible,
+        origin,
+        contextHints,
+    )
 }
 
 @Serializable
@@ -1102,6 +1490,7 @@ fun ToolExecutionResult.toMessagePart(providerMetadata: JsonObject? = null): Too
         providerMetadata = providerMetadata,
         modelResultVisible = modelResultVisible,
         origin = origin,
+        contextHints = contextHints,
     )
 }
 

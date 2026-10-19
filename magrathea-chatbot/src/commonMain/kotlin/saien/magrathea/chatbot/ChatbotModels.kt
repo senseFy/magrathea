@@ -266,13 +266,35 @@ data class ChatbotUsage(
 /**
  * Product-safe context-management metadata.
  *
- * The generated summary remains an internal runtime detail. Consumers can observe whether
- * compaction occurred without receiving the summary text or persistence identifiers.
+ * The generated summary and Tool-result stubs remain internal runtime details. Consumers can
+ * observe whether compaction or clearing occurred without receiving content or persistence
+ * identifiers.
  */
 data class ChatbotContextManagementSnapshot(
     val compactionGeneration: Long = 0,
     val tokensBeforeLastCompaction: Long? = null,
+    /** Generation of the Tool-result clearing watermark; zero when no result was cleared. */
+    val clearingGeneration: Long = 0,
+    /** Tool results currently replaced by stubs in the Provider projection. */
+    val clearedToolResults: Int = 0,
 ) {
+    /** Retains the constructor and default-argument signature published before clearing. */
+    constructor(
+        compactionGeneration: Long = 0,
+        tokensBeforeLastCompaction: Long? = null,
+    ) : this(compactionGeneration, tokensBeforeLastCompaction, clearingGeneration = 0, clearedToolResults = 0)
+
+    /** Retains the original copy/default-copy signatures while preserving clearing state. */
+    fun copy(
+        compactionGeneration: Long = this.compactionGeneration,
+        tokensBeforeLastCompaction: Long? = this.tokensBeforeLastCompaction,
+    ): ChatbotContextManagementSnapshot = ChatbotContextManagementSnapshot(
+        compactionGeneration,
+        tokensBeforeLastCompaction,
+        clearingGeneration = clearingGeneration,
+        clearedToolResults = clearedToolResults,
+    )
+
     val isCompacted: Boolean
         get() = compactionGeneration > 0
 }
@@ -372,6 +394,8 @@ internal fun ContextManagementState.toChatbotContextManagementSnapshot() =
     ChatbotContextManagementSnapshot(
         compactionGeneration = compaction?.generation ?: 0,
         tokensBeforeLastCompaction = compaction?.tokensBefore,
+        clearingGeneration = toolResultClearing?.generation ?: 0,
+        clearedToolResults = toolResultClearing?.clearedResults ?: 0,
     )
 
 data class ChatbotHistoryItem(

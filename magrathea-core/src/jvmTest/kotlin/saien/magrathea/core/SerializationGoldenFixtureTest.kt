@@ -49,9 +49,9 @@ class SerializationGoldenFixtureTest {
     }
 
     @Test
-    fun storedSessionEnvelope_matchesV7GoldenFixture() {
-        val expected = interruptedSessionFixture(maxOutputTokens = 16_384)
-        val fixture = resource("/v7/core/stored-session-envelope.json")
+    fun storedSessionEnvelope_matchesV8GoldenFixture() {
+        val expected = toolResultContextSessionFixture()
+        val fixture = resource("/v8/core/stored-session-envelope.json")
         val codec = AgentSessionSnapshotCodec(json, sdkVersion = fixtureSdkVersion)
 
         assertGolden(fixture, codec.encode(expected))
@@ -59,9 +59,51 @@ class SerializationGoldenFixtureTest {
     }
 
     @Test
-    fun storedCheckpointEnvelope_matchesV7GoldenFixture() {
+    fun storedCheckpointEnvelope_matchesV8GoldenFixture() {
+        val expected = checkpointFixture(
+            journalResult = journalToolResultFixture().copy(
+                contextHints = ToolResultContextHints(
+                    retention = ToolResultRetention.STANDARD,
+                    stub = buildJsonObject { put("query", JsonPrimitive("kmp architecture")) },
+                ),
+            ),
+        )
+        val fixture = resource("/v8/core/stored-checkpoint-envelope.json")
+        val codec = AgentCheckpointCodec(json, sdkVersion = fixtureSdkVersion)
+
+        assertGolden(fixture, codec.encode(expected))
+        assertEquals(expected, codec.decode(fixture))
+    }
+
+    @Test
+    fun shippedV7SessionEnvelopeMigratesToV8WithADisabledToolResultPolicy() {
+        val fixture = resource("/v7/core/stored-session-envelope.json")
+        val result = AgentSessionSnapshotCodec(json, sdkVersion = fixtureSdkVersion)
+            .decodeResult(fixture)
+
+        assertEquals(7, result.sourceSchemaVersion)
+        assertEquals(interruptedSessionFixture(maxOutputTokens = 16_384).migratedFromSchema7(), result.value)
+        val rewrite = requireNotNull(result.rewritePayload)
+        assertEquals(8, rewrite.schemaVersion())
+        assertEquals(result.value, AgentSessionSnapshotCodec(json).decode(rewrite))
+    }
+
+    @Test
+    fun shippedV7CheckpointEnvelopeMigratesToV8() {
+        val fixture = resource("/v7/core/stored-checkpoint-envelope.json")
+        val result = AgentCheckpointCodec(json, sdkVersion = fixtureSdkVersion)
+            .decodeResult(fixture)
+
+        assertEquals(7, result.sourceSchemaVersion)
+        assertEquals(checkpointFixture(journalResult = journalToolResultFixture()), result.value)
+        val rewrite = requireNotNull(result.rewritePayload)
+        assertEquals(8, rewrite.schemaVersion())
+        assertEquals(result.value, AgentCheckpointCodec(json).decode(rewrite))
+    }
+
+    private fun checkpointFixture(journalResult: ToolExecutionResult): AgentCheckpoint {
         val session = sessionFixture()
-        val expected = AgentCheckpoint(
+        return AgentCheckpoint(
             sessionId = session.sessionId,
             runId = session.runId,
             cursor = AgentResumeCursor(
@@ -87,15 +129,10 @@ class SerializationGoldenFixtureTest {
                     toolName = "image_search",
                     callOrdinal = 1,
                     state = ToolExecutionState.COMPLETED,
-                    result = journalToolResultFixture(),
+                    result = journalResult,
                 ),
             ),
         )
-        val fixture = resource("/v7/core/stored-checkpoint-envelope.json")
-        val codec = AgentCheckpointCodec(json, sdkVersion = fixtureSdkVersion)
-
-        assertGolden(fixture, codec.encode(expected))
-        assertEquals(expected, codec.decode(fixture))
     }
 
     @Test
@@ -109,7 +146,7 @@ class SerializationGoldenFixtureTest {
     }
 
     @Test
-    fun shippedV6SessionEnvelopeMigratesToV7WithUnknownOutputCapability() {
+    fun shippedV6SessionEnvelopeMigratesToV8WithUnknownOutputCapability() {
         val fixture = resource("/v6/core/stored-session-envelope.json")
         val result = AgentSessionSnapshotCodec(json, sdkVersion = fixtureSdkVersion)
             .decodeResult(fixture)
@@ -117,27 +154,19 @@ class SerializationGoldenFixtureTest {
         assertEquals(6, result.sourceSchemaVersion)
         assertEquals(null, result.value.request.model.maxOutputTokens)
         val rewrite = requireNotNull(result.rewritePayload)
-        assertEquals(
-            7,
-            json.parseToJsonElement(rewrite).jsonObject
-                .getValue("schemaVersion").jsonPrimitive.content.toInt(),
-        )
+        assertEquals(8, rewrite.schemaVersion())
         assertEquals(result.value, AgentSessionSnapshotCodec(json).decode(rewrite))
     }
 
     @Test
-    fun shippedV6CheckpointEnvelopeMigratesToV7() {
+    fun shippedV6CheckpointEnvelopeMigratesToV8() {
         val fixture = resource("/v6/core/stored-checkpoint-envelope.json")
         val result = AgentCheckpointCodec(json, sdkVersion = fixtureSdkVersion)
             .decodeResult(fixture)
 
         assertEquals(6, result.sourceSchemaVersion)
         val rewrite = requireNotNull(result.rewritePayload)
-        assertEquals(
-            7,
-            json.parseToJsonElement(rewrite).jsonObject
-                .getValue("schemaVersion").jsonPrimitive.content.toInt(),
-        )
+        assertEquals(8, rewrite.schemaVersion())
         assertEquals(result.value, AgentCheckpointCodec(json).decode(rewrite))
     }
 
@@ -361,6 +390,69 @@ class SerializationGoldenFixtureTest {
             ),
         )
     }
+
+    /** Schema-8 fields a session fixture exercises beyond the schema-7 baseline. */
+    private fun toolResultContextSessionFixture(): AgentSessionSnapshot {
+        val session = interruptedSessionFixture(maxOutputTokens = 16_384)
+        val runtime = session.request.engine.runtime
+        return session.copy(
+            request = session.request.copy(
+                engine = session.request.engine.copy(
+                    runtime = runtime.copy(
+                        contextManagement = runtime.contextManagement.copy(
+                            toolResults = ToolResultContextConfig(
+                                clearing = ToolResultClearingConfig(idleAfterMillis = 300_000),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            state = session.state.copy(
+                contextManagement = ContextManagementState(
+                    usageObservation = ContextUsageObservation(
+                        inputTokens = 9,
+                        throughMessageId = "user-fixture-1",
+                        historyPrefixDigest = "prefix-digest-fixture-1",
+                        compactionGeneration = 0,
+                        provider = "gemini",
+                        model = "gemini-contract",
+                        requestFingerprint = "request-fingerprint-fixture-1",
+                        clearingGeneration = 1,
+                        resultBudgetTokens = 12_000,
+                    ),
+                    toolResultClearing = ToolResultClearing(
+                        clearedThroughMessageId = "user-fixture-1",
+                        sourcePrefixDigest = "clearing-prefix-digest-fixture-1",
+                        generation = 1,
+                        clearedResults = 2,
+                        freedTokens = 4_200,
+                        trigger = ToolResultClearingTrigger.PRESSURE,
+                        createdAtEpochMs = 1_700_000_000_004,
+                    ),
+                ),
+            ),
+        )
+    }
+
+    /** The value a schema-7 session decodes to: Tool-result stages off, UTF-16 estimation. */
+    private fun AgentSessionSnapshot.migratedFromSchema7(): AgentSessionSnapshot {
+        val runtime = request.engine.runtime
+        return copy(
+            request = request.copy(
+                engine = request.engine.copy(
+                    runtime = runtime.copy(
+                        contextManagement = runtime.contextManagement.copy(
+                            toolResults = ToolResultContextConfig.DISABLED,
+                            estimationUnit = ContextEstimationUnit.UTF16_CHARS,
+                        ),
+                    ),
+                ),
+            ),
+        )
+    }
+
+    private fun String.schemaVersion(): Int =
+        json.parseToJsonElement(this).jsonObject.getValue("schemaVersion").jsonPrimitive.content.toInt()
 
     private fun resource(path: String): String {
         return requireNotNull(javaClass.getResource(path)) { "Missing serialization fixture $path" }.readText()

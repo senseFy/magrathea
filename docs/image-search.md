@@ -8,7 +8,9 @@ Magrathea exposes image search as a Provider-neutral Tool backed by an applicati
 1. The model calls `image_search` with a query.
 2. The backend returns normalized image URLs, source pages, optional previews, dimensions, MIME
    types, descriptions, publishers, and license data.
-3. `ImageSearchTool` validates and bounds the result.
+3. `ImageSearchTool` validates and bounds the result. Images are admitted in rank order while their
+   metadata fits `ToolExecutionRequest.resultBudgetTokens`; the result carries a restorable stub
+   with the query and source pages for [context clearing](context-management.md#tool-results).
 4. Structured metadata, including a stable `mediaReference`, returns to the model for synthesis.
 5. Typed image blocks and their references remain in canonical history and are projected by
    `magrathea-chatbot` for product rendering.

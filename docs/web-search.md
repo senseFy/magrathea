@@ -20,7 +20,8 @@ function-call contract across Providers.
 4. Runtime validates and authorizes the call, enforces any configured call budget and timeout, and
    invokes the backend.
 5. The Tool validates and bounds backend output, removes malformed or disallowed URLs, and returns
-   canonical JSON plus `Citation` metadata.
+   canonical JSON plus `Citation` metadata. Sources are admitted in rank order while they fit
+   `ToolExecutionRequest.resultBudgetTokens`, and `truncated` reports any omission.
 6. The normal agent loop sends that result back to the selected model for synthesis.
 
 Omitting the Tool from the registry and request disables search. Advertising it enables automatic
@@ -68,6 +69,11 @@ and `maxCallsPerRun` unset (`null`). Global Runtime limits, Tool timeouts, and a
 configured request-level Tool limit still apply.
 Citation presentation is product-owned and intentionally is not another `WebSearchPolicy` field;
 the Tool preserves citation metadata for every source admitted into model context.
+
+Each successful result carries `ToolResultContextHints` with a restorable stub: the query and the
+title and URL of each admitted source, without snippets. When context management clears an older
+result, the model keeps that stub and can cite or search again
+([context management](context-management.md#tool-results)).
 
 `WebSearchTool` defaults to `ToolRecoveryPolicy.REPLAY_SAFE`. A host whose backend must not repeat
 an invocation with an unknown outcome, including a backend with non-repeatable billing semantics,

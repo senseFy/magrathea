@@ -161,6 +161,7 @@ public final class saien/magrathea/runtime/InMemoryToolRegistry : saien/magrathe
 
 public final class saien/magrathea/runtime/TokenAwareContextManager : saien/magrathea/core/ContextManager {
 	public fun <init> (Lsaien/magrathea/core/ContextSummarizer;)V
+	public fun <init> (Lsaien/magrathea/core/ContextSummarizer;Lsaien/magrathea/core/EpochClock;)V
 	public fun prepare (Lsaien/magrathea/core/ContextPreparationRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 

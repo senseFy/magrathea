@@ -1,5 +1,6 @@
 package saien.magrathea.runtime.search
 
+import kotlin.test.assertNotNull
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
@@ -306,6 +307,28 @@ class XSearchToolContractTest {
         }.exceptionOrNull()
 
         assertSame(fatal, escaped)
+    }
+
+    @Test
+    fun evidenceCarriesAStubOfPostUrlsAndRespectsTheResultBudget() = runTest {
+        val tool = XSearchTool(XSearchBackend {
+            XSearchEvidence(
+                text = "Current discussion.",
+                citations = (1..5).map { index ->
+                    Citation("Post $index", "https://x.com/example/status/$index", "c".repeat(800))
+                },
+            )
+        })
+
+        val unbounded = tool.execute(executionRequest(buildJsonObject { put("query", "kmp") }))
+        val bounded = tool.execute(executionRequest(buildJsonObject { put("query", "kmp") }).copy(resultBudgetTokens = 300))
+
+        val stub = assertNotNull(unbounded.contextHints?.stub).jsonObject
+        assertEquals("kmp", stub.getValue("query").jsonPrimitive.content)
+        assertEquals(5, stub.getValue("sources").jsonArray.size)
+        assertFalse("c".repeat(100) in stub.toString())
+        assertEquals(1, bounded.result.jsonObject.getValue("sources").jsonArray.size)
+        assertEquals("true", bounded.result.jsonObject.getValue("truncated").jsonPrimitive.content)
     }
 
     private fun executionRequest(arguments: JsonObject): ToolExecutionRequest {

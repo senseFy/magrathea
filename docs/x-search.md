@@ -33,7 +33,10 @@ Returned `x_search_call` items are represented as Provider-owned activity rather
 5. `XSearchTool` validates that model-supplied filters only narrow host policy, then invokes the
    backend.
 6. The backend returns grounded text and citations. The Tool bounds and normalizes them as
-   untrusted external evidence before the normal agent loop continues.
+   untrusted external evidence before the normal agent loop continues. Citations are admitted in
+   order while they fit `ToolExecutionRequest.resultBudgetTokens`, and the result carries a
+   restorable stub with the query and post URLs for
+   [context clearing](context-management.md#tool-results).
 
 Omitting the Tool from the request disables X Search. The main model and the backend search model
 are independent selections.

@@ -1,5 +1,7 @@
 package saien.magrathea.runtime.search
 
+import kotlin.test.assertNotNull
+import saien.magrathea.core.ToolResultRetention
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -394,6 +396,47 @@ class WebSearchToolContractTest {
         val escaped = runCatching { tool.execute(executionRequest("valid")) }.exceptionOrNull()
 
         assertSame(fatal, escaped)
+    }
+
+    @Test
+    fun successfulResultsCarryARestorableStubWithoutSnippets() = runTest {
+        val result = WebSearchTool(WebSearchBackend {
+            WebSearchBackendResponse(listOf(
+                WebSearchSource(title = "First", url = "https://example.com/1", snippet = "private snippet one"),
+                WebSearchSource(title = "Second", url = "https://example.com/2", snippet = "private snippet two"),
+            ))
+        }).execute(executionRequest("kmp news"))
+
+        val hints = assertNotNull(result.contextHints)
+        val stub = assertNotNull(hints.stub).jsonObject
+        assertEquals(ToolResultRetention.STANDARD, hints.retention)
+        assertEquals("kmp news", stub.getValue("query").jsonPrimitive.content)
+        assertEquals(
+            listOf("https://example.com/1", "https://example.com/2"),
+            stub.getValue("sources").jsonArray.map { it.jsonObject.getValue("url").jsonPrimitive.content },
+        )
+        assertFalse("private snippet" in stub.toString())
+    }
+
+    @Test
+    fun resultBudgetAdmitsWholeSourcesInRankOrder() = runTest {
+        val sources = (1..8).map { index ->
+            WebSearchSource(title = "Result $index", url = "https://example.com/$index", snippet = "s".repeat(1_000))
+        }
+        val tool = WebSearchTool(
+            WebSearchBackend { WebSearchBackendResponse(sources) },
+            WebSearchPolicy(maxResultsPerQuery = 8, maxSourcesInContext = 8),
+        )
+
+        val unbounded = tool.execute(executionRequest("query"))
+        val bounded = tool.execute(executionRequest("query").copy(resultBudgetTokens = 700))
+
+        assertEquals(8, unbounded.result.jsonObject.getValue("sources").jsonArray.size)
+        val kept = bounded.result.jsonObject.getValue("sources").jsonArray
+            .map { it.jsonObject.getValue("url").jsonPrimitive.content }
+        assertEquals(listOf("https://example.com/1", "https://example.com/2"), kept)
+        assertEquals("true", bounded.result.jsonObject.getValue("truncated").jsonPrimitive.content)
+        assertEquals(2, bounded.citations().size)
     }
 
     private fun executionRequest(

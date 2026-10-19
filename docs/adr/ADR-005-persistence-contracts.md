@@ -24,12 +24,17 @@
 
 ## Schema evolution
 
-Schema 6 is the first SDK-owned migration baseline and schema 7 is the current format. Schemas 5
+Schema 6 is the first SDK-owned migration baseline and schema 8 is the current format. Schemas 5
 and older remain the intentional alpha clean break; they are retained as golden fixtures and
 rejected as unsupported older data. The additive schema-6-to-7 migration records the newly
 persisted `ModelDescriptor.maxOutputTokens` capability as `null`, preserving the prior meaning that
-the model's output capability was unknown. Successful full-record loads atomically rewrite the
-canonical schema-7 envelope through the existing storage adapter contract.
+the model's output capability was unknown. The additive schema-7-to-8 migration introduces
+Tool-result context management ([ADR-018](ADR-018-tool-result-context-lifecycle.md)): migrated
+requests receive an explicitly disabled Tool-result policy and UTF-16 estimation, Tool results and
+journal results receive `contextHints = null`, context state receives `toolResultClearing = null`,
+and usage observations are dropped because they lack the new projection anchors. Successful
+full-record loads atomically rewrite the canonical schema-8 envelope through the existing storage
+adapter contract.
 
 The SDK-owned machine-readable ledger is `persistence/schema-ledger.json`. It freezes schema 6 as
 the permanent migration baseline, each shipped session/checkpoint fixture by SHA-256, the current
