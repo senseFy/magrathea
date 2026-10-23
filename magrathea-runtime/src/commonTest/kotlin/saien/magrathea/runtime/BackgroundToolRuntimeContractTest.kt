@@ -1960,6 +1960,38 @@ class BackgroundToolRuntimeContractTest {
         executor.close()
     }
 
+    // S2-16: feature-off cancellation leaves pending calls unanswered — the preemption
+    // closure applies only to background-enabled Runs.
+    @Test
+    fun cancelWithoutBackgroundConfigLeavesCallsUnanswered() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("off-cancel")
+        executor.register(sessionId, NoopListener)
+        val tool = GatedTool("deep_lookup", ToolBackgroundPolicy.BLOCKING)
+        val provider = scriptedProvider("offcancel", toolCall("call-1", "deep_lookup"))
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(
+            provider = provider,
+            tools = listOf(tool),
+            background = executor,
+            persistence = persistence,
+        )
+        val collected = async {
+            runner.run(request("offcancel", sessionId, config = null)).toList()
+        }
+        runCurrent()
+        val cancelJob = async { runner.cancel(sessionId) }
+        runCurrent()
+        cancelJob.await()
+        runCatching { collected.await() }
+
+        val persisted = persistence.load(sessionId)!!.snapshot.state
+        assertEquals(saien.magrathea.core.AgentStatus.CANCELLED, persisted.status)
+        assertTrue(persisted.messages.none { it.role == MessageRole.TOOL })
+        assertEquals(1, persisted.pendingToolCalls.size)
+    }
+
     // ---- harness ----
 
     private fun TestScope.executor(store: BackgroundExecutionStore): BackgroundToolExecutor =

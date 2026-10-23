@@ -137,6 +137,127 @@ class ChatbotSnapshotBinaryContractTest {
         assertEquals(cleared, defaults)
     }
 
+    @Test
+    fun replayAwareSignaturesRemainCallableAndPreserveBackground() {
+        val replayParameters = legacyParameterTypes +
+            ChatbotStopReason::class.java + ReplayReport::class.java
+        val report = ReplayReport(AgentRunId("run"), 0, "test-provider", "test-model", emptyList())
+        val background = ChatbotBackgroundSnapshot(
+            executions = listOf(
+                ChatbotBackgroundExecution(
+                    handle = "bg_handle",
+                    toolName = "deep_lookup",
+                    originCallId = "call-1",
+                    state = ChatbotBackgroundState.RUNNING,
+                ),
+            ),
+            hasPendingActivation = true,
+            requiresExecutionHost = true,
+        )
+        val original = snapshot(stopReason = ChatbotStopReason.MAX_TURNS)
+            .copy(replay = report, background = background)
+        val arguments = legacyArguments(original).plus(
+            elements = arrayOf<Any?>(original.stopReason, report),
+        )
+        val constructed = snapshotClass.getConstructor(*replayParameters)
+            .newInstance(*arguments) as ChatbotSnapshot
+        assertEquals(original.stopReason, constructed.stopReason)
+        assertEquals(report, constructed.replay)
+        assertNull(constructed.background)
+        val copied = snapshotClass.getMethod("copy", *replayParameters)
+            .invoke(original, *arguments) as ChatbotSnapshot
+        assertEquals(original, copied)
+        assertEquals(background, copied.background)
+    }
+
+    @Test
+    fun backgroundAwareConstructorAndCopyProjectTheExecutionView() {
+        val allParameters = legacyParameterTypes +
+            ChatbotStopReason::class.java + ReplayReport::class.java +
+            ChatbotBackgroundSnapshot::class.java
+        val background = ChatbotBackgroundSnapshot(
+            executions = listOf(
+                ChatbotBackgroundExecution(
+                    handle = "bg_handle",
+                    toolName = "deep_lookup",
+                    originCallId = "call-1",
+                    state = ChatbotBackgroundState.SUCCEEDED,
+                ),
+            ),
+            hasPendingActivation = true,
+            requiresExecutionHost = false,
+        )
+        val replacement = ChatbotBackgroundSnapshot(
+            executions = emptyList(),
+            hasPendingActivation = false,
+            requiresExecutionHost = false,
+        )
+        val base = snapshot()
+        val arguments = legacyArguments(base).plus(
+            elements = arrayOf<Any?>(null, null, background),
+        )
+        val constructed = snapshotClass.getConstructor(*allParameters)
+            .newInstance(*arguments) as ChatbotSnapshot
+        assertEquals(background, constructed.background)
+        val copied = snapshotClass.getMethod("copy", *allParameters)
+            .invoke(constructed, *legacyArguments(base.copy(background = replacement)),
+                null, null, replacement) as ChatbotSnapshot
+        assertEquals(replacement, copied.background)
+    }
+
+    @Test
+    fun toolActivityRetainsItsLegacySignatureAndProjectsBackground() {
+        val type = ChatbotToolActivitySnapshot::class.java
+        val legacyParameters = arrayOf(
+            ChatbotToolActivityKey::class.java,
+            ChatbotToolCall::class.java,
+            ChatbotToolActivityStatus::class.java,
+            String::class.java,
+            ChatbotToolResult::class.java,
+        )
+        val backgroundParameters = legacyParameters + ChatbotBackgroundExecution::class.java
+        val key = ChatbotToolActivityKey(messageId = "message", callOrdinal = 0)
+        val call = ChatbotToolCall(id = "call-1", name = "deep_lookup", arguments = "{}", partial = false)
+        val result = ChatbotToolResult(id = "call-1", name = "deep_lookup", text = "done", isError = false)
+        val background = ChatbotBackgroundExecution(
+            handle = "bg_handle",
+            toolName = "deep_lookup",
+            originCallId = "call-1",
+            state = ChatbotBackgroundState.RUNNING,
+        )
+        val legacy = type.getConstructor(*legacyParameters)
+            .newInstance(key, call, ChatbotToolActivityStatus.PENDING, "result-message", result)
+            as ChatbotToolActivitySnapshot
+        assertNull(legacy.background)
+        val copied = type.getMethod("copy", *legacyParameters).invoke(
+            legacy, key, call, ChatbotToolActivityStatus.RUNNING, "result-message", result,
+        ) as ChatbotToolActivitySnapshot
+        assertNull(copied.background)
+        assertEquals(ChatbotToolActivityStatus.RUNNING, copied.status)
+        val projected = type.getConstructor(*backgroundParameters)
+            .newInstance(key, call, ChatbotToolActivityStatus.RUNNING, "result-message", result, background)
+            as ChatbotToolActivitySnapshot
+        assertEquals(background, projected.background)
+        val replaced = type.getMethod("copy", *backgroundParameters).invoke(
+            projected, key, call, ChatbotToolActivityStatus.SUCCEEDED, "result-message", result,
+            background,
+        ) as ChatbotToolActivitySnapshot
+        assertEquals(background, replaced.background)
+        assertEquals(ChatbotToolActivityStatus.SUCCEEDED, replaced.status)
+    }
+
+    @Test
+    fun backgroundCancellationRetainsItsPublishedShape() {
+        val cancellation = ChatbotBackgroundCancellation(
+            cancelled = listOf("bg_a"),
+            alreadyFinished = listOf("bg_b"),
+            unknown = listOf("bg_c"),
+        )
+        assertEquals(listOf("bg_a"), cancellation.cancelled)
+        assertEquals(listOf("bg_b"), cancellation.alreadyFinished)
+        assertEquals(listOf("bg_c"), cancellation.unknown)
+    }
+
     private fun configuration() = ChatbotSessionConfiguration(
         model = ModelDescriptor(provider = "test-provider", model = "test-model"),
     )

@@ -1,5 +1,6 @@
 package saien.magrathea.chatbot
 
+import saien.magrathea.core.BackgroundOutcome
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolExecutionRecord
 import saien.magrathea.core.ToolExecutionResult
@@ -118,6 +119,54 @@ internal fun List<ChatbotToolActivitySnapshot>.withToolExecutions(
             }
         }
     }
+}
+
+internal fun List<ChatbotToolActivitySnapshot>.withToolHandedOff(
+    toolCallId: String,
+    toolName: String,
+    handle: String,
+): List<ChatbotToolActivitySnapshot> = updateLastMatching(toolCallId, toolName) { activity ->
+    activity.copy(
+        status = ChatbotToolActivityStatus.RUNNING,
+        result = null,
+        background = ChatbotBackgroundExecution(
+            handle = handle,
+            toolName = toolName,
+            originCallId = activity.call.id,
+            state = ChatbotBackgroundState.RUNNING,
+        ),
+    )
+}
+
+internal fun List<ChatbotToolActivitySnapshot>.withBackgroundSettled(
+    handle: String,
+    state: ChatbotBackgroundState,
+): List<ChatbotToolActivitySnapshot> {
+    val index = indexOfLast { it.background?.handle == handle }
+    if (index < 0) return this
+    return toMutableList().also { activities ->
+        val activity = activities[index]
+        activities[index] = activity.copy(
+            status = when (state) {
+                ChatbotBackgroundState.SUCCEEDED -> ChatbotToolActivityStatus.SUCCEEDED
+                ChatbotBackgroundState.FAILED -> ChatbotToolActivityStatus.FAILED
+                ChatbotBackgroundState.CANCELLED -> ChatbotToolActivityStatus.CANCELLED
+                ChatbotBackgroundState.INTERRUPTED -> ChatbotToolActivityStatus.INTERRUPTED
+                ChatbotBackgroundState.QUEUED -> ChatbotToolActivityStatus.PENDING
+                ChatbotBackgroundState.RUNNING -> ChatbotToolActivityStatus.RUNNING
+            },
+            background = activity.background?.copy(state = state),
+        )
+    }
+}
+
+internal fun BackgroundOutcome.toChatbotBackgroundState(): ChatbotBackgroundState = when (this) {
+    BackgroundOutcome.SUCCEEDED -> ChatbotBackgroundState.SUCCEEDED
+    BackgroundOutcome.ERROR,
+    BackgroundOutcome.TIMEOUT,
+    -> ChatbotBackgroundState.FAILED
+    BackgroundOutcome.CANCELLED -> ChatbotBackgroundState.CANCELLED
+    BackgroundOutcome.INTERRUPTED -> ChatbotBackgroundState.INTERRUPTED
 }
 
 internal fun List<ChatbotToolActivitySnapshot>.withUnresolvedToolActivities(

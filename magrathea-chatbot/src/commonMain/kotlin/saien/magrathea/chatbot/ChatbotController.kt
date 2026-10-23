@@ -15,6 +15,8 @@ import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentRequest
 import saien.magrathea.core.MessageRole
+import saien.magrathea.runtime.AgentSessionErrorCode
+import saien.magrathea.runtime.AgentSessionException
 import saien.magrathea.runtime.AgentSessionLease
 import saien.magrathea.runtime.AgentSessionPhase
 import saien.magrathea.runtime.AgentSessionRuntimeSnapshot
@@ -128,6 +130,62 @@ internal class ChatbotController(
         }
     }
 
+    /**
+     * Starts the pending background activation through [ChatbotRequestFactory] without appending a
+     * user message. Returns false when nothing is pending, a Run is executing, or the lease
+     * rejects the command (a projection race with another start).
+     */
+    suspend fun continueWithBackgroundResults(): Boolean = commandMutex.withLock {
+        if (closed) return@withLock false
+        val runtime = lease.state.value
+        if (runtime.background?.pendingActivation == null) return@withLock false
+        if (runtime.phase.hasPendingExecution) return@withLock false
+        try {
+            lease.startContinuation(buildRequest(runtime.authoritativeMessages()))
+        } catch (failure: AgentSessionException) {
+            if (failure.code == AgentSessionErrorCode.INVALID_STATE) return@withLock false
+            throw failure
+        }
+        syncFromLease()
+        true
+    }
+
+    suspend fun stopAll() = commandMutex.withLock {
+        if (closed) return@withLock
+        lease.stopAll()
+        syncFromLease()
+    }
+
+    suspend fun cancelBackground(handles: List<String>): ChatbotBackgroundCancellation =
+        commandMutex.withLock {
+            if (closed) {
+                return@withLock ChatbotBackgroundCancellation(
+                    cancelled = emptyList(),
+                    alreadyFinished = emptyList(),
+                    unknown = emptyList(),
+                )
+            }
+            val result = lease.cancelBackground(handles)
+            syncFromLease()
+            ChatbotBackgroundCancellation(
+                cancelled = result.cancelled,
+                alreadyFinished = result.alreadyFinished,
+                unknown = result.unknown,
+            )
+        }
+
+    suspend fun suspendBackground() = commandMutex.withLock {
+        if (closed) return@withLock
+        lease.suspendBackground()
+        syncFromLease()
+    }
+
+    suspend fun resumeBackground() = commandMutex.withLock {
+        if (closed) return@withLock
+        lease.resumeBackground()
+        syncFromLease()
+    }
+
     suspend fun close() {
         val shouldClose = commandMutex.withLock {
             if (closed) false else {
@@ -207,11 +265,15 @@ private fun projectRuntime(
     val messages = runtime.authoritativeMessages().toChatbotMessageSnapshots()
     val status = runtime.toChatbotStatus(eventProjection.status)
     var toolActivities = reconcileToolActivities(messages, eventProjection.toolActivities)
-    state?.pendingToolCalls?.forEach { toolCall ->
-        toolActivities = toolActivities.withToolRequested(toolCall)
-    }
+    state?.pendingToolCalls
+        ?.filterNot { isBackgroundControlTool(it.toolName) }
+        ?.forEach { toolCall ->
+            toolActivities = toolActivities.withToolRequested(toolCall)
+        }
     (runtime.lastEvent as? AgentEvent.ToolCompleted)?.let { event ->
-        toolActivities = toolActivities.withToolCompleted(event.result)
+        if (!isBackgroundControlTool(event.result.toolName)) {
+            toolActivities = toolActivities.withToolCompleted(event.result)
+        }
     }
     toolActivities = toolActivities.withToolExecutions(messages, runtime.toolExecutions)
     val terminalToolStatus = when (status) {
@@ -229,6 +291,13 @@ private fun projectRuntime(
     if (terminalToolStatus != null) {
         toolActivities = toolActivities.withUnresolvedToolActivities(terminalToolStatus)
     }
+    toolActivities = toolActivities.applyBackgroundProjection(
+        buildBackgroundProjection(
+            background = runtime.background,
+            messages = runtime.authoritativeMessages(),
+            toolExecutions = runtime.toolExecutions,
+        ),
+    )
 
     return eventProjection.copy(
         configuration = runtime.request?.toChatbotSessionConfiguration() ?: fallbackConfiguration,
@@ -251,6 +320,7 @@ private fun projectRuntime(
             ?: eventProjection.contextManagement,
         toolActivities = toolActivities,
         replay = runtime.replay,
+        background = runtime.background?.toChatbotBackgroundSnapshot(),
     )
 }
 

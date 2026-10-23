@@ -36,6 +36,7 @@ import saien.magrathea.core.ToolResultPart
 import saien.magrathea.core.citations
 import saien.magrathea.core.requireSupports
 import saien.magrathea.core.text
+import saien.magrathea.runtime.BackgroundToolInstructions
 
 enum class ChatbotStatus {
     IDLE,
@@ -235,6 +236,38 @@ data class ChatbotToolActivityKey(
     val callOrdinal: Int,
 )
 
+/** Product-safe lifecycle of one Session-owned background Tool execution. */
+enum class ChatbotBackgroundState {
+    QUEUED,
+    RUNNING,
+    SUCCEEDED,
+    FAILED,
+    CANCELLED,
+    INTERRUPTED,
+}
+
+/** Product-safe view of one Session-owned background execution tied to its originating call. */
+data class ChatbotBackgroundExecution(
+    val handle: String,
+    val toolName: String,
+    val originCallId: String,
+    val state: ChatbotBackgroundState,
+)
+
+/** Session-owned background work projected for hosts; null while the runtime reports none. */
+data class ChatbotBackgroundSnapshot(
+    val executions: List<ChatbotBackgroundExecution>,
+    val hasPendingActivation: Boolean,
+    val requiresExecutionHost: Boolean,
+)
+
+/** Partitioned outcome of one cancelBackground command. */
+data class ChatbotBackgroundCancellation(
+    val cancelled: List<String>,
+    val alreadyFinished: List<String>,
+    val unknown: List<String>,
+)
+
 /** Derived lifecycle for one Tool call. Canonical messages remain the persisted source of truth. */
 data class ChatbotToolActivitySnapshot(
     val key: ChatbotToolActivityKey,
@@ -242,7 +275,30 @@ data class ChatbotToolActivitySnapshot(
     val status: ChatbotToolActivityStatus,
     val resultMessageId: String? = null,
     val result: ChatbotToolResult? = null,
-)
+    /** Session-owned background execution that answers this call through a receipt. */
+    val background: ChatbotBackgroundExecution? = null,
+) {
+    /** Retains the constructor published before background activities were projected. */
+    constructor(
+        key: ChatbotToolActivityKey,
+        call: ChatbotToolCall,
+        status: ChatbotToolActivityStatus,
+        resultMessageId: String? = null,
+        result: ChatbotToolResult? = null,
+    ) : this(key, call, status, resultMessageId, result, background = null)
+
+    /** Retains the pre-background copy/default-copy signatures while keeping the execution view. */
+    fun copy(
+        key: ChatbotToolActivityKey = this.key,
+        call: ChatbotToolCall = this.call,
+        status: ChatbotToolActivityStatus = this.status,
+        resultMessageId: String? = this.resultMessageId,
+        result: ChatbotToolResult? = this.result,
+    ): ChatbotToolActivitySnapshot = ChatbotToolActivitySnapshot(
+        key, call, status, resultMessageId, result, background = background,
+    )
+
+}
 
 data class ChatbotMessageSnapshot(
     val id: String,
@@ -315,6 +371,8 @@ data class ChatbotSnapshot(
     val stopReason: ChatbotStopReason? = null,
     /** Latest whole-message replay decisions, shared with the managed Runtime snapshot. */
     val replay: ReplayReport? = null,
+    /** Session-owned background work; null while the runtime snapshot reports none. */
+    val background: ChatbotBackgroundSnapshot? = null,
 ) {
     /** Retains the constructor published with the run stop reason. */
     constructor(
@@ -332,6 +390,26 @@ data class ChatbotSnapshot(
     ) : this(
         configuration, sessionId, messages, status, failure, interruption, usage,
         latestRequestUsage, contextManagement, toolActivities, stopReason, replay = null,
+    )
+
+    /** Retains the replay-aware constructor published before the background projection. */
+    constructor(
+        configuration: ChatbotSessionConfiguration,
+        sessionId: String? = null,
+        messages: List<ChatbotMessageSnapshot> = emptyList(),
+        status: ChatbotStatus = ChatbotStatus.IDLE,
+        failure: ChatbotFailure? = null,
+        interruption: ChatbotInterruption? = null,
+        usage: ChatbotUsage = ChatbotUsage(),
+        latestRequestUsage: ChatbotUsage = ChatbotUsage(),
+        contextManagement: ChatbotContextManagementSnapshot = ChatbotContextManagementSnapshot(),
+        toolActivities: List<ChatbotToolActivitySnapshot> = emptyList(),
+        stopReason: ChatbotStopReason? = null,
+        replay: ReplayReport? = null,
+    ) : this(
+        configuration, sessionId, messages, status, failure, interruption, usage,
+        latestRequestUsage, contextManagement, toolActivities, stopReason, replay,
+        background = null,
     )
 
     /** Retains the original constructor and its default-argument signature for compiled hosts. */
@@ -384,6 +462,26 @@ data class ChatbotSnapshot(
     ): ChatbotSnapshot = ChatbotSnapshot(
         configuration, sessionId, messages, status, failure, interruption, usage,
         latestRequestUsage, contextManagement, toolActivities, stopReason = stopReason, replay = replay,
+    )
+
+    /** Retains the replay-aware copy/default-copy signatures while keeping background state. */
+    fun copy(
+        configuration: ChatbotSessionConfiguration = this.configuration,
+        sessionId: String? = this.sessionId,
+        messages: List<ChatbotMessageSnapshot> = this.messages,
+        status: ChatbotStatus = this.status,
+        failure: ChatbotFailure? = this.failure,
+        interruption: ChatbotInterruption? = this.interruption,
+        usage: ChatbotUsage = this.usage,
+        latestRequestUsage: ChatbotUsage = this.latestRequestUsage,
+        contextManagement: ChatbotContextManagementSnapshot = this.contextManagement,
+        toolActivities: List<ChatbotToolActivitySnapshot> = this.toolActivities,
+        stopReason: ChatbotStopReason? = this.stopReason,
+        replay: ReplayReport? = this.replay,
+    ): ChatbotSnapshot = ChatbotSnapshot(
+        configuration, sessionId, messages, status, failure, interruption, usage,
+        latestRequestUsage, contextManagement, toolActivities, stopReason, replay,
+        background = background,
     )
 
     val isRunning: Boolean
@@ -452,7 +550,23 @@ class ChatbotException(
 
 /** Runtime notices are not conversation content; request-building lists keep them, snapshots skip them. */
 internal fun List<AgentMessage>.toChatbotMessageSnapshots(): List<ChatbotMessageSnapshot> =
-    filter { it.role != MessageRole.RUNTIME }.map { it.toChatbotMessageSnapshot() }
+    filter { it.role != MessageRole.RUNTIME }
+        .map { message -> message to message.toChatbotMessageSnapshot() }
+        .filter { (original, snapshot) ->
+            // Runtime control calls never surface; drop only messages the filtering emptied.
+            original.parts.none { it is ToolCallPart && isBackgroundControlTool(it.toolName) } &&
+                original.parts.none { it is ToolResultPart && isBackgroundControlTool(it.toolName) } ||
+                snapshot.text.isNotBlank() ||
+                snapshot.textBlocks.isNotEmpty() ||
+                snapshot.reasoning.isNotEmpty() ||
+                snapshot.attachments.isNotEmpty() ||
+                snapshot.toolCalls.isNotEmpty() ||
+                snapshot.toolResults.isNotEmpty()
+        }
+        .map { it.second }
+
+internal fun isBackgroundControlTool(toolName: String): Boolean =
+    toolName in BackgroundToolInstructions.CONTROL_TOOL_NAMES
 
 internal fun AgentMessage.toChatbotMessageSnapshot(): ChatbotMessageSnapshot = ChatbotMessageSnapshot(
     id = id,
@@ -472,8 +586,12 @@ internal fun AgentMessage.toChatbotMessageSnapshot(): ChatbotMessageSnapshot = C
     attachments = parts.filterIsInstance<AttachmentPart>().map {
         ChatbotAttachment(uri = it.uri, mimeType = it.mimeType, fileName = it.fileName)
     },
-    toolCalls = parts.filterIsInstance<ToolCallPart>().map(ToolCallPart::toChatbotToolCall),
-    toolResults = parts.filterIsInstance<ToolResultPart>().map(ToolResultPart::toChatbotToolResult),
+    toolCalls = parts.filterIsInstance<ToolCallPart>()
+        .filterNot { isBackgroundControlTool(it.toolName) }
+        .map(ToolCallPart::toChatbotToolCall),
+    toolResults = parts.filterIsInstance<ToolResultPart>()
+        .filterNot { isBackgroundControlTool(it.toolName) }
+        .map(ToolResultPart::toChatbotToolResult),
     createdAtEpochMs = createdAtEpochMs,
     stopReason = stopReason?.toChatbotStopReason(),
 )

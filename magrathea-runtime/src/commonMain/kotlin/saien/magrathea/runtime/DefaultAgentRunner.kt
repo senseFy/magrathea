@@ -836,13 +836,21 @@ class DefaultAgentRunner(
             persistence.load(sessionId)
         } ?: return null
         if (record.snapshot.statusIsTerminal()) return record.snapshot.runId
-        val closedMessages = closePreemptedToolCalls(
-            request = record.snapshot.request,
-            runId = record.snapshot.runId,
-            messages = record.snapshot.state.messages,
-            pendingCalls = record.snapshot.state.pendingToolCalls,
-            journal = record.checkpoint?.toolExecutions.orEmpty(),
-        )
+        val closedMessages =
+            if (
+                background != null &&
+                record.snapshot.request.engine.runtime.background != null
+            ) {
+                closePreemptedToolCalls(
+                    request = record.snapshot.request,
+                    runId = record.snapshot.runId,
+                    messages = record.snapshot.state.messages,
+                    pendingCalls = record.snapshot.state.pendingToolCalls,
+                    journal = record.checkpoint?.toolExecutions.orEmpty(),
+                )
+            } else {
+                record.snapshot.state.messages
+            }
         val cancelledState = record.snapshot.state.copy(
             messages = closedMessages,
             status = AgentStatus.CANCELLED,
@@ -1650,14 +1658,21 @@ class DefaultAgentRunner(
                     StopIntent.ACTIVE,
                     StopIntent.CANCEL,
                     -> {
-                        runState.value = runState.value.copy(
-                            messages = closePreemptedToolCalls(
+                        // Send-preemption closure only applies to background-enabled Runs;
+                        // feature-off cancellation stays byte-identical to before.
+                        val closedMessages = if (isBackgroundEnabled(activeRequest)) {
+                            closePreemptedToolCalls(
                                 request = activeRequest,
                                 runId = runId,
                                 messages = runState.value.messages,
                                 pendingCalls = runState.value.pendingToolCalls,
                                 journal = safeCheckpoint.toolExecutions,
-                            ),
+                            )
+                        } else {
+                            runState.value.messages
+                        }
+                        runState.value = runState.value.copy(
+                            messages = closedMessages,
                             status = AgentStatus.CANCELLED,
                             stopReason = StopReason.CANCELLED,
                         )

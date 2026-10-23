@@ -41,17 +41,40 @@ internal class ChatbotEventReducer {
                 toolActivities = reconcileToolActivities(messages, state.toolActivities),
             )
         }
-        is AgentEvent.ToolRequested -> state.copy(
-            status = ChatbotStatus.WAITING_FOR_TOOL,
-            toolActivities = state.toolActivities.withToolRequested(event.toolCall),
+        is AgentEvent.ToolRequested -> {
+            // Runtime control calls never become activities.
+            if (isBackgroundControlTool(event.toolCall.toolName)) {
+                state.copy(status = ChatbotStatus.RUNNING)
+            } else {
+                state.copy(
+                    status = ChatbotStatus.WAITING_FOR_TOOL,
+                    toolActivities = state.toolActivities.withToolRequested(event.toolCall),
+                )
+            }
+        }
+        is AgentEvent.ToolCompleted -> {
+            if (isBackgroundControlTool(event.result.toolName)) {
+                state.copy(status = ChatbotStatus.RUNNING)
+            } else {
+                state.copy(
+                    status = ChatbotStatus.RUNNING,
+                    toolActivities = state.toolActivities.withToolCompleted(event.result),
+                )
+            }
+        }
+        is AgentEvent.ToolHandedOff -> state.copy(
+            toolActivities = state.toolActivities.withToolHandedOff(
+                toolCallId = event.toolCallId,
+                toolName = event.toolName,
+                handle = event.receipt.handle,
+            ),
         )
-        is AgentEvent.ToolCompleted -> state.copy(
-            status = ChatbotStatus.RUNNING,
-            toolActivities = state.toolActivities.withToolCompleted(event.result),
+        is AgentEvent.BackgroundExecutionSettled -> state.copy(
+            toolActivities = state.toolActivities.withBackgroundSettled(
+                handle = event.handle,
+                state = event.outcome.toChatbotBackgroundState(),
+            ),
         )
-        // A receipt never resolves its activity; background state projects in a later slice.
-        is AgentEvent.ToolHandedOff,
-        is AgentEvent.BackgroundExecutionSettled -> state
         is AgentEvent.Completed -> {
             val messages = event.state.messages.toChatbotMessageSnapshots()
             state.copy(
