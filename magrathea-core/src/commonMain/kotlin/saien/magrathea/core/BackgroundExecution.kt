@@ -240,6 +240,11 @@ interface BackgroundExecutionStore {
     suspend fun upsert(record: BackgroundExecutionRecord)
     suspend fun putOrigin(origin: BackgroundOriginContext)
     suspend fun load(sessionId: AgentSessionId): BackgroundSessionRecords
+    /**
+     * Deletes one record of the Session; used when the host prunes regenerated history. A late
+     * settlement callback for a deleted record is discarded by the executor.
+     */
+    suspend fun delete(sessionId: AgentSessionId, executionId: String)
     suspend fun deleteOrigin(sessionId: AgentSessionId, runId: AgentRunId)
     suspend fun deleteSession(sessionId: AgentSessionId)
     suspend fun clear()

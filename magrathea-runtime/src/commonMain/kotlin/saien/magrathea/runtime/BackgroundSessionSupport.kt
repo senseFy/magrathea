@@ -181,6 +181,13 @@ internal fun renderRuntimeNotice(
     append("</runtime_notice>")
 }
 
+/** Result of a host- or model-requested background cancellation. */
+data class BackgroundCancellationResult(
+    val cancelled: List<String>,
+    val alreadyFinished: List<String>,
+    val unknown: List<String>,
+)
+
 /** Live projection of one Session-owned background execution for session views. */
 data class BackgroundExecutionView(
     val handle: String,

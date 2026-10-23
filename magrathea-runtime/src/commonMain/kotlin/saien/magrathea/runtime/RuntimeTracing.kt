@@ -24,6 +24,7 @@ internal object RuntimeTraceNames {
     const val CONTEXT_PREPARE = "magrathea.context.prepare"
     const val PROVIDER_REQUEST = "magrathea.provider.request"
     const val TOOL_CALL = "magrathea.tool.call"
+    const val BACKGROUND_EXECUTION = "magrathea.tool.background_execution"
     const val STORE_OPERATION = "magrathea.store.operation"
 }
 
@@ -147,7 +148,11 @@ internal class RuntimeTraceSpan(
             ),
         )
     }
+    companion object {
+        fun noop(): RuntimeTraceSpan = RuntimeTraceSpan(NoopMagratheaTraceSpan)
+    }
 }
+
 
 internal fun traceAttributes(vararg values: Pair<String, Any?>): Map<String, TraceValue> =
     buildMap {

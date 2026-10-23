@@ -1292,6 +1292,7 @@ public final class saien/magrathea/core/BackgroundExecutionState$Companion {
 
 public abstract interface class saien/magrathea/core/BackgroundExecutionStore {
 	public abstract fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun delete (Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun deleteOrigin (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun deleteSession (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun load (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;

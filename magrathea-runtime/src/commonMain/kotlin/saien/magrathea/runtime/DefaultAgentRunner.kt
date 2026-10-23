@@ -228,6 +228,48 @@ class DefaultAgentRunner(
     )
 
     private val activeRuns = LinkedHashMap<String, ActiveRun>()
+
+    init {
+        // Lets the executor rebuild jobs for QUEUED records that outlived their Run.
+        background?.jobFactory = object : BackgroundToolExecutor.JobFactory {
+            override suspend fun toolFor(record: BackgroundExecutionRecord): ToolExecutor? =
+                toolRegistry.find(record.toolName)
+
+            override suspend fun specFor(record: BackgroundExecutionRecord): AdmittedSpec =
+                AdmittedSpec(
+                    sessionId = record.sessionId,
+                    runId = record.originRunId,
+                    toolCallId = record.originCallId,
+                    toolName = record.toolName,
+                    executor = checkNotNull(toolFor(record)),
+                    executionRequest = record.executionRequest,
+                    effectiveTimeoutMillis = record.effectiveTimeoutMillis,
+                    queuedAtEpochMs = record.queuedAtEpochMs,
+                    onExecutionStarted = {},
+                    spanFactory = {
+                        tracing.startSpan(
+                            RuntimeTraceNames.BACKGROUND_EXECUTION,
+                            null,
+                            traceAttributes(
+                                "magrathea.agent.session_id" to record.sessionId.value,
+                                "magrathea.agent.run_id" to record.originRunId.value,
+                                "magrathea.tool.name" to record.toolName,
+                                "magrathea.tool.call_id" to record.originCallId,
+                                "magrathea.tool.execution_id" to record.executionId,
+                            ),
+                        )
+                    },
+                    lateFinalize = { outcome, settled, origin ->
+                        finalizeLateToolOutcome(
+                            record.executionRequest,
+                            settled,
+                            origin,
+                            outcome,
+                        )
+                    },
+                )
+        }
+    }
     private val sessionStopOperations = LinkedHashMap<String, CompletableDeferred<Unit>>()
     private val mutex = Mutex()
     private var nextRegistrationToken: Long = 0
@@ -794,7 +836,15 @@ class DefaultAgentRunner(
             persistence.load(sessionId)
         } ?: return null
         if (record.snapshot.statusIsTerminal()) return record.snapshot.runId
+        val closedMessages = closePreemptedToolCalls(
+            request = record.snapshot.request,
+            runId = record.snapshot.runId,
+            messages = record.snapshot.state.messages,
+            pendingCalls = record.snapshot.state.pendingToolCalls,
+            journal = record.checkpoint?.toolExecutions.orEmpty(),
+        )
         val cancelledState = record.snapshot.state.copy(
+            messages = closedMessages,
             status = AgentStatus.CANCELLED,
             stopReason = StopReason.CANCELLED,
         )
@@ -1601,13 +1651,20 @@ class DefaultAgentRunner(
                     StopIntent.CANCEL,
                     -> {
                         runState.value = runState.value.copy(
+                            messages = closePreemptedToolCalls(
+                                request = activeRequest,
+                                runId = runId,
+                                messages = runState.value.messages,
+                                pendingCalls = runState.value.pendingToolCalls,
+                                journal = safeCheckpoint.toolExecutions,
+                            ),
                             status = AgentStatus.CANCELLED,
                             stopReason = StopReason.CANCELLED,
                         )
                         try {
                             withContext(NonCancellable) {
                                 commitTerminalStateWithAbandon(
-                                    activeRequest,
+                                    activeRequest.copy(messages = runState.value.messages),
                                     runId,
                                     runState.value,
                                     recoveryCheckpoint = safeCheckpoint,
@@ -2319,6 +2376,8 @@ class DefaultAgentRunner(
                                         executor = call.executor,
                                         executionRequest = call.executionRequest,
                                         effectiveTimeoutMillis = call.timeoutMs,
+                                        maxQueuedLifetimeMillis =
+                                            backgroundConfig.maxQueuedLifetimeMillis,
                                         onExecutionStarted = {
                                             check(!executionStarted) {
                                                 "Tool execution cannot start more than once"
@@ -2330,12 +2389,34 @@ class DefaultAgentRunner(
                                             )
                                             executionStarted = true
                                         },
+                                        spanFactory = {
+                                            tracing.startSpan(
+                                                RuntimeTraceNames.BACKGROUND_EXECUTION,
+                                                toolSpan.context,
+                                                traceAttributes(
+                                                    "magrathea.agent.session_id" to
+                                                        request.sessionId.value,
+                                                    "magrathea.agent.run_id" to runId.value,
+                                                    "magrathea.tool.name" to
+                                                        call.toolCall.toolName,
+                                                    "magrathea.tool.call_id" to
+                                                        call.toolCall.toolCallId,
+                                                    "magrathea.tool.execution_id" to
+                                                        call.executionRequest.executionId,
+                                                ),
+                                            )
+                                        },
                                         lateFinalize = { outcome, record, origin ->
-                                            finalizeLateToolOutcome(call, record, origin, outcome)
+                                            finalizeLateToolOutcome(
+                                                call.executionRequest,
+                                                record,
+                                                origin,
+                                                outcome,
+                                            )
                                         },
                                     ),
                                 )
-                                CallResolution.EligiblePending(index, admitted, call)
+                                CallResolution.EligiblePending(index, admitted, call, toolSpan)
                             }
                         }
                     }
@@ -2345,6 +2426,11 @@ class DefaultAgentRunner(
                 val result = toolSpan.context?.let { context ->
                     withMagratheaTraceContext(context) { executeBody() }
                 } ?: executeBody()
+                if (result is CallResolution.EligiblePending) {
+                    // The span stays open until the call settles in the foreground or is
+                    // handed off (see drainEligible).
+                    return result
+                }
                 val finalResult = (result as? CallResolution.Final)?.result
                 toolSpan.end(
                     if (finalResult?.isError == true) TraceStatus.ERROR else TraceStatus.OK,
@@ -2388,6 +2474,107 @@ class DefaultAgentRunner(
             }
         }
 
+        var batchOrigin: BackgroundOriginContext? = null
+        var batchSourceId: String? = null
+        fun handoffContext(): Pair<BackgroundOriginContext, String> {
+            val origin = batchOrigin ?: BackgroundOriginContext(
+                sessionId = request.sessionId,
+                runId = runId,
+                request = request.copy(messages = emptyList()),
+            ).also { batchOrigin = it }
+            val sourceId = batchSourceId ?: (
+                request.activation
+                    ?.takeIf { it.source == RunActivationSource.BACKGROUND_RESULTS }
+                    ?.sourceIds?.firstOrNull()
+                    ?: request.messages.lastOrNull { it.role == MessageRole.USER }?.id
+                    ?: ""
+                ).also { batchSourceId = it }
+            return origin to sourceId
+        }
+
+        /**
+         * Waits for one eligible call up to the batch's remaining handoff deadline, then either
+         * applies its real outcome or hands it off with a receipt. Ends the call's TOOL_CALL span.
+         */
+        suspend fun drainEligible(
+            entry: JournaledToolCall,
+            eligible: CallResolution.EligiblePending,
+        ) {
+            val executor = checkNotNull(backgroundExecutor)
+            val execution = eligible.execution
+            val call = eligible.call
+            val span = eligible.span
+            fun endSpan(result: ToolExecutionResult?, handedOff: Boolean) {
+                span.end(
+                    if (result?.isError == true) TraceStatus.ERROR else TraceStatus.OK,
+                    traceAttributes(
+                        "magrathea.outcome" to if (handedOff) {
+                            "handed_off"
+                        } else {
+                            if (result?.isError == true) "failure" else "success"
+                        },
+                        "magrathea.tool.handed_off" to handedOff,
+                        "magrathea.tool.executor_started" to true,
+                        "magrathea.tool.result_error" to (result?.isError == true),
+                    ),
+                )
+            }
+            val remaining = (checkNotNull(backgroundConfig).handoffWaitMillis -
+                state.foregroundToolWaitMillis).coerceAtLeast(0L)
+            val waitLeft = (remaining - batchMark.elapsedNow().inWholeMilliseconds)
+                .coerceAtLeast(0L)
+            if (waitLeft > 0 && !execution.foreground.isCompleted) {
+                withTimeoutOrNull(waitLeft) { execution.foreground.await() }
+            }
+            if (execution.foreground.isCompleted) {
+                val outcome = execution.foreground.await()
+                val result = if (execution.cancelRequested) {
+                    preemptedCancelledResult(entry.indexed.toolCall)
+                } else {
+                    finalizeToolOutcome(request, call, outcome)
+                }
+                endSpan(result, handedOff = false)
+                executor.release(execution)
+                persistCompleted(entry, result)
+                results[eligible.index] = result
+                emit(AgentEvent.ToolCompleted(request.sessionId, result))
+                return
+            }
+            val (origin, sourceId) = handoffContext()
+            val record = executor.handoff(execution, sourceId, origin)
+            if (record == null) {
+                val outcome = execution.foreground.await()
+                val result = if (execution.cancelRequested) {
+                    preemptedCancelledResult(entry.indexed.toolCall)
+                } else {
+                    finalizeToolOutcome(request, call, outcome)
+                }
+                endSpan(result, handedOff = false)
+                executor.release(execution)
+                persistCompleted(entry, result)
+                results[eligible.index] = result
+                emit(AgentEvent.ToolCompleted(request.sessionId, result))
+                return
+            }
+            val receipt = ToolBackgroundReceipt(
+                handle = record.handle,
+                executionId = execution.executionId,
+                state = record.state,
+            )
+            val receiptResult = backgroundReceiptResult(entry.indexed.toolCall, receipt)
+            endSpan(receiptResult, handedOff = true)
+            persistCompleted(entry, receiptResult)
+            results[eligible.index] = receiptResult
+            emit(
+                AgentEvent.ToolHandedOff(
+                    request.sessionId,
+                    entry.indexed.toolCall.toolCallId,
+                    entry.indexed.toolCall.toolName,
+                    receipt,
+                ),
+            )
+        }
+
         if (request.engine.runtime.toolExecutionMode == ToolExecutionMode.PARALLEL) {
             toolCalls.forEach { emit(AgentEvent.ToolRequested(request.sessionId, it)) }
             coroutineScope {
@@ -2400,70 +2587,23 @@ class DefaultAgentRunner(
         } else {
             executions.forEachIndexed { index, entry ->
                 emit(AgentEvent.ToolRequested(request.sessionId, entry.indexed.toolCall))
-                collect(execute(entry, index), index)
+                when (val resolution = execute(entry, index)) {
+                    is CallResolution.Final -> collect(resolution, index)
+                    is CallResolution.EligiblePending -> {
+                        // An eligible call waits (within the batch deadline) before the next
+                        // sequential call starts; on deadline it is handed off first.
+                        pending.remove(resolution)
+                        drainEligible(entry, resolution)
+                    }
+                }
             }
         }
 
         if (pending.isNotEmpty()) {
-            val config = checkNotNull(backgroundConfig)
-            val executor = checkNotNull(backgroundExecutor)
             // The batch ends when every blocking call has settled and either every eligible call
             // settled or the remaining handoff allowance elapsed.
-            val remaining = (config.handoffWaitMillis - state.foregroundToolWaitMillis)
-                .coerceAtLeast(0L)
-            val waitLeft = (remaining - batchMark.elapsedNow().inWholeMilliseconds).coerceAtLeast(0L)
-            if (waitLeft > 0) {
-                withTimeoutOrNull(waitLeft) {
-                    pending.forEach { it.execution.foreground.await() }
-                }
-            }
-            val origin = BackgroundOriginContext(
-                sessionId = request.sessionId,
-                runId = runId,
-                request = request.copy(messages = emptyList()),
-            )
-            val sourceId = request.activation
-                ?.takeIf { it.source == RunActivationSource.BACKGROUND_RESULTS }
-                ?.sourceIds?.firstOrNull()
-                ?: request.messages.lastOrNull { it.role == MessageRole.USER }?.id
-                ?: ""
             for (eligiblePending in pending.sortedBy { it.index }) {
-                val entry = executions[eligiblePending.index]
-                val execution = eligiblePending.execution
-                val call = eligiblePending.call
-                var settledResult: ToolExecutionResult? = null
-                if (execution.foreground.isCompleted) {
-                    val outcome = execution.foreground.await()
-                    settledResult = finalizeToolOutcome(request, call, outcome)
-                } else {
-                    val record = executor.handoff(execution, sourceId, origin)
-                    if (record == null) {
-                        val outcome = execution.foreground.await()
-                        settledResult = finalizeToolOutcome(request, call, outcome)
-                    } else {
-                        val receipt = ToolBackgroundReceipt(
-                            handle = record.handle,
-                            executionId = execution.executionId,
-                            state = record.state,
-                        )
-                        val receiptResult = backgroundReceiptResult(entry.indexed.toolCall, receipt)
-                        persistCompleted(entry, receiptResult)
-                        results[eligiblePending.index] = receiptResult
-                        emit(
-                            AgentEvent.ToolHandedOff(
-                                request.sessionId,
-                                entry.indexed.toolCall.toolCallId,
-                                entry.indexed.toolCall.toolName,
-                                receipt,
-                            ),
-                        )
-                    }
-                }
-                if (settledResult != null) {
-                    persistCompleted(entry, settledResult)
-                    results[eligiblePending.index] = settledResult
-                    emit(AgentEvent.ToolCompleted(request.sessionId, settledResult))
-                }
+                drainEligible(executions[eligiblePending.index], eligiblePending)
             }
         }
 
@@ -2677,6 +2817,155 @@ class DefaultAgentRunner(
                 }
             }
         }
+
+    /** Runtime-authored close for a call whose execution was preempted mid-flight. */
+    private fun preemptedCancelledResult(toolCall: ToolCallPart): ToolExecutionResult =
+        ToolExecutionResult(
+            toolCallId = toolCall.toolCallId,
+            toolName = toolCall.toolName,
+            result = buildJsonObject {
+                put("status", "cancelled")
+                put("reason", "New user input preempted this call.")
+            },
+            isError = false,
+            displayText = "Cancelled",
+            metadata = buildJsonObject { put("magrathea.tool.preempted", "cancelled") },
+        )
+
+    /** Runtime-authored close for a call that never began executing before preemption. */
+    private fun preemptedNotExecutedResult(toolCall: ToolCallPart): ToolExecutionResult =
+        ToolExecutionResult(
+            toolCallId = toolCall.toolCallId,
+            toolName = toolCall.toolName,
+            result = buildJsonObject {
+                put("status", "not_executed")
+                put("reason", "New user input preempted this call before it ran.")
+            },
+            isError = false,
+            displayText = "Not run",
+            metadata = buildJsonObject { put("magrathea.tool.preempted", "not_executed") },
+        )
+
+    private fun rebuiltAdmittedCall(
+        request: AgentRequest,
+        execution: AdmittedExecution,
+    ): AdmittedToolCall {
+        val spec = execution.spec
+        return AdmittedToolCall(
+            context = ToolRuntimeContext(
+                request,
+                spec.executionRequest.assistantMessage,
+                spec.executionRequest.toolCall,
+            ),
+            executionRequest = spec.executionRequest,
+            executor = spec.executor,
+            timeoutMs = spec.effectiveTimeoutMillis,
+        )
+    }
+
+    /**
+     * Resolves one unanswered call for send preemption: its stored result, a fresh receipt from
+     * a now-handoff, a settled-meanwhile finalization, or the runtime-authored
+     * cancelled/not_executed close.
+     */
+    private suspend fun closePreemptedCall(
+        request: AgentRequest,
+        toolCall: ToolCallPart,
+        record: ToolExecutionRecord?,
+        origin: BackgroundOriginContext,
+        sourceId: String,
+    ): ToolExecutionResult {
+        record?.result?.let { return it }
+        val live = record?.let { background?.liveExecution(it.executionId) }
+        if (live != null) {
+            val executor = checkNotNull(background)
+            if (live.cancelRequested) return preemptedCancelledResult(toolCall)
+            if (live.foreground.isCompleted) {
+                val outcome = live.foreground.await()
+                val result = if (live.cancelRequested) {
+                    preemptedCancelledResult(toolCall)
+                } else {
+                    finalizeToolOutcome(request, rebuiltAdmittedCall(request, live), outcome)
+                }
+                executor.release(live)
+                return result
+            }
+            val handed = executor.handoff(live, sourceId, origin)
+            if (handed != null) {
+                return backgroundReceiptResult(
+                    toolCall,
+                    ToolBackgroundReceipt(handed.handle, handed.executionId, handed.state),
+                )
+            }
+            val outcome = live.foreground.await()
+            val result = if (live.cancelRequested) {
+                preemptedCancelledResult(toolCall)
+            } else {
+                finalizeToolOutcome(request, rebuiltAdmittedCall(request, live), outcome)
+            }
+            executor.release(live)
+            return result
+        }
+        if (record != null && background != null) {
+            val stored = background.records(request.sessionId).records
+                .firstOrNull { it.executionId == record.executionId }
+            if (stored != null) {
+                return when {
+                    stored.state != BackgroundExecutionState.TERMINAL -> backgroundReceiptResult(
+                        toolCall,
+                        ToolBackgroundReceipt(stored.handle, stored.executionId, stored.state),
+                    )
+                    stored.outcome == BackgroundOutcome.CANCELLED ->
+                        preemptedCancelledResult(toolCall)
+                    stored.result != null -> checkNotNull(stored.result)
+                    else -> preemptedCancelledResult(toolCall)
+                }
+            }
+        }
+        return if (record?.state == ToolExecutionState.STARTED) {
+            preemptedCancelledResult(toolCall)
+        } else {
+            preemptedNotExecutedResult(toolCall)
+        }
+    }
+
+    /**
+     * Appends ONE TOOL message closing each unanswered finalized call of the last assistant
+     * message, in call order — the send-preemption closure (ADR-019).
+     */
+    private suspend fun closePreemptedToolCalls(
+        request: AgentRequest,
+        runId: AgentRunId,
+        messages: List<AgentMessage>,
+        pendingCalls: List<ToolCallPart>,
+        journal: List<ToolExecutionRecord>,
+    ): List<AgentMessage> {
+        if (pendingCalls.isEmpty()) return messages
+        val origin = BackgroundOriginContext(
+            sessionId = request.sessionId,
+            runId = runId,
+            request = request.copy(messages = emptyList()),
+        )
+        val sourceId = request.activation
+            ?.takeIf { it.source == RunActivationSource.BACKGROUND_RESULTS }
+            ?.sourceIds?.firstOrNull()
+            ?: request.messages.lastOrNull { it.role == MessageRole.USER }?.id
+            ?: ""
+        val parts = pendingCalls.withCallOrdinals().map { indexed ->
+            val record = journal.singleOrNull {
+                it.toolCallId == indexed.toolCall.toolCallId &&
+                    it.toolName == indexed.toolCall.toolName &&
+                    it.callOrdinal == indexed.ordinal
+            }
+            closePreemptedCall(request, indexed.toolCall, record, origin, sourceId)
+                .toMessagePart()
+        }
+        return messages + AgentMessage(
+            role = MessageRole.TOOL,
+            parts = parts,
+            stopReason = StopReason.TOOL_CALLS,
+        )
+    }
 
     private fun backgroundReceiptResult(
         toolCall: ToolCallPart,
@@ -2909,40 +3198,41 @@ class DefaultAgentRunner(
      * origin request (empty message history, decision R1) and the origin request's limits.
      */
     private suspend fun finalizeLateToolOutcome(
-        call: AdmittedToolCall,
+        executionRequest: ToolExecutionRequest,
         record: BackgroundExecutionRecord,
         origin: BackgroundOriginContext?,
         outcome: Result<ToolExecutionResult?>,
     ): Pair<BackgroundOutcome, ToolExecutionResult?> {
+        val toolCall = executionRequest.toolCall
         val originRequest = origin?.request
             ?: return BackgroundOutcome.ERROR to rejectToolCall(
-                call.toolCall,
+                toolCall,
                 "Tool execution failed",
             )
         outcome.exceptionOrNull()?.let {
-            return BackgroundOutcome.ERROR to rejectToolCall(call.toolCall, "Tool execution failed")
+            return BackgroundOutcome.ERROR to rejectToolCall(toolCall, "Tool execution failed")
         }
-        val executionId = call.executionRequest.executionId
+        val executionId = executionRequest.executionId
         var result = outcome.getOrNull()?.withRuntimeMediaReferences(executionId)
             ?: return BackgroundOutcome.TIMEOUT to rejectToolCall(
-                call.toolCall,
+                toolCall,
                 "Tool execution timed out",
             )
         val context = ToolRuntimeContext(
             originRequest,
-            call.executionRequest.assistantMessage,
-            call.executionRequest.toolCall,
+            executionRequest.assistantMessage,
+            executionRequest.toolCall,
         )
         interceptors.forEach { result = it.afterToolCall(context, result) }
         return if (
-            result.toolCallId != call.toolCall.toolCallId || result.toolName != call.toolCall.toolName
+            result.toolCallId != toolCall.toolCallId || result.toolName != toolCall.toolName
         ) {
-            BackgroundOutcome.ERROR to rejectToolCall(call.toolCall, "Tool result identity mismatch")
+            BackgroundOutcome.ERROR to rejectToolCall(toolCall, "Tool result identity mismatch")
         } else {
             val normalized = result.withRuntimeMediaReferences(executionId).normalize()
             if (!normalized.isWithinRuntimeLimits(originRequest.engine.runtime)) {
                 BackgroundOutcome.ERROR to rejectToolCall(
-                    call.toolCall,
+                    toolCall,
                     "Tool result exceeded runtime limit",
                 )
             } else {
@@ -3965,6 +4255,7 @@ private sealed class CallResolution {
         val index: Int,
         val execution: AdmittedExecution,
         val call: AdmittedToolCall,
+        val span: RuntimeTraceSpan,
     ) : CallResolution()
 }
 
@@ -4440,6 +4731,15 @@ class InMemoryBackgroundExecutionStore : saien.magrathea.core.BackgroundExecutio
             records = records[sessionId.value]?.values?.toList().orEmpty(),
             origins = origins[sessionId.value]?.values?.toList().orEmpty(),
         )
+    }
+
+    override suspend fun delete(sessionId: AgentSessionId, executionId: String) {
+        mutex.withLock {
+            records[sessionId.value]?.let { sessionRecords ->
+                sessionRecords.remove(executionId)
+                if (sessionRecords.isEmpty()) records.remove(sessionId.value)
+            }
+        }
     }
 
     override suspend fun deleteOrigin(sessionId: AgentSessionId, runId: AgentRunId) {

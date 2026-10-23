@@ -27,6 +27,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.BackgroundExecutionRecord
+import saien.magrathea.core.BackgroundExecutionState
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.RunActivation
 import saien.magrathea.core.RunActivationSource
@@ -47,6 +48,7 @@ import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.AgentStatus
+import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolExecutionRecord
 
 /** Process-local lifecycle of one canonical live Agent session runtime. */
@@ -263,6 +265,57 @@ interface AgentSessionLease {
         )
     }
 
+    /**
+     * Stops everything owned by this Session: every live background execution is cancelled
+     * (records become TERMINAL CANCELLED and suppressed), unacknowledged terminal records are
+     * suppressed, and a pending Run is cancelled so its unanswered calls close as cancelled
+     * instead of producing receipts. A no-op when there is nothing to stop.
+     */
+    @Throws(AgentSessionException::class, CancellationException::class)
+    suspend fun stopAll() {
+        throw AgentSessionException(
+            AgentSessionErrorCode.INVALID_STATE,
+            "Stopping all work is not supported by this lease",
+        )
+    }
+
+    /**
+     * Cancels the referenced live background executions of this Session — the host form of the
+     * model's `cancel_background_executions` control.
+     */
+    @Throws(AgentSessionException::class, CancellationException::class)
+    suspend fun cancelBackground(handles: List<String>): BackgroundCancellationResult {
+        throw AgentSessionException(
+            AgentSessionErrorCode.INVALID_STATE,
+            "Background cancellation is not supported by this lease",
+        )
+    }
+
+    /**
+     * Host-loss suspend: stops the Session's live background jobs locally. QUEUED/RUNNING
+     * records whose Tool is REPLAY_SAFE return to QUEUED; the rest become TERMINAL INTERRUPTED.
+     */
+    @Throws(AgentSessionException::class, CancellationException::class)
+    suspend fun suspendBackground() {
+        throw AgentSessionException(
+            AgentSessionErrorCode.INVALID_STATE,
+            "Suspending background work is not supported by this lease",
+        )
+    }
+
+    /**
+     * Re-admits every QUEUED record of this Session that has no live job. Tools no longer
+     * registered settle as TERMINAL ERROR; records past their queued lifetime settle as
+     * TERMINAL INTERRUPTED.
+     */
+    @Throws(AgentSessionException::class, CancellationException::class)
+    suspend fun resumeBackground() {
+        throw AgentSessionException(
+            AgentSessionErrorCode.INVALID_STATE,
+            "Resuming background work is not supported by this lease",
+        )
+    }
+
     /** Starts recovery and returns after the manager-owned collector is registered. */
     @Throws(AgentSessionException::class, CancellationException::class)
     suspend fun resume()
@@ -428,6 +481,7 @@ class DefaultAgentSessionManager(
                     failures.capture { runtime?.shutdown(SessionShutdown.DELETE) }
                     val shutdownFailure = failures.failureOrNull()
                     if (shutdownFailure == null) {
+                        failures.capture { background?.deleteSession(sessionId) }
                         failures.capture { storageOperation { persistence.deleteSession(sessionId) } }
                     }
                     (shutdownFailure ?: failures.failureOrNull())?.let { failure -> throw failure }
@@ -492,6 +546,7 @@ class DefaultAgentSessionManager(
                     }
                     val shutdownFailure = failures.failureOrNull()
                     if (shutdownFailure == null) {
+                        failures.capture { background?.clearAll() }
                         failures.capture { storageOperation { persistence.clear() } }
                     }
                     (shutdownFailure ?: failures.failureOrNull())?.let { failure -> throw failure }
@@ -1035,6 +1090,20 @@ private class ManagedAgentSession(
                 "Agent request session ID does not match its acquired runtime",
             )
         }
+        // Regeneration fence: records whose origin call no longer exists in the history are
+        // cancelled and deleted; unreferenced origins are removed with them.
+        background?.let { executor ->
+            val callIds = request.messages
+                .flatMap { message -> message.parts.filterIsInstance<ToolCallPart>() }
+                .mapTo(linkedSetOf()) { it.toolCallId }
+            val stale = executor.records(sessionId).records
+                .filter { it.originCallId !in callIds }
+                .map { it.executionId }
+            if (stale.isNotEmpty()) {
+                executor.deleteRecords(sessionId, stale)
+                refreshBackground()
+            }
+        }
         startOperation(request, resume = false) { runner.run(request) }
     }
 
@@ -1095,6 +1164,57 @@ private class ManagedAgentSession(
         )
         mutableEvents.tryEmit(AgentEvent.MessageEmitted(sessionId, notice))
         startOperationLocked(effective, resume = false) { runner.run(effective) }
+    }
+
+    suspend fun stopAll() = commandMutex.withLock {
+        if (stateMutex.withLock { machine.lifecycle } != SessionLifecycle.OPEN) {
+            return@withLock
+        }
+        val executor = background
+        if (executor != null) {
+            val messages = stateMutex.withLock { machine.result.state?.messages }.orEmpty()
+            val suppress = executor.records(sessionId).records
+                .filter {
+                    it.state == BackgroundExecutionState.TERMINAL &&
+                        !it.activationSuppressed &&
+                        !isBackgroundRecordAcknowledged(it, messages)
+                }
+                .mapTo(linkedSetOf()) { it.executionId }
+            executor.stopSession(sessionId, suppress)
+        }
+        if (stateMutex.withLock { machine.isExecuting }) {
+            runner.cancel(sessionId)
+        }
+        refreshBackground()
+    }
+
+    suspend fun cancelBackground(handles: List<String>): BackgroundCancellationResult =
+        commandMutex.withLock {
+            val executor = background ?: throw AgentSessionException(
+                AgentSessionErrorCode.INVALID_STATE,
+                "Background controls are not supported by this session",
+            )
+            val result = executor.cancel(sessionId, handles)
+            refreshBackground()
+            result
+        }
+
+    suspend fun suspendBackground() = commandMutex.withLock {
+        val executor = background ?: throw AgentSessionException(
+            AgentSessionErrorCode.INVALID_STATE,
+            "Suspending background work is not supported by this session",
+        )
+        executor.suspendSession(sessionId)
+        refreshBackground()
+    }
+
+    suspend fun resumeBackground() = commandMutex.withLock {
+        val executor = background ?: throw AgentSessionException(
+            AgentSessionErrorCode.INVALID_STATE,
+            "Resuming background work is not supported by this session",
+        )
+        executor.resumeSession(sessionId)
+        refreshBackground()
     }
 
     suspend fun interrupt(): AgentRecoveryInfo = commandMutex.withLock {
@@ -1421,6 +1541,15 @@ private class DefaultAgentSessionLease(
     override suspend fun start(request: AgentRequest) = attachedOperation { runtime.start(request) }
     override suspend fun startContinuation(request: AgentRequest) =
         attachedOperation { runtime.startContinuation(request) }
+
+    override suspend fun stopAll() = attachedOperation { runtime.stopAll() }
+
+    override suspend fun cancelBackground(handles: List<String>): BackgroundCancellationResult =
+        attachedOperation { runtime.cancelBackground(handles) }
+
+    override suspend fun suspendBackground() = attachedOperation { runtime.suspendBackground() }
+
+    override suspend fun resumeBackground() = attachedOperation { runtime.resumeBackground() }
     override suspend fun resume() = attachedOperation { runtime.resume() }
     override suspend fun interrupt(): AgentRecoveryInfo = attachedOperation { runtime.interrupt() }
     override suspend fun inspectRecovery(): AgentRecoveryInfo =

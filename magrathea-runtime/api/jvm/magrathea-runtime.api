@@ -32,6 +32,7 @@ public final class saien/magrathea/runtime/AgentSessionInvalidationScope : java/
 public abstract interface class saien/magrathea/runtime/AgentSessionLease {
 	public abstract fun awaitIdle (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun cancel (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun cancelBackground (Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun getEvents ()Lkotlinx/coroutines/flow/SharedFlow;
 	public abstract fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
 	public abstract fun getState ()Lkotlinx/coroutines/flow/StateFlow;
@@ -41,12 +42,19 @@ public abstract interface class saien/magrathea/runtime/AgentSessionLease {
 	public abstract fun release (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun replaceIdleRequest (Lsaien/magrathea/core/AgentRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun resume (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun resumeBackground (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun start (Lsaien/magrathea/core/AgentRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun startContinuation (Lsaien/magrathea/core/AgentRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun stopAll (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun suspendBackground (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class saien/magrathea/runtime/AgentSessionLease$DefaultImpls {
+	public static fun cancelBackground (Lsaien/magrathea/runtime/AgentSessionLease;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static fun resumeBackground (Lsaien/magrathea/runtime/AgentSessionLease;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static fun startContinuation (Lsaien/magrathea/runtime/AgentSessionLease;Lsaien/magrathea/core/AgentRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static fun stopAll (Lsaien/magrathea/runtime/AgentSessionLease;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static fun suspendBackground (Lsaien/magrathea/runtime/AgentSessionLease;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public abstract interface class saien/magrathea/runtime/AgentSessionManager {
@@ -122,6 +130,21 @@ public final class saien/magrathea/runtime/AgentSessionRuntimeSnapshot {
 	public final fun getToolExecutions ()Ljava/util/List;
 	public fun hashCode ()I
 	public final fun isExecuting ()Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/runtime/BackgroundCancellationResult {
+	public fun <init> (Ljava/util/List;Ljava/util/List;Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Ljava/util/List;
+	public final fun component3 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;Ljava/util/List;Ljava/util/List;)Lsaien/magrathea/runtime/BackgroundCancellationResult;
+	public static synthetic fun copy$default (Lsaien/magrathea/runtime/BackgroundCancellationResult;Ljava/util/List;Ljava/util/List;Ljava/util/List;ILjava/lang/Object;)Lsaien/magrathea/runtime/BackgroundCancellationResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAlreadyFinished ()Ljava/util/List;
+	public final fun getCancelled ()Ljava/util/List;
+	public final fun getUnknown ()Ljava/util/List;
+	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
 
@@ -218,6 +241,7 @@ public final class saien/magrathea/runtime/InMemoryAgentPersistence : saien/magr
 public final class saien/magrathea/runtime/InMemoryBackgroundExecutionStore : saien/magrathea/core/BackgroundExecutionStore {
 	public fun <init> ()V
 	public fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun delete (Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun deleteOrigin (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRunId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun deleteSession (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun load (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;

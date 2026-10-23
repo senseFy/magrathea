@@ -776,7 +776,7 @@ class BackgroundToolRuntimeContractTest {
         store.upsert(pending)
         backgroundScope.launch {
             delay(100)
-            store.upsert(
+            executor.putRecord(
                 pending.copy(
                     state = BackgroundExecutionState.TERMINAL,
                     outcome = BackgroundOutcome.SUCCEEDED,
@@ -1001,6 +1001,8 @@ class BackgroundToolRuntimeContractTest {
                 innerStore.putOrigin(origin)
             }
             override suspend fun load(sessionId: AgentSessionId) = innerStore.load(sessionId)
+            override suspend fun delete(sessionId: AgentSessionId, executionId: String) =
+                innerStore.delete(sessionId, executionId)
             override suspend fun deleteOrigin(sessionId: AgentSessionId, runId: AgentRunId) =
                 innerStore.deleteOrigin(sessionId, runId)
             override suspend fun deleteSession(sessionId: AgentSessionId) =
@@ -1051,6 +1053,913 @@ class BackgroundToolRuntimeContractTest {
         executor.close()
     }
 
+    // ---- S2: interruption, cancellation scopes, fences ----
+
+    // S2-1: cancel during the foreground wait closes three calls in order: the eligible running
+    // call gets a receipt, the started blocking call is cancelled, the approval-blocked call is
+    // not_executed. The record settles later and no orphan reaches the next Provider request.
+    @Test
+    fun cancelDuringForegroundWaitClosesCallsInOrder() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("preempt-session")
+        val eligible = GatedTool("deep_lookup", ToolBackgroundPolicy.ELIGIBLE)
+        val blocking = GatedTool("blocking_lookup", ToolBackgroundPolicy.BLOCKING)
+        val approvalGate = CompletableDeferred<Unit>()
+        val gateway = object : saien.magrathea.core.ToolApprovalGateway {
+            override suspend fun requestApproval(
+                request: saien.magrathea.core.ToolApprovalRequest,
+            ): saien.magrathea.core.ToolApprovalDecision {
+                if (request.toolCall.toolName == "other_lookup") approvalGate.await()
+                return saien.magrathea.core.ToolApprovalDecision.Approve
+            }
+        }
+        val provider = scriptedProvider(
+            "preempt",
+            toolCall("call-1", "deep_lookup"),
+            toolCall("call-2", "blocking_lookup"),
+            toolCall("call-3", "other_lookup"),
+        )
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(
+            provider = provider,
+            tools = listOf(eligible, blocking, CountingTool("other_lookup")),
+            background = executor,
+            persistence = persistence,
+            approvalGateway = gateway,
+        )
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = persistence,
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        val events = mutableListOf<AgentEvent>()
+        backgroundScope.launch { lease.events.toList(events) }
+        lease.start(
+            request("preempt", sessionId, config = backgroundConfig(handoffWait = 60_000)),
+        )
+        runCurrent()
+        val cancelJob = async { runner.cancel(sessionId) }
+        runCurrent()
+        cancelJob.await()
+
+        val persisted = persistence.load(sessionId)!!.snapshot.state
+        val toolMessage = persisted.messages.last { it.role == MessageRole.TOOL }
+        val parts = toolMessage.parts.filterIsInstance<ToolResultPart>()
+        assertEquals(listOf("call-1", "call-2", "call-3"), parts.map { it.toolCallId })
+        // call-1: eligible running -> receipt
+        assertNotNull(parts[0].backgroundReceipt)
+        assertEquals("running", parts[0].result.jsonObject["status"]!!.jsonPrimitive.content)
+        // call-2: blocking started -> cancelled
+        assertEquals("cancelled", parts[1].result.jsonObject["status"]!!.jsonPrimitive.content)
+        assertEquals(
+            "New user input preempted this call.",
+            parts[1].result.jsonObject["reason"]!!.jsonPrimitive.content,
+        )
+        assertEquals("Cancelled", parts[1].displayText)
+        assertEquals(
+            "cancelled",
+            parts[1].metadata["magrathea.tool.preempted"]!!.jsonPrimitive.content,
+        )
+        // call-3: blocked in the approval gateway -> not_executed
+        assertEquals(
+            "not_executed",
+            parts[2].result.jsonObject["status"]!!.jsonPrimitive.content,
+        )
+        assertEquals("Not run", parts[2].displayText)
+        assertEquals(
+            "not_executed",
+            parts[2].metadata["magrathea.tool.preempted"]!!.jsonPrimitive.content,
+        )
+
+        // The handed-off record is still RUNNING; its late settlement emits the session event.
+        val record = store.load(sessionId).records.single()
+        assertEquals(BackgroundExecutionState.RUNNING, record.state)
+        eligible.gate.complete(Unit)
+        runCurrent()
+        advanceTimeBy(10)
+        runCurrent()
+        val settled = store.load(sessionId).records.single()
+        assertEquals(BackgroundExecutionState.TERMINAL, settled.state)
+        assertEquals(BackgroundOutcome.SUCCEEDED, settled.outcome)
+        assertTrue(events.any { it is AgentEvent.BackgroundExecutionSettled })
+
+        // The next Run's Provider request carries the closure results, not orphan repairs.
+        val persisted2 = persistence.load(sessionId)!!.snapshot.state
+        val request2 = request(
+            "preempt",
+            sessionId,
+            config = backgroundConfig(handoffWait = 60_000),
+        ).copy(messages = persisted2.messages + userMessage("anything else?"))
+        runner.run(request2).toList()
+        val projected = provider.requests.last().messages
+        val calls = projected.flatMap { it.parts.filterIsInstance<ToolCallPart>() }
+            .filter { !it.partial }
+        val results = projected.filter { it.role == MessageRole.TOOL }
+            .flatMap { it.parts.filterIsInstance<ToolResultPart>() }
+        val answeredIds = results.map { it.toolCallId }.toSet()
+        calls.forEach { call ->
+            assertTrue(
+                call.toolCallId in answeredIds,
+                "call ${call.toolCallId} is unanswered in the projected request",
+            )
+        }
+        manager.close()
+        executor.close()
+    }
+
+    // S2-2: an eligible call that settled in the foreground before the cancel contributes its
+    // real finalized result.
+    @Test
+    fun cancelAfterForegroundSettlementReusesTheRealResult() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("settled-then-cancel")
+        executor.register(sessionId, NoopListener)
+        val eligible = DelayedTool("fast_lookup", 300, ToolBackgroundPolicy.ELIGIBLE)
+        val blocking = GatedTool("blocking_lookup", ToolBackgroundPolicy.BLOCKING)
+        val provider = scriptedProvider(
+            "settled",
+            toolCall("call-1", "fast_lookup"),
+            toolCall("call-2", "blocking_lookup"),
+        )
+        val persistence = InMemoryAgentPersistence()
+        val runner2 = runner(provider = provider, tools = listOf(eligible, blocking),
+            background = executor, persistence = persistence)
+        val collected = async {
+            runner2.run(
+                request("settled", sessionId, config = backgroundConfig(handoffWait = 60_000)),
+            ).toList()
+        }
+        runCurrent()
+        advanceTimeBy(400) // eligible settles; blocking still gated
+        runCurrent()
+        val cancelJob = async { runner2.cancel(sessionId) }
+        runCurrent()
+        cancelJob.await()
+        runCatching { collected.await() }
+
+        val persisted = persistence.load(sessionId)!!.snapshot.state
+        val parts = persisted.messages.last { it.role == MessageRole.TOOL }.parts
+            .filterIsInstance<ToolResultPart>()
+        assertEquals(listOf("call-1", "call-2"), parts.map { it.toolCallId })
+        assertEquals("result-fast_lookup", parts[0].result.jsonPrimitive.content)
+        assertFalse(parts[0].isError)
+        assertEquals("cancelled", parts[1].result.jsonObject["status"]!!.jsonPrimitive.content)
+        executor.close()
+    }
+
+    // S2-3: stopAll during the foreground wait closes calls as cancelled (never receipts),
+    // suppresses unacknowledged terminal records, and clears pending activations.
+    @Test
+    fun stopAllDuringForegroundWaitWritesCancelledCloses() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("stopall-session")
+        val eligible = GatedTool("deep_lookup", ToolBackgroundPolicy.ELIGIBLE)
+        val blocking = GatedTool("blocking_lookup", ToolBackgroundPolicy.BLOCKING)
+        val provider = scriptedProvider(
+            "stopall",
+            toolCall("call-1", "deep_lookup"),
+            toolCall("call-2", "blocking_lookup"),
+        )
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(
+            provider = provider,
+            tools = listOf(eligible, blocking),
+            background = executor,
+            persistence = persistence,
+        )
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = persistence,
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        lease.start(
+            request("stopall", sessionId, config = backgroundConfig(handoffWait = 60_000)),
+        )
+        runCurrent()
+        store.upsert(
+            seededRecord(
+                sessionId,
+                "bg_prior",
+                state = BackgroundExecutionState.TERMINAL,
+                outcome = BackgroundOutcome.SUCCEEDED,
+            ),
+        )
+        lease.stopAll()
+
+        val persisted = persistence.load(sessionId)!!.snapshot.state
+        val parts = persisted.messages.last { it.role == MessageRole.TOOL }.parts
+            .filterIsInstance<ToolResultPart>()
+        assertEquals(listOf("call-1", "call-2"), parts.map { it.toolCallId })
+        parts.forEach {
+            assertNull(it.backgroundReceipt)
+            assertEquals("cancelled", it.result.jsonObject["status"]!!.jsonPrimitive.content)
+        }
+        val records = store.load(sessionId).records
+        assertTrue(records.none { it.state != BackgroundExecutionState.TERMINAL })
+        assertTrue(records.all { it.activationSuppressed })
+        assertTrue(
+            store.load(sessionId).records.single { it.handle == "bg_prior" }.activationSuppressed,
+        )
+        assertNull(lease.state.value.background?.pendingActivation)
+        manager.close()
+        executor.close()
+    }
+
+    // S2-4: stopAll with no Run still cancels every running record and suppresses it forever.
+    @Test
+    fun stopAllWithoutARunCancelsAndSuppressesRecords() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("stopall-idle")
+        val tool = GatedTool("deep_lookup", ToolBackgroundPolicy.ELIGIBLE)
+        val provider = scriptedProvider("idle", toolCall("call-1", "deep_lookup"))
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(
+            provider = provider,
+            tools = listOf(tool),
+            background = executor,
+            persistence = persistence,
+        )
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = persistence,
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        lease.start(request("idle", sessionId, config = backgroundConfig(handoffWait = 500)))
+        advanceTimeBy(600)
+        runCurrent() // handed off; run completed
+        val record = store.load(sessionId).records.single()
+        assertEquals(BackgroundExecutionState.RUNNING, record.state)
+
+        lease.stopAll()
+        val cancelled = store.load(sessionId).records.single()
+        assertEquals(BackgroundExecutionState.TERMINAL, cancelled.state)
+        assertEquals(BackgroundOutcome.CANCELLED, cancelled.outcome)
+        assertTrue(cancelled.activationSuppressed)
+        assertNull(lease.state.value.background?.pendingActivation)
+
+        // The cancelled record never produces a notice even after the job ends.
+        tool.gate.complete(Unit)
+        runCurrent()
+        advanceTimeBy(50)
+        runCurrent()
+        manager.close()
+        executor.close()
+    }
+
+    // S2-5: cancelBackground partitions handles into cancelled / alreadyFinished / unknown and
+    // leaves unreferenced records alone.
+    @Test
+    fun cancelBackgroundPartitionsHandles() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("host-cancel")
+        store.upsert(
+            seededRecord(sessionId, "bg_live", state = BackgroundExecutionState.RUNNING),
+        )
+        store.upsert(
+            seededRecord(
+                sessionId,
+                "bg_done",
+                state = BackgroundExecutionState.TERMINAL,
+                outcome = BackgroundOutcome.SUCCEEDED,
+            ),
+        )
+        store.upsert(
+            seededRecord(sessionId, "bg_other", state = BackgroundExecutionState.RUNNING),
+        )
+        val runner = runner(
+            provider = scriptedProvider("hostcancel"),
+            tools = emptyList(),
+            background = executor,
+        )
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = InMemoryAgentPersistence(),
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+
+        val result = lease.cancelBackground(listOf("bg_live", "bg_done", "bg_missing"))
+        assertEquals(listOf("bg_live"), result.cancelled)
+        assertEquals(listOf("bg_done"), result.alreadyFinished)
+        assertEquals(listOf("bg_missing"), result.unknown)
+        val records = store.load(sessionId).records.associateBy { it.handle }
+        assertEquals(BackgroundOutcome.CANCELLED, records["bg_live"]?.outcome)
+        assertTrue(records["bg_live"]?.activationSuppressed == true)
+        assertEquals(BackgroundOutcome.SUCCEEDED, records["bg_done"]?.outcome)
+        assertEquals(BackgroundExecutionState.RUNNING, records["bg_other"]?.state)
+        manager.close()
+        executor.close()
+    }
+
+    // S2-6: a Tool's own cancellation is a failure, not a discard (F1) — after handoff the
+    // record becomes TERMINAL ERROR; before handoff the foreground result is the failure; an
+    // executor-cancelled admission closes the batch with a cancelled result.
+    @Test
+    fun toolSelfCancellationIsAFailureNotADiscard() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("self-cancel")
+        executor.register(sessionId, NoopListener)
+        val tool = object : ToolExecutor {
+            override val definition = ToolDefinition(
+                name = "flaky_lookup",
+                description = "cancels itself",
+                schema = buildJsonObject { put("type", "object") },
+            )
+            override val backgroundPolicy = ToolBackgroundPolicy.ELIGIBLE
+            override suspend fun execute(request: ToolExecutionRequest): ToolExecutionResult {
+                delay(50)
+                throw kotlinx.coroutines.CancellationException("inner self cancel")
+            }
+        }
+        val provider = scriptedProvider("selfcancel", toolCall("call-1", "flaky_lookup"))
+        val runner = runner(provider = provider, tools = listOf(tool), background = executor)
+        val request = request(
+            "selfcancel",
+            sessionId,
+            config = backgroundConfig(handoffWait = 200),
+            tools = listOf(tool.definition),
+        )
+        // Settles at 50 inside the 200 allowance -> failure, no record, no discard.
+        val events = runner.run(request).toList()
+        val part = events.filterIsInstance<AgentEvent.Completed>().single().state.messages
+            .single { it.role == MessageRole.TOOL }.parts.filterIsInstance<ToolResultPart>().single()
+        assertTrue(part.isError)
+        assertEquals("Tool execution failed", part.result.jsonPrimitive.content)
+        assertTrue(store.load(sessionId).records.isEmpty())
+
+        // The same failure after handoff becomes TERMINAL ERROR with the standard result.
+        val sessionId2 = AgentSessionId("self-cancel-late")
+        executor.register(sessionId2, NoopListener)
+        val provider2 = scriptedProvider("selfcancel2", toolCall("call-1", "flaky_lookup"))
+        val runner2 = runner(provider = provider2, tools = listOf(tool), background = executor)
+        val request2 = request(
+            "selfcancel2",
+            sessionId2,
+            config = backgroundConfig(handoffWait = 10),
+            tools = listOf(tool.definition),
+        )
+        runner2.run(request2).toList()
+        advanceTimeBy(100)
+        runCurrent()
+        val late = store.load(sessionId2).records.single()
+        assertEquals(BackgroundExecutionState.TERMINAL, late.state)
+        assertEquals(BackgroundOutcome.ERROR, late.outcome)
+        assertEquals("Tool execution failed", late.result!!.result.jsonPrimitive.content)
+
+        // An admission cancelled by the executor before handoff completes the batch with a
+        // cancelled result instead of hanging.
+        val sessionId3 = AgentSessionId("executor-cancel")
+        executor.register(sessionId3, NoopListener)
+        val gated = GatedTool("gated_lookup", ToolBackgroundPolicy.ELIGIBLE)
+        val provider3 = scriptedProvider("cancelled", toolCall("call-1", "gated_lookup"))
+        val runner3 = runner(provider = provider3, tools = listOf(gated), background = executor)
+        val request3 = request(
+            "cancelled",
+            sessionId3,
+            config = backgroundConfig(handoffWait = 60_000),
+            tools = listOf(gated.definition),
+        )
+        val collected = async { runner3.run(request3).toList() }
+        runCurrent()
+        executor.stopSession(sessionId3, emptySet())
+        runCurrent()
+        val events3 = collected.await()
+        val close = events3.filterIsInstance<AgentEvent.Completed>().single().state.messages
+            .single { it.role == MessageRole.TOOL }.parts.filterIsInstance<ToolResultPart>().single()
+        assertEquals("cancelled", close.result.jsonObject["status"]!!.jsonPrimitive.content)
+        executor.close()
+    }
+
+    // S2-7: await returns exactly at the settlement instant with a bounded number of store
+    // loads (no polling).
+    @Test
+    fun awaitReturnsAtTheSettlementInstant() = runTest {
+        var loads = 0
+        val innerStore = InMemoryBackgroundExecutionStore()
+        val store = object : BackgroundExecutionStore {
+            override suspend fun upsert(record: BackgroundExecutionRecord) =
+                innerStore.upsert(record)
+            override suspend fun putOrigin(origin: BackgroundOriginContext) =
+                innerStore.putOrigin(origin)
+            override suspend fun load(sessionId: AgentSessionId) =
+                innerStore.load(sessionId).also { loads += 1 }
+            override suspend fun delete(sessionId: AgentSessionId, executionId: String) =
+                innerStore.delete(sessionId, executionId)
+            override suspend fun deleteOrigin(sessionId: AgentSessionId, runId: AgentRunId) =
+                innerStore.deleteOrigin(sessionId, runId)
+            override suspend fun deleteSession(sessionId: AgentSessionId) =
+                innerStore.deleteSession(sessionId)
+            override suspend fun clear() = innerStore.clear()
+        }
+        val executor = executor(store)
+        val sessionId = AgentSessionId("signal-await")
+        executor.register(sessionId, NoopListener)
+        val pending = seededRecord(
+            sessionId,
+            "bg_waited",
+            state = BackgroundExecutionState.RUNNING,
+        )
+        store.upsert(pending)
+        loads = 0
+        backgroundScope.launch {
+            delay(100)
+            executor.putRecord(
+                pending.copy(
+                    state = BackgroundExecutionState.TERMINAL,
+                    outcome = BackgroundOutcome.SUCCEEDED,
+                    result = seededResult(),
+                    settledAtEpochMs = 100,
+                ),
+            )
+        }
+        val provider = scriptedProvider(
+            "signalawait",
+            toolCall("w1", "await_background_results", """{"handles":["bg_waited"]}"""),
+        )
+        val runner = runner(provider = provider, tools = emptyList(), background = executor)
+        runner.run(
+            request("signalawait", sessionId, config = backgroundConfig(explicitAllowance = 60_000)),
+        ).toList()
+
+        assertTrue(loads <= 6, "settlement waits must be signalled, not polled: loads=$loads")
+        executor.close()
+    }
+
+    // S2-8: a suspending afterToolCall interceptor runs outside the Session mutex and cannot
+    // block cancellation of another record (F3).
+    @Test
+    fun suspendingInterceptorDoesNotBlockSessionWrites() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("finalize-outside")
+        val interceptorGate = CompletableDeferred<Unit>()
+        val interceptor = object : AgentInterceptor {
+            override suspend fun afterToolCall(
+                context: saien.magrathea.core.ToolRuntimeContext,
+                result: ToolExecutionResult,
+            ): ToolExecutionResult {
+                if (result.toolName == "fast_lookup") interceptorGate.await()
+                return result
+            }
+        }
+        val fast = DelayedTool("fast_lookup", 50, ToolBackgroundPolicy.ELIGIBLE)
+        val provider = scriptedProvider(
+            "finalize",
+            toolCall("call-1", "fast_lookup"),
+        )
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(
+            provider = provider,
+            tools = listOf(fast),
+            background = executor,
+            persistence = persistence,
+            interceptors = listOf(interceptor),
+        )
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = persistence,
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        lease.start(request("finalize", sessionId, config = backgroundConfig(handoffWait = 10)))
+        advanceTimeBy(100)
+        runCurrent() // handed off at ~10; execution finished at 50; interceptor now suspended
+        store.upsert(
+            seededRecord(sessionId, "bg_victim", state = BackgroundExecutionState.RUNNING),
+        )
+
+        // The settlement is stuck inside afterToolCall — the Session mutex is free.
+        val cancelled = lease.cancelBackground(listOf("bg_victim"))
+        assertEquals(listOf("bg_victim"), cancelled.cancelled)
+
+        interceptorGate.complete(Unit)
+        runCurrent()
+        val settled = store.load(sessionId).records
+            .single { it.toolName == "fast_lookup" }
+        assertEquals(BackgroundExecutionState.TERMINAL, settled.state)
+        manager.close()
+        executor.close()
+    }
+
+    // S2-9: SEQUENTIAL mode — the next call starts only after the eligible call settles or is
+    // handed off (F4).
+    @Test
+    fun sequentialModeWaitsForTheEligibleCallBeforeTheNext() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("sequential")
+        executor.register(sessionId, NoopListener)
+        val eligible = GatedTool("deep_lookup", ToolBackgroundPolicy.ELIGIBLE)
+        val second = CountingTool("other_lookup")
+        val provider = scriptedProvider(
+            "seq",
+            toolCall("call-1", "deep_lookup"),
+            toolCall("call-2", "other_lookup"),
+        )
+        val runner = runner(
+            provider = provider,
+            tools = listOf(eligible, second),
+            background = executor,
+        )
+        val collected = async {
+            runner.run(
+                request(
+                    "seq",
+                    sessionId,
+                    config = backgroundConfig(handoffWait = 500),
+                    toolExecutionMode = ToolExecutionMode.SEQUENTIAL,
+                ),
+            ).toList()
+        }
+        runCurrent()
+        assertEquals(0, second.executions) // still gated on call-1's foreground wait
+        advanceTimeBy(600)
+        runCurrent() // eligible handed off at 500; the second call then runs
+
+        val events = collected.await()
+        assertTrue(
+            events.any {
+                it is AgentEvent.ToolHandedOff && it.toolCallId == "call-1"
+            },
+        )
+        assertTrue(
+            events.any {
+                it is AgentEvent.ToolCompleted && it.result.toolCallId == "call-2"
+            },
+        )
+        executor.close()
+    }
+
+    // S2-10: tracing — a handed-off call's TOOL_CALL span ends with handed_off; the
+    // background_execution span ends at settlement with outcome and timings (F5).
+    @Test
+    fun handedOffCallsProduceAHandedOffSpanAndABackgroundSpan() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("tracing-session")
+        executor.register(sessionId, NoopListener)
+        val tool = GatedTool("deep_lookup", ToolBackgroundPolicy.ELIGIBLE)
+        val sink = RecordingTraceSink()
+        val provider = scriptedProvider("tracing", toolCall("call-1", "deep_lookup"))
+        val runner = runner(
+            provider = provider,
+            tools = listOf(tool),
+            background = executor,
+            tracer = sink.tracer(monotonicClock = saien.magrathea.core.MonotonicClock {
+                testScheduler.currentTime
+            }),
+        )
+        val collected = async {
+            runner.run(
+                request("tracing", sessionId, config = backgroundConfig(handoffWait = 300)),
+            ).toList()
+        }
+        runCurrent()
+        advanceTimeBy(400)
+        runCurrent()
+        collected.await()
+
+        val toolSpans = sink.spans.filter { it.name == RuntimeTraceNames.TOOL_CALL }
+        assertEquals(1, toolSpans.size)
+        assertEquals(true, toolSpans.single().booleanAttribute("magrathea.tool.handed_off"))
+        assertEquals("handed_off", toolSpans.single().stringAttribute("magrathea.outcome"))
+
+        tool.gate.complete(Unit)
+        runCurrent()
+        advanceTimeBy(20)
+        runCurrent()
+        val backgroundSpans = sink.spans.filter {
+            it.name == RuntimeTraceNames.BACKGROUND_EXECUTION
+        }
+        assertEquals(1, backgroundSpans.size)
+        val backgroundSpan = backgroundSpans.single()
+        assertEquals("succeeded", backgroundSpan.stringAttribute("magrathea.outcome"))
+        assertEquals(sessionId.value, backgroundSpan.stringAttribute("magrathea.agent.session_id"))
+        assertEquals("deep_lookup", backgroundSpan.stringAttribute("magrathea.tool.name"))
+        assertNotNull(backgroundSpan.longAttribute("magrathea.tool.background.queued_wait_ms"))
+        assertNotNull(backgroundSpan.longAttribute("magrathea.tool.background.execution_ms"))
+        executor.close()
+    }
+
+    // S2-11: suspend/resume — REPLAY_SAFE records return to QUEUED and re-execute with the same
+    // executionId; FAIL_CLOSED records become INTERRUPTED.
+    @Test
+    fun suspendAndResumeReplaysSafeRecords() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("suspend-resume")
+        val replayable = GatedTool(
+            "deep_lookup",
+            ToolBackgroundPolicy.ELIGIBLE,
+            saien.magrathea.core.ToolRecoveryPolicy.REPLAY_SAFE,
+        )
+        val provider = scriptedProvider("susp", toolCall("call-1", "deep_lookup"))
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(
+            provider = provider,
+            tools = listOf(replayable),
+            background = executor,
+            persistence = persistence,
+        )
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = persistence,
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        lease.start(request("susp", sessionId, config = backgroundConfig(handoffWait = 200)))
+        advanceTimeBy(300)
+        runCurrent()
+        val running = store.load(sessionId).records.single()
+        assertEquals(BackgroundExecutionState.RUNNING, running.state)
+        assertEquals(1, replayable.executions)
+
+        lease.suspendBackground()
+        val suspended = store.load(sessionId).records.single()
+        assertEquals(BackgroundExecutionState.QUEUED, suspended.state)
+        assertNull(suspended.startedAtEpochMs)
+
+        lease.resumeBackground()
+        runCurrent()
+        replayable.gate.complete(Unit)
+        advanceTimeBy(20)
+        runCurrent()
+        val resumed = store.load(sessionId).records.single()
+        assertEquals(2, replayable.executions)
+        assertEquals(BackgroundExecutionState.TERMINAL, resumed.state)
+        assertEquals(BackgroundOutcome.SUCCEEDED, resumed.outcome)
+        assertEquals(running.executionId, resumed.executionId)
+
+        // FAIL_CLOSED records are interrupted instead of requeued.
+        store.upsert(
+            seededRecord(sessionId, "bg_closed", state = BackgroundExecutionState.RUNNING)
+                .copy(toolName = "ghost_tool"),
+        )
+        lease.suspendBackground()
+        val closed = store.load(sessionId).records.single { it.handle == "bg_closed" }
+        assertEquals(BackgroundExecutionState.TERMINAL, closed.state)
+        assertEquals(BackgroundOutcome.INTERRUPTED, closed.outcome)
+        manager.close()
+        executor.close()
+    }
+
+    // S2-12: a QUEUED record past its queued lifetime is INTERRUPTED at resume without
+    // executing.
+    @Test
+    fun queuedLifetimeExceededAtResumeInterrupts() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("expired-queue")
+        val tool = CountingTool("deep_lookup")
+        val runner = runner(
+            provider = scriptedProvider("expired"),
+            tools = listOf(tool),
+            background = executor,
+        )
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = InMemoryAgentPersistence(),
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        val origin = BackgroundOriginContext(
+            sessionId = sessionId,
+            runId = AgentRunId("origin-run"),
+            request = request(
+                "expired",
+                sessionId,
+                config = backgroundConfig(),
+            ).copy(messages = emptyList()),
+        )
+        store.putOrigin(origin)
+        val record = seededRecord(sessionId, "bg_stale", state = BackgroundExecutionState.QUEUED)
+        store.upsert(record)
+
+        advanceTimeBy(120_000) // past maxQueuedLifetimeMillis = 60_000
+        lease.resumeBackground()
+        runCurrent()
+        val expired = store.load(sessionId).records.single()
+        assertEquals(BackgroundExecutionState.TERMINAL, expired.state)
+        assertEquals(BackgroundOutcome.INTERRUPTED, expired.outcome)
+        assertEquals(0, tool.executions)
+        manager.close()
+        executor.close()
+    }
+
+    // S2-13: the regeneration fence — starting with a history that drops the origin call
+    // deletes the record and cancels its job; a full-history start leaves everything.
+    @Test
+    fun startWithTruncatedHistoryDeletesStaleRecords() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("fence-session")
+        val tool = GatedTool("deep_lookup", ToolBackgroundPolicy.ELIGIBLE)
+        val provider = scriptedProvider("fence", toolCall("call-1", "deep_lookup"))
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(
+            provider = provider,
+            tools = listOf(tool),
+            background = executor,
+            persistence = persistence,
+        )
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = persistence,
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        lease.start(request("fence", sessionId, config = backgroundConfig(handoffWait = 200)))
+        advanceTimeBy(300)
+        runCurrent()
+        assertEquals(1, store.load(sessionId).records.size)
+        assertEquals(1, store.load(sessionId).origins.size)
+        val fullHistory = persistence.load(sessionId)!!.snapshot.state.messages
+
+        // A start carrying the full history changes nothing.
+        lease.start(
+            request("fence", sessionId, config = backgroundConfig(handoffWait = 200))
+                .copy(messages = fullHistory + userMessage("keep it")),
+        )
+        runCurrent()
+        assertEquals(1, store.load(sessionId).records.size)
+        manager.close()
+
+        // A fresh session: truncated history removes the record and its origin.
+        val sessionId2 = AgentSessionId("fence-truncated")
+        val tool2 = GatedTool("deep_lookup", ToolBackgroundPolicy.ELIGIBLE)
+        val provider2 = scriptedProvider("fence2", toolCall("call-2", "deep_lookup"))
+        val manager2 = DefaultAgentSessionManager(
+            runner = runner(provider = provider2, tools = listOf(tool2), background = executor),
+            persistence = InMemoryAgentPersistence(),
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease2 = manager2.create(sessionId2)
+        lease2.start(
+            request("fence2", sessionId2, config = backgroundConfig(handoffWait = 200)),
+        )
+        advanceTimeBy(300)
+        runCurrent()
+        assertEquals(1, store.load(sessionId2).records.size)
+        lease2.start(
+            request("fence2", sessionId2, config = backgroundConfig(handoffWait = 200))
+                .copy(messages = listOf(userMessage("regenerate"))),
+        )
+        runCurrent()
+        assertTrue(store.load(sessionId2).records.isEmpty())
+        assertTrue(store.load(sessionId2).origins.isEmpty())
+        manager2.close()
+        executor.close()
+    }
+
+    // S2-14: manager delete removes records and cancels jobs; a late settle callback is
+    // discarded without recreating the record.
+    @Test
+    fun deleteCancelsJobsAndDiscardsLateCallbacks() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("delete-session")
+        val tool = GatedTool("deep_lookup", ToolBackgroundPolicy.ELIGIBLE)
+        val provider = scriptedProvider("delete", toolCall("call-1", "deep_lookup"))
+        val manager = DefaultAgentSessionManager(
+            runner = runner(
+                provider = provider,
+                tools = listOf(tool),
+                background = executor,
+            ),
+            persistence = InMemoryAgentPersistence(),
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        lease.start(request("delete", sessionId, config = backgroundConfig(handoffWait = 200)))
+        advanceTimeBy(300)
+        runCurrent()
+        assertEquals(1, store.load(sessionId).records.size)
+
+        manager.delete(sessionId)
+        assertTrue(store.load(sessionId).records.isEmpty())
+        assertTrue(store.load(sessionId).origins.isEmpty())
+
+        // The job's late settle callback is discarded — nothing is written back.
+        tool.gate.complete(Unit)
+        runCurrent()
+        advanceTimeBy(20)
+        runCurrent()
+        assertTrue(store.load(sessionId).records.isEmpty())
+        manager.close()
+        executor.close()
+    }
+
+    // S2-15: markPersistedCancelled closes a persisted nonterminal Run without a live runner —
+    // journal COMPLETED -> real result, STARTED -> cancelled, PENDING -> receipt from the stored
+    // background record, PENDING without one -> not_executed.
+    @Test
+    fun persistedCancelClosesJournalFromTheStore() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("persisted-cancel")
+        executor.register(sessionId, NoopListener)
+        val fast = CountingTool("fast_lookup")
+        val gated = GatedTool("blocking_lookup", ToolBackgroundPolicy.BLOCKING)
+        val approvalGate = CompletableDeferred<Unit>()
+        val gateway = object : saien.magrathea.core.ToolApprovalGateway {
+            override suspend fun requestApproval(
+                request: saien.magrathea.core.ToolApprovalRequest,
+            ): saien.magrathea.core.ToolApprovalDecision {
+                if (request.toolCall.toolName == "other_lookup") approvalGate.await()
+                return saien.magrathea.core.ToolApprovalDecision.Approve
+            }
+        }
+        val provider = scriptedProvider(
+            "persisted",
+            toolCall("call-1", "fast_lookup"),
+            toolCall("call-2", "blocking_lookup"),
+            toolCall("call-3", "other_lookup"),
+        )
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(
+            provider = provider,
+            tools = listOf(fast, gated, CountingTool("other_lookup")),
+            background = executor,
+            persistence = persistence,
+            approvalGateway = gateway,
+        )
+        val collected = async {
+            runner.run(
+                request("persisted", sessionId, config = backgroundConfig(handoffWait = 60_000)),
+            ).toList()
+        }
+        runCurrent()
+        advanceTimeBy(50)
+        runCurrent()
+        val interruptJob = async { runner.interrupt(sessionId) }
+        runCurrent()
+        interruptJob.await()
+        runCatching { collected.await() }
+
+        // Seed a background record for the still-pending call so the closure emits a receipt.
+        val stored = persistence.load(sessionId)!!
+        val pending = stored.checkpoint?.toolExecutions
+        val runId = stored.snapshot.runId
+        val pendingRecord = pending!!.single {
+            it.toolCallId == "call-3" && it.state == saien.magrathea.core.ToolExecutionState.PENDING
+        }
+        store.upsert(
+            BackgroundExecutionRecord(
+                sessionId = sessionId,
+                executionId = pendingRecord.executionId,
+                handle = "bg_seeded",
+                originRunId = runId,
+                originCallId = "call-3",
+                toolName = "other_lookup",
+                sourceId = "source",
+                state = BackgroundExecutionState.RUNNING,
+                executionRequest = ToolExecutionRequest(
+                    sessionId = sessionId,
+                    runId = runId,
+                    executionId = pendingRecord.executionId,
+                    assistantMessage = AgentMessage(
+                        role = MessageRole.ASSISTANT,
+                        parts = emptyList(),
+                    ),
+                    toolCall = toolCall("call-3", "other_lookup"),
+                ),
+                effectiveTimeoutMillis = 1_000,
+                queuedAtEpochMs = 0,
+            ),
+        )
+
+        runner.cancel(sessionId)
+        val closed = persistence.load(sessionId)!!.snapshot.state
+        assertEquals(saien.magrathea.core.AgentStatus.CANCELLED, closed.status)
+        val toolMessage = closed.messages.last { it.role == MessageRole.TOOL }
+        val parts = toolMessage.parts.filterIsInstance<ToolResultPart>()
+        assertEquals(listOf("call-1", "call-2", "call-3"), parts.map { it.toolCallId })
+        assertEquals("counted", parts[0].result.jsonPrimitive.content)
+        assertEquals("cancelled", parts[1].result.jsonObject["status"]!!.jsonPrimitive.content)
+        assertNotNull(parts[2].backgroundReceipt)
+        assertEquals("running", parts[2].result.jsonObject["status"]!!.jsonPrimitive.content)
+        executor.close()
+    }
+
     // ---- harness ----
 
     private fun TestScope.executor(store: BackgroundExecutionStore): BackgroundToolExecutor =
@@ -1069,13 +1978,17 @@ class BackgroundToolRuntimeContractTest {
         persistence: AgentPersistence = InMemoryAgentPersistence(),
         interceptors: List<AgentInterceptor> = emptyList(),
         contextManager: ContextManager? = null,
+        approvalGateway: saien.magrathea.core.ToolApprovalGateway? = null,
+        tracer: saien.magrathea.core.MagratheaTracer = saien.magrathea.core.NoopMagratheaTracer,
     ) = DefaultAgentRunner(
         providerRegistry = InMemoryProviderRegistry(listOf(provider)),
         toolRegistry = InMemoryToolRegistry(tools),
         persistence = persistence,
         interceptors = interceptors,
+        approvalGateway = approvalGateway,
         contextManager = contextManager,
         dispatcher = StandardTestDispatcher(testScheduler),
+        tracer = tracer,
         background = background,
         timeSource = VirtualTimeSource(testScheduler),
     )
@@ -1228,6 +2141,8 @@ class BackgroundToolRuntimeContractTest {
     private class GatedTool(
         name: String,
         override val backgroundPolicy: ToolBackgroundPolicy,
+        override val recoveryPolicy: saien.magrathea.core.ToolRecoveryPolicy =
+            saien.magrathea.core.ToolRecoveryPolicy.FAIL_CLOSED,
     ) : ToolExecutor {
         override val definition = ToolDefinition(
             name = name,
