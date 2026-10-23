@@ -144,10 +144,10 @@ The template uses only runtime-owned values. `CANCELLED` outcomes never produce 
 
 The four reference request builders project a `RUNTIME` message as a user-input text block in its
 chronological position, using the wire fragments in ADR-019. `DefaultReplayPolicy` orders `RUNTIME`
-like `USER`, but finding an unanswered call before a notice is a protocol error rather than an
-orphan to repair: the Runtime appends notices only after every call is closed. Each entry's
-`callId` is mapped through the same tool-call ID normalization that `DefaultReplayPolicy` applies
-after a model switch. `magrathea-chatbot` excludes `RUNTIME` messages from
+like `USER`, including orphan repair; the Runtime appends notices only after every call is closed,
+and tests assert that invariant. The rendered text never contains call IDs: the receipt already maps
+each handle to its call in history, and call IDs can be renormalized after a model switch. Entries
+keep the call ID as structured runtime data. `magrathea-chatbot` excludes `RUNTIME` messages from
 `ChatbotSnapshot.messages`.
 
 ### 4.4 Run activation and state
@@ -237,15 +237,17 @@ Each upsert replaces one record, so there is no competing whole-snapshot writer.
 
 In `DefaultAgentRunner.executeToolCalls`, a call that passes D2's checks is either:
 
-- **eligible**: the Runner writes a `QUEUED` record (always before any receipt), submits the work to
-  the executor's Session scope, and awaits it with the remaining handoff allowance; or
+- **eligible**: the work starts in the executor's Session scope right after admission, and the Run
+  awaits it with the remaining handoff allowance; or
 - **blocking**: it executes in the Run's scope as it does today.
 
 The batch waits until every blocking call has settled and either every eligible call has settled or
 the handoff allowance is exhausted. Elapsed waiting is counted once per batch. Eligible calls still
-pending at that point receive receipts and emit `AgentEvent.ToolHandedOff` instead of
-`ToolCompleted`. Their Run journal record becomes `COMPLETED` with the receipt as its result, so Run
-recovery reuses the receipt and never re-executes the call.
+pending at that point are handed off: the origin context is stored first, then the record (`QUEUED`
+or `RUNNING`), and only then the receipt is committed and `AgentEvent.ToolHandedOff` emitted instead
+of `ToolCompleted`. Calls that settle in the foreground never get a record. A handed-off call's Run
+journal record becomes `COMPLETED` with the receipt as its result, so Run recovery reuses the
+receipt and never re-executes the call.
 
 When background is enabled, the Runner's own permit acquisitions for blocking calls also go through
 the executor's admission queue with foreground priority, so one queue orders every Runtime-owned
@@ -289,13 +291,15 @@ data class BackgroundSessionSnapshot(
 and some terminal result is unacknowledged, unsuppressed, and within its source's activation
 allowance.
 
-The host calls `lease.startContinuation(request)`. The manager accepts it only when a pending
-activation still exists, `request.activation.source` is `BACKGROUND_RESULTS`, `request.messages`
-equal the authoritative messages, and `request.engine.runtime.background` is set. Otherwise it
-rejects the request and the results stay passive, for example after the user switched to a model
-that has not passed the gates. The Runner appends a `CONTINUATION` notice as the first new message
-and uses it as the activation anchor. Business Tool calls in that Run receive a paired policy error
-unless `allowBusinessToolsInContinuations` is true.
+The host calls `lease.startContinuation(request)` with an ordinary request: no activation, the
+authoritative messages, and its current configuration. The manager accepts it only when a pending
+activation still exists, the session is not executing, the messages equal the authoritative
+messages, and `request.engine.runtime.background` is set. Otherwise it rejects the request and the
+results stay passive, for example after the user switched to a model that has not passed the gates.
+The manager then appends a `CONTINUATION` notice for the pending records, sets
+`activation = RunActivation(BACKGROUND_RESULTS, anchorMessageId = notice.id, sourceIds)`, and starts
+the Run, which uses the notice as its activation anchor. Business Tool calls in that Run receive a
+paired policy error unless `allowBusinessToolsInContinuations` is true.
 
 `magrathea-chatbot` adds `ChatbotController.continueWithBackgroundResults()`, which builds the
 request through the existing `ChatbotRequestFactory` from the current session configuration.
@@ -312,16 +316,19 @@ it. No separate delivery record is written.
 
 ### 5.6 Controls
 
-When `RuntimeConfig.background` is set, the Runtime appends four control definitions to
-`request.tools` in a fixed order after host Tools. The Runner handles them before registry lookup;
-they need no business permit and do not count toward business call limits.
+In a background-enabled Run (configuration set, executor attached, session managed), the Runtime
+appends four control definitions after the host Tools in the Provider projection, and appends
+`BackgroundToolInstructions.SYSTEM_PROMPT_SECTION` to the projected system prompt. The canonical
+request is unchanged, and both additions are identical for user-triggered and continuation Runs. The
+Runner handles the controls before registry lookup; they need no business permit and do not count
+toward business call limits. Hosts therefore add no background prompt text of their own.
 
 | Control | Behavior |
 |---|---|
 | `read_background_result(handle)` | Returns the stored outcome through the normal result pipeline under the new call's identity, keeping origin, citations, and media. An unknown, cross-Session, or invalidated handle returns an error without content |
 | `await_background_results(handles, max_wait_ms)` | Waits as ADR-019 specifies and draws on `explicitWaitMillis`; returns settled payloads like a read, plus statuses for pending executions |
 | `cancel_background_executions(handles)` | Cancels only the referenced executions; their `CANCELLED` outcomes never produce notices |
-| `finish_without_reply()` | Commits its paired result and completes the Run without another model invocation |
+| `finish_without_reply()` | Accepted only in a Run that received a notice. Commits its paired result and completes the Run without another model invocation |
 
 ### 5.7 Send preemption
 
@@ -360,7 +367,7 @@ as it does today.
 
 | Window | Result |
 |---|---|
-| `QUEUED` written, receipt not yet committed | The Run is nonterminal. Recovery matches the journal record to the background record by `executionId`, then waits or hands off without executing twice |
+| Record written at handoff, receipt not yet committed | The Run is nonterminal. Recovery matches the journal record to the background record by `executionId`, then waits or hands off without executing twice |
 | `RUNNING` written, process dies | Restore applies host-loss rules |
 | `TERMINAL` written, no notice yet | Derived state shows a pending activation after restore |
 | Notice committed, Run dies before an answer | Not acknowledged. The next completed invocation acknowledges it, or a continuation notices it again |

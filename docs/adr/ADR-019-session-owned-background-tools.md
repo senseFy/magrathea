@@ -53,13 +53,13 @@ acknowledges execution ownership, not success, failure, or result evidence. Fore
 and Send preemption both use this same handoff path.
 
 When execution settles, Runtime stores the result and can append a typed **Runtime notice** at a
-model-input boundary. Its content is generated from a fixed template and runtime-owned values:
-opaque handles, the registered Tool name, the originating call ID, result versions, enumerated
-terminal states, and an activation mode. The Tool name and call ID let the model relate a notice to
-its own earlier call without reading the payload; when compaction has summarized that call, the
-Tool name still identifies the kind of work. A notice includes no external result text, titles,
-URLs, citations, or raw error messages, and no model-authored arguments such as queries, because
-arguments can carry text copied from earlier external results. A typical notice says that a
+model-input boundary. Its rendered text comes from a fixed template and runtime-owned values:
+opaque handles, the registered Tool name, enumerated terminal states, and the activation mode. The
+handle relates a notice to its earlier call, because that call's receipt carries the same handle.
+The originating call ID and result version stay structured runtime data and are never rendered,
+since call IDs can be renormalized after a model switch. A notice includes no external result text,
+titles, URLs, citations, or raw error messages, and no model-authored arguments such as queries,
+because arguments can carry text copied from earlier external results. A typical notice says that a
 `web_search` call has a result available under its handle, names the allowed retrieval control,
 and states the current execution restriction. It is not itself evidence for an answer.
 
