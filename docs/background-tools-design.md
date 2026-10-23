@@ -429,3 +429,31 @@ included the late result in its final answer.
 The spike sent each notice as a `USER` message, which is its proposed wire form; S1 verifies offline
 that a `RUNTIME` message projects to the same request. The Anthropic path used OpenRouter's
 compatible Messages endpoint rather than the first-party API. D4 stands.
+
+## 10. Live end-to-end evidence through Enjoy
+
+Recorded on 2026-10-24 with Enjoy's `BackgroundToolsLiveIntegrationTest`, which runs the real Enjoy
+runtime stack (request factory, execution coordinator, host gating), real Free Search, and real
+models through OpenRouter's Responses endpoint, with an immediate handoff.
+
+| Scenario | `openai/gpt-4o-mini` | `anthropic/claude-haiku-4.5` | `google/gemini-2.5-flash` |
+|---|---|---|---|
+| 12 s wait allowance, normal search | Pass: awaits, then answers with sources | Pass: awaits, then answers | Pass: answers first, then supplements |
+| 2 s wait allowance, search settled 6 s late | Pass: answers first, then supplements | Pass: answers first, then supplements | Pass: answers first, then supplements |
+| No wait allowance, search settled 6 s late (stress) | Answers first, then supplements | Polls `read_background_result` until the result settles | Answers first, then supplements |
+
+Fixes made because of these runs:
+
+- A terminal `read_background_result` or `await_background_results` result counts as delivery, so a
+  Run that already retrieved a result gets no redundant notice and needs no continuation.
+- The Session's background projection is re-derived on every relevant state change; previously a
+  result that settled during a Run's final answer never produced a pending activation.
+- A single-handle await carries the same origin, citations, and metadata as a read.
+- Receipts and not-ready results tell the model to answer with what it has; a repeated read of the
+  same unfinished handle, or another await after the allowance is exhausted, is refused.
+- With no wait allowance, `await_background_results` and its prompt guidance are not declared.
+
+Recommendation for hosts: keep a non-zero wait allowance. It gives models a bounded, legitimate way
+to wait, and every model above then answers first once the allowance runs out. A zero allowance is
+a stress configuration in which some models poll; per ADR-019, such model configurations do not pass
+the evaluation gate.
