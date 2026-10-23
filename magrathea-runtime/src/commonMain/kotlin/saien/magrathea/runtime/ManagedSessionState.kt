@@ -145,6 +145,10 @@ internal class SessionMachine private constructor(
         )
     }
 
+    /** Events raised outside any execution (for example, background settlements). */
+    fun recordExternalEvent(event: AgentEvent): SessionMachine =
+        update(result = result.copy(lastEvent = event))
+
     /** Null means the event was rejected, not that the result is unknown. */
     fun recordEvent(attempt: ActiveExecution, event: AgentEvent): SessionMachine? {
         if (!owns(attempt) || (result.isConfirmed && !event.isTerminal())) return null

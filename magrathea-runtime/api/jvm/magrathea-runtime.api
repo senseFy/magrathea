@@ -42,6 +42,11 @@ public abstract interface class saien/magrathea/runtime/AgentSessionLease {
 	public abstract fun replaceIdleRequest (Lsaien/magrathea/core/AgentRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun resume (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun start (Lsaien/magrathea/core/AgentRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun startContinuation (Lsaien/magrathea/core/AgentRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/runtime/AgentSessionLease$DefaultImpls {
+	public static fun startContinuation (Lsaien/magrathea/runtime/AgentSessionLease;Lsaien/magrathea/core/AgentRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public abstract interface class saien/magrathea/runtime/AgentSessionManager {
@@ -80,9 +85,12 @@ public final class saien/magrathea/runtime/AgentSessionRuntimeSnapshot {
 	public synthetic fun <init> (JLsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/runtime/AgentSessionPhase;Lsaien/magrathea/core/AgentRecoveryInfo;Lsaien/magrathea/core/AgentFailureCode;Lsaien/magrathea/core/AgentEvent;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun <init> (JLsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/runtime/AgentSessionPhase;Lsaien/magrathea/core/AgentRecoveryInfo;Lsaien/magrathea/core/AgentFailureCode;Lsaien/magrathea/core/AgentEvent;Ljava/util/List;Lsaien/magrathea/core/ReplayReport;)V
 	public synthetic fun <init> (JLsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/runtime/AgentSessionPhase;Lsaien/magrathea/core/AgentRecoveryInfo;Lsaien/magrathea/core/AgentFailureCode;Lsaien/magrathea/core/AgentEvent;Ljava/util/List;Lsaien/magrathea/core/ReplayReport;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (JLsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/runtime/AgentSessionPhase;Lsaien/magrathea/core/AgentRecoveryInfo;Lsaien/magrathea/core/AgentFailureCode;Lsaien/magrathea/core/AgentEvent;Ljava/util/List;Lsaien/magrathea/core/ReplayReport;Lsaien/magrathea/runtime/BackgroundSessionSnapshot;)V
+	public synthetic fun <init> (JLsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/runtime/AgentSessionPhase;Lsaien/magrathea/core/AgentRecoveryInfo;Lsaien/magrathea/core/AgentFailureCode;Lsaien/magrathea/core/AgentEvent;Ljava/util/List;Lsaien/magrathea/core/ReplayReport;Lsaien/magrathea/runtime/BackgroundSessionSnapshot;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()J
 	public final fun component10 ()Ljava/util/List;
 	public final fun component11 ()Lsaien/magrathea/core/ReplayReport;
+	public final fun component12 ()Lsaien/magrathea/runtime/BackgroundSessionSnapshot;
 	public final fun component2 ()Lsaien/magrathea/core/AgentSessionId;
 	public final fun component3 ()Lsaien/magrathea/core/AgentRequest;
 	public final fun component4 ()Lsaien/magrathea/core/AgentRunId;
@@ -94,10 +102,13 @@ public final class saien/magrathea/runtime/AgentSessionRuntimeSnapshot {
 	public final fun copy (JLsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/runtime/AgentSessionPhase;Lsaien/magrathea/core/AgentRecoveryInfo;Lsaien/magrathea/core/AgentFailureCode;Lsaien/magrathea/core/AgentEvent;)Lsaien/magrathea/runtime/AgentSessionRuntimeSnapshot;
 	public final fun copy (JLsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/runtime/AgentSessionPhase;Lsaien/magrathea/core/AgentRecoveryInfo;Lsaien/magrathea/core/AgentFailureCode;Lsaien/magrathea/core/AgentEvent;Ljava/util/List;)Lsaien/magrathea/runtime/AgentSessionRuntimeSnapshot;
 	public final fun copy (JLsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/runtime/AgentSessionPhase;Lsaien/magrathea/core/AgentRecoveryInfo;Lsaien/magrathea/core/AgentFailureCode;Lsaien/magrathea/core/AgentEvent;Ljava/util/List;Lsaien/magrathea/core/ReplayReport;)Lsaien/magrathea/runtime/AgentSessionRuntimeSnapshot;
+	public final fun copy (JLsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/runtime/AgentSessionPhase;Lsaien/magrathea/core/AgentRecoveryInfo;Lsaien/magrathea/core/AgentFailureCode;Lsaien/magrathea/core/AgentEvent;Ljava/util/List;Lsaien/magrathea/core/ReplayReport;Lsaien/magrathea/runtime/BackgroundSessionSnapshot;)Lsaien/magrathea/runtime/AgentSessionRuntimeSnapshot;
 	public static synthetic fun copy$default (Lsaien/magrathea/runtime/AgentSessionRuntimeSnapshot;JLsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/runtime/AgentSessionPhase;Lsaien/magrathea/core/AgentRecoveryInfo;Lsaien/magrathea/core/AgentFailureCode;Lsaien/magrathea/core/AgentEvent;ILjava/lang/Object;)Lsaien/magrathea/runtime/AgentSessionRuntimeSnapshot;
 	public static synthetic fun copy$default (Lsaien/magrathea/runtime/AgentSessionRuntimeSnapshot;JLsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/runtime/AgentSessionPhase;Lsaien/magrathea/core/AgentRecoveryInfo;Lsaien/magrathea/core/AgentFailureCode;Lsaien/magrathea/core/AgentEvent;Ljava/util/List;ILjava/lang/Object;)Lsaien/magrathea/runtime/AgentSessionRuntimeSnapshot;
 	public static synthetic fun copy$default (Lsaien/magrathea/runtime/AgentSessionRuntimeSnapshot;JLsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/runtime/AgentSessionPhase;Lsaien/magrathea/core/AgentRecoveryInfo;Lsaien/magrathea/core/AgentFailureCode;Lsaien/magrathea/core/AgentEvent;Ljava/util/List;Lsaien/magrathea/core/ReplayReport;ILjava/lang/Object;)Lsaien/magrathea/runtime/AgentSessionRuntimeSnapshot;
+	public static synthetic fun copy$default (Lsaien/magrathea/runtime/AgentSessionRuntimeSnapshot;JLsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/core/AgentRequest;Lsaien/magrathea/core/AgentRunId;Lsaien/magrathea/core/AgentStateSnapshot;Lsaien/magrathea/runtime/AgentSessionPhase;Lsaien/magrathea/core/AgentRecoveryInfo;Lsaien/magrathea/core/AgentFailureCode;Lsaien/magrathea/core/AgentEvent;Ljava/util/List;Lsaien/magrathea/core/ReplayReport;Lsaien/magrathea/runtime/BackgroundSessionSnapshot;ILjava/lang/Object;)Lsaien/magrathea/runtime/AgentSessionRuntimeSnapshot;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBackground ()Lsaien/magrathea/runtime/BackgroundSessionSnapshot;
 	public final fun getFailure ()Lsaien/magrathea/core/AgentFailureCode;
 	public final fun getLastEvent ()Lsaien/magrathea/core/AgentEvent;
 	public final fun getPhase ()Lsaien/magrathea/runtime/AgentSessionPhase;
@@ -114,6 +125,55 @@ public final class saien/magrathea/runtime/AgentSessionRuntimeSnapshot {
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class saien/magrathea/runtime/BackgroundExecutionView {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/core/BackgroundExecutionState;Lsaien/magrathea/core/BackgroundOutcome;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Lsaien/magrathea/core/BackgroundExecutionState;
+	public final fun component7 ()Lsaien/magrathea/core/BackgroundOutcome;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/core/BackgroundExecutionState;Lsaien/magrathea/core/BackgroundOutcome;)Lsaien/magrathea/runtime/BackgroundExecutionView;
+	public static synthetic fun copy$default (Lsaien/magrathea/runtime/BackgroundExecutionView;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/core/BackgroundExecutionState;Lsaien/magrathea/core/BackgroundOutcome;ILjava/lang/Object;)Lsaien/magrathea/runtime/BackgroundExecutionView;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getExecutionId ()Ljava/lang/String;
+	public final fun getHandle ()Ljava/lang/String;
+	public final fun getOriginCallId ()Ljava/lang/String;
+	public final fun getOutcome ()Lsaien/magrathea/core/BackgroundOutcome;
+	public final fun getSourceId ()Ljava/lang/String;
+	public final fun getState ()Lsaien/magrathea/core/BackgroundExecutionState;
+	public final fun getToolName ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/runtime/BackgroundSessionSnapshot {
+	public fun <init> (Ljava/util/List;Lsaien/magrathea/runtime/PendingActivation;Z)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Lsaien/magrathea/runtime/PendingActivation;
+	public final fun component3 ()Z
+	public final fun copy (Ljava/util/List;Lsaien/magrathea/runtime/PendingActivation;Z)Lsaien/magrathea/runtime/BackgroundSessionSnapshot;
+	public static synthetic fun copy$default (Lsaien/magrathea/runtime/BackgroundSessionSnapshot;Ljava/util/List;Lsaien/magrathea/runtime/PendingActivation;ZILjava/lang/Object;)Lsaien/magrathea/runtime/BackgroundSessionSnapshot;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getExecutions ()Ljava/util/List;
+	public final fun getPendingActivation ()Lsaien/magrathea/runtime/PendingActivation;
+	public final fun getRequiresExecutionHost ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/runtime/BackgroundToolExecutor {
+	public fun <init> (Lsaien/magrathea/core/BackgroundExecutionStore;Lkotlinx/coroutines/CoroutineDispatcher;Lkotlin/time/TimeSource$WithComparableMarks;Lkotlin/jvm/functions/Function0;Lkotlin/random/Random;)V
+	public synthetic fun <init> (Lsaien/magrathea/core/BackgroundExecutionStore;Lkotlinx/coroutines/CoroutineDispatcher;Lkotlin/time/TimeSource$WithComparableMarks;Lkotlin/jvm/functions/Function0;Lkotlin/random/Random;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/runtime/BackgroundToolInstructions {
+	public static final field INSTANCE Lsaien/magrathea/runtime/BackgroundToolInstructions;
+	public static final field SYSTEM_PROMPT_SECTION Ljava/lang/String;
+}
+
 public final class saien/magrathea/runtime/CompositeToolRegistry : saien/magrathea/core/ToolRegistry {
 	public fun <init> (Lkotlin/jvm/functions/Function0;)V
 	public fun definitions ()Ljava/util/List;
@@ -123,6 +183,8 @@ public final class saien/magrathea/runtime/CompositeToolRegistry : saien/magrath
 public final class saien/magrathea/runtime/DefaultAgentRunner : saien/magrathea/core/AgentRunner {
 	public fun <init> (Lsaien/magrathea/provider/api/ProviderRegistry;Lsaien/magrathea/core/ToolRegistry;Lsaien/magrathea/core/AgentPersistence;Ljava/util/List;Lsaien/magrathea/core/ToolApprovalGateway;Lsaien/magrathea/core/ToolPermissionGateway;Lsaien/magrathea/core/CredentialProvider;Lsaien/magrathea/core/ContextTransformer;Lsaien/magrathea/core/ReplayPolicy;Lsaien/magrathea/core/ContextManager;Lsaien/magrathea/core/FollowUpMessageProvider;Lsaien/magrathea/core/SteeringMessageProvider;Lsaien/magrathea/core/RetryPolicy;Lkotlinx/coroutines/CoroutineDispatcher;Lsaien/magrathea/core/MagratheaTracer;Lsaien/magrathea/core/IdGenerator;)V
 	public synthetic fun <init> (Lsaien/magrathea/provider/api/ProviderRegistry;Lsaien/magrathea/core/ToolRegistry;Lsaien/magrathea/core/AgentPersistence;Ljava/util/List;Lsaien/magrathea/core/ToolApprovalGateway;Lsaien/magrathea/core/ToolPermissionGateway;Lsaien/magrathea/core/CredentialProvider;Lsaien/magrathea/core/ContextTransformer;Lsaien/magrathea/core/ReplayPolicy;Lsaien/magrathea/core/ContextManager;Lsaien/magrathea/core/FollowUpMessageProvider;Lsaien/magrathea/core/SteeringMessageProvider;Lsaien/magrathea/core/RetryPolicy;Lkotlinx/coroutines/CoroutineDispatcher;Lsaien/magrathea/core/MagratheaTracer;Lsaien/magrathea/core/IdGenerator;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lsaien/magrathea/provider/api/ProviderRegistry;Lsaien/magrathea/core/ToolRegistry;Lsaien/magrathea/core/AgentPersistence;Ljava/util/List;Lsaien/magrathea/core/ToolApprovalGateway;Lsaien/magrathea/core/ToolPermissionGateway;Lsaien/magrathea/core/CredentialProvider;Lsaien/magrathea/core/ContextTransformer;Lsaien/magrathea/core/ReplayPolicy;Lsaien/magrathea/core/ContextManager;Lsaien/magrathea/core/FollowUpMessageProvider;Lsaien/magrathea/core/SteeringMessageProvider;Lsaien/magrathea/core/RetryPolicy;Lkotlinx/coroutines/CoroutineDispatcher;Lsaien/magrathea/core/MagratheaTracer;Lsaien/magrathea/core/IdGenerator;Lsaien/magrathea/runtime/BackgroundToolExecutor;Lkotlin/time/TimeSource$WithComparableMarks;)V
+	public synthetic fun <init> (Lsaien/magrathea/provider/api/ProviderRegistry;Lsaien/magrathea/core/ToolRegistry;Lsaien/magrathea/core/AgentPersistence;Ljava/util/List;Lsaien/magrathea/core/ToolApprovalGateway;Lsaien/magrathea/core/ToolPermissionGateway;Lsaien/magrathea/core/CredentialProvider;Lsaien/magrathea/core/ContextTransformer;Lsaien/magrathea/core/ReplayPolicy;Lsaien/magrathea/core/ContextManager;Lsaien/magrathea/core/FollowUpMessageProvider;Lsaien/magrathea/core/SteeringMessageProvider;Lsaien/magrathea/core/RetryPolicy;Lkotlinx/coroutines/CoroutineDispatcher;Lsaien/magrathea/core/MagratheaTracer;Lsaien/magrathea/core/IdGenerator;Lsaien/magrathea/runtime/BackgroundToolExecutor;Lkotlin/time/TimeSource$WithComparableMarks;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun cancel (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun inspectRecovery (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun interrupt (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -133,6 +195,8 @@ public final class saien/magrathea/runtime/DefaultAgentRunner : saien/magrathea/
 public final class saien/magrathea/runtime/DefaultAgentSessionManager : saien/magrathea/runtime/AgentSessionManager {
 	public fun <init> (Lsaien/magrathea/core/AgentRunner;Lsaien/magrathea/core/AgentPersistence;Lkotlinx/coroutines/CoroutineDispatcher;)V
 	public synthetic fun <init> (Lsaien/magrathea/core/AgentRunner;Lsaien/magrathea/core/AgentPersistence;Lkotlinx/coroutines/CoroutineDispatcher;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lsaien/magrathea/core/AgentRunner;Lsaien/magrathea/core/AgentPersistence;Lkotlinx/coroutines/CoroutineDispatcher;Lsaien/magrathea/runtime/BackgroundToolExecutor;)V
+	public synthetic fun <init> (Lsaien/magrathea/core/AgentRunner;Lsaien/magrathea/core/AgentPersistence;Lkotlinx/coroutines/CoroutineDispatcher;Lsaien/magrathea/runtime/BackgroundToolExecutor;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun acquire (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -167,6 +231,21 @@ public final class saien/magrathea/runtime/InMemoryToolRegistry : saien/magrathe
 	public synthetic fun <init> (Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun definitions ()Ljava/util/List;
 	public fun find (Ljava/lang/String;)Lsaien/magrathea/core/ToolExecutor;
+}
+
+public final class saien/magrathea/runtime/PendingActivation {
+	public fun <init> (Ljava/util/List;ILjava/lang/Long;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()I
+	public final fun component3 ()Ljava/lang/Long;
+	public final fun copy (Ljava/util/List;ILjava/lang/Long;)Lsaien/magrathea/runtime/PendingActivation;
+	public static synthetic fun copy$default (Lsaien/magrathea/runtime/PendingActivation;Ljava/util/List;ILjava/lang/Long;ILjava/lang/Object;)Lsaien/magrathea/runtime/PendingActivation;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEarliestSettledAtEpochMs ()Ljava/lang/Long;
+	public final fun getResultCount ()I
+	public final fun getSourceIds ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class saien/magrathea/runtime/TokenAwareContextManager : saien/magrathea/core/ContextManager {
