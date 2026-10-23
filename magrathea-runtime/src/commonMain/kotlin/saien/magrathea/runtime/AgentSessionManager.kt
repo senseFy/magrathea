@@ -1045,7 +1045,13 @@ private class ManagedAgentSession(
     val state: StateFlow<AgentSessionRuntimeSnapshot> = mutableState.asStateFlow()
     val events: SharedFlow<AgentEvent> = mutableEvents.asSharedFlow()
 
+    private var latestBackgroundRecords: List<BackgroundExecutionRecord>? = null
     private var latestBackground: BackgroundSessionSnapshot? = null
+    private var backgroundInputsInitialized = false
+    private var backgroundInputRequest: AgentRequest? = null
+    private var backgroundInputExecuting = false
+    private var backgroundInputMessages: List<AgentMessage>? = null
+    private var backgroundInputRecords: List<BackgroundExecutionRecord>? = null
 
     suspend fun isDisposable(): Boolean {
         val executor = background
@@ -1056,23 +1062,45 @@ private class ManagedAgentSession(
     /** Publish a pure transition; public revisions do not participate in domain decisions. */
     private fun transitionLocked(next: SessionMachine) {
         val current = mutableState.value
+        if (background != null) {
+            // The projection is pure — re-derive it whenever its inputs moved: execution
+            // state, the request, the message list, or the cached records. A record that
+            // settles after the last turn preparation is therefore noticed when the Run
+            // completes instead of leaving pendingActivation stale.
+            val messages = next.result.state?.messages
+            val records = latestBackgroundRecords
+            if (
+                !backgroundInputsInitialized ||
+                next.result.request !== backgroundInputRequest ||
+                next.isExecuting != backgroundInputExecuting ||
+                messages !== backgroundInputMessages ||
+                records !== backgroundInputRecords
+            ) {
+                latestBackground = deriveBackgroundSessionSnapshot(
+                    records = records.orEmpty(),
+                    request = next.result.request,
+                    state = next.result.state,
+                    isExecuting = next.isExecuting,
+                )
+                backgroundInputRequest = next.result.request
+                backgroundInputExecuting = next.isExecuting
+                backgroundInputMessages = messages
+                backgroundInputRecords = records
+                backgroundInputsInitialized = true
+            }
+        }
         val projection = next.snapshot(current.revision).copy(background = latestBackground)
         val published = if (projection != current) projection.copy(revision = nextRevision(current)) else current
         machine = next
         mutableState.value = published
     }
 
-    /** Recomputes the background projection and republishes when it changed. */
+    /** Refreshes the cached background records and republishes when the projection changed. */
     private suspend fun refreshBackground() {
         val executor = background ?: return
-        val records = executor.records(sessionId)
+        val records = executor.records(sessionId).records
         stateMutex.withLock {
-            latestBackground = deriveBackgroundSessionSnapshot(
-                records = records.records,
-                request = machine.result.request,
-                state = machine.result.state,
-                isExecuting = machine.isExecuting,
-            )
+            latestBackgroundRecords = records
             transitionLocked(machine)
         }
     }
@@ -1150,6 +1178,7 @@ private class ManagedAgentSession(
                         RuntimeNoticeDelivery.CONTINUATION,
                         config.consumptionPolicy,
                         config.allowBusinessToolsInContinuations,
+                        awaitDeclared = BackgroundToolInstructions.awaitDeclared(config),
                     ),
                 ),
             ),

@@ -18,6 +18,9 @@ import saien.magrathea.core.ToolResultPart
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /** Model-facing Tool definitions and system prompt section declared while background is enabled. */
@@ -117,13 +120,36 @@ object BackgroundToolInstructions {
 
     /** Appended to the Provider-projected system prompt while background execution is enabled. */
     const val SYSTEM_PROMPT_SECTION = """Background Tools:
-- A Tool result with "status": "running" or "queued" means that work continues in the background. You do not have its result yet. Never state, guess, or invent a pending result. Answer with what you already have and say briefly what is still being looked up, or call await_background_results if you need the result before answering. Do not call the same Tool again for the same request just because it is still running.
+- A Tool result with "status": "running" or "queued" means that work continues in the background. You do not have its result yet. Never state, guess, or invent a pending result. Answer with what you already have and say briefly what is still being looked up, or call await_background_results if you need the result before answering. Do not cancel it or call the same Tool again for the same request just because it is still running.
+- A message wrapped in <runtime_notice> comes from the runtime, not from the user. It reports background results. Retrieve a result with read_background_result using the handle from the notice; never guess a handle.
+- cancel_background_executions stops background work that is no longer needed.
+- finish_without_reply ends your turn without a visible reply. Use it only when a runtime notice changes nothing for the user."""
+
+    /** The prompt section variant used when a Run may not wait for background results at all. */
+    internal const val SYSTEM_PROMPT_SECTION_NO_WAIT = """Background Tools:
+- A Tool result with "status": "running" or "queued" means that work continues in the background. You do not have its result yet. Never state, guess, or invent a pending result. Answer with what you already have and say briefly what is still being looked up. Do not cancel it or call the same Tool again for the same request just because it is still running.
 - A message wrapped in <runtime_notice> comes from the runtime, not from the user. It reports background results. Retrieve a result with read_background_result using the handle from the notice; never guess a handle.
 - cancel_background_executions stops background work that is no longer needed.
 - finish_without_reply ends your turn without a visible reply. Use it only when a runtime notice changes nothing for the user."""
 
     internal fun isControlTool(name: String): Boolean =
         name == READ_TOOL || name == AWAIT_TOOL || name == CANCEL_TOOL || name == FINISH_TOOL
+
+    /** Whether [AWAIT_TOOL] is declared and may consume Run-local wait time. */
+    internal fun awaitDeclared(config: BackgroundExecutionConfig): Boolean =
+        config.explicitWaitAllowanceMillis > 0L
+
+    /** The control Tools declared for a request with this background [config]. */
+    internal fun controlToolsFor(config: BackgroundExecutionConfig): List<ToolDefinition> =
+        if (awaitDeclared(config)) {
+            CONTROL_TOOLS
+        } else {
+            CONTROL_TOOLS.filter { tool -> tool.name != AWAIT_TOOL }
+        }
+
+    /** The system-prompt section for a request with this background [config]. */
+    internal fun systemPromptSectionFor(config: BackgroundExecutionConfig): String =
+        if (awaitDeclared(config)) SYSTEM_PROMPT_SECTION else SYSTEM_PROMPT_SECTION_NO_WAIT
 }
 
 /**
@@ -135,6 +161,7 @@ internal fun renderRuntimeNotice(
     delivery: RuntimeNoticeDelivery,
     policy: BackgroundConsumptionPolicy,
     businessToolsAllowed: Boolean,
+    awaitDeclared: Boolean,
 ): String = buildString {
     append("<runtime_notice>\n")
     if (entries.size == 1) {
@@ -176,8 +203,14 @@ internal fun renderRuntimeNotice(
         append('\n')
         if (!businessToolsAllowed) {
             append(
-                "In this follow-up, only these Tools are available: read_background_result, " +
-                    "await_background_results, cancel_background_executions, finish_without_reply.\n",
+                if (awaitDeclared) {
+                    "In this follow-up, only these Tools are available: read_background_result, " +
+                        "await_background_results, cancel_background_executions, " +
+                        "finish_without_reply.\n"
+                } else {
+                    "In this follow-up, only these Tools are available: read_background_result, " +
+                        "cancel_background_executions, finish_without_reply.\n"
+                },
             )
         }
     }
@@ -281,32 +314,118 @@ internal fun pendingBackgroundRecords(
     }
 }
 
-/** (handle, resultVersion) pairs already listed by a Runtime notice in [messages]. */
-internal fun noticedBackgroundEntries(messages: List<AgentMessage>): Set<Pair<String, Int>> =
-    messages.flatMap { message ->
-        message.parts.filterIsInstance<RuntimeNoticePart>()
-    }.flatMap { part ->
-        part.entries.map { it.handle to it.resultVersion }
-    }.toSet()
+/** `status` values in a retrieval result that mean the model has the outcome. */
+private val TERMINAL_DELIVERY_STATUSES =
+    setOf("succeeded", "failed", "timed_out", "interrupted", "cancelled")
+
+/** `status` values in a retrieval result that mean the model does not have the outcome yet. */
+private val PENDING_READ_STATUSES = setOf("queued", "running")
 
 /**
- * A terminal record is acknowledged when the latest Runtime notice listing it is followed by a
- * COMPLETED assistant message or by a successful `finish_without_reply` result.
+ * Non-error `read_background_result` results in [messages] that already told the model this
+ * handle is not ready — used to refuse repeated polling inside one Run.
+ */
+internal fun List<AgentMessage>.pendingReadResultCount(handle: String): Int =
+    flatMap { it.parts }
+        .filterIsInstance<ToolResultPart>()
+        .count { part ->
+            !part.isError &&
+                part.toolName == BackgroundToolInstructions.READ_TOOL &&
+                part.metadata["magrathea.background.handle"]?.jsonPrimitive?.contentOrNull ==
+                handle &&
+                (part.result as? JsonObject)?.get("status")?.jsonPrimitive?.contentOrNull in
+                PENDING_READ_STATUSES
+        }
+
+/**
+ * True when an earlier non-error `await_background_results` in this Run already returned
+ * `wait_allowance_exhausted` — further awaits are refused instead of returned silently.
+ */
+internal fun List<AgentMessage>.awaitAllowanceExhaustedEarlier(): Boolean =
+    flatMap { it.parts }
+        .filterIsInstance<ToolResultPart>()
+        .any { part ->
+            !part.isError &&
+                part.toolName == BackgroundToolInstructions.AWAIT_TOOL &&
+                (part.result as? JsonObject)
+                    ?.get("wait_allowance_exhausted")?.jsonPrimitive?.booleanOrNull == true
+        }
+
+/**
+ * Whether a non-error control result in this part delivered [handle]'s terminal outcome to the
+ * model: a `read_background_result` tagged with the handle, or an `await_background_results`
+ * entry for it carrying a terminal status.
+ */
+private fun ToolResultPart.deliversTerminalBackgroundResult(handle: String): Boolean {
+    if (isError) return false
+    return when (toolName) {
+        BackgroundToolInstructions.READ_TOOL ->
+            metadata["magrathea.background.handle"]?.jsonPrimitive?.contentOrNull == handle &&
+                (result as? JsonObject)
+                    ?.get("status")?.jsonPrimitive?.contentOrNull in TERMINAL_DELIVERY_STATUSES
+        BackgroundToolInstructions.AWAIT_TOOL ->
+            (result as? JsonObject)?.get("results")?.jsonArray?.any { entry ->
+                val fields = entry as? JsonObject ?: return@any false
+                fields["handle"]?.jsonPrimitive?.contentOrNull == handle &&
+                    fields["status"]?.jsonPrimitive?.contentOrNull in TERMINAL_DELIVERY_STATUSES
+            } ?: false
+        else -> false
+    }
+}
+
+/**
+ * Message indices where a record reached the model: a RUNTIME notice listing
+ * (handle, resultVersion), or a TOOL message carrying a terminal retrieval result for the
+ * handle.
+ */
+private fun backgroundDeliveryIndices(
+    handle: String,
+    resultVersion: Int,
+    messages: List<AgentMessage>,
+): List<Int> = messages.mapIndexedNotNull { index, message ->
+    when {
+        message.role == MessageRole.RUNTIME &&
+            message.parts.filterIsInstance<RuntimeNoticePart>().any { part ->
+                part.entries.any {
+                    it.handle == handle && it.resultVersion == resultVersion
+                }
+            } -> index
+        message.role == MessageRole.TOOL &&
+            message.parts.filterIsInstance<ToolResultPart>().any { part ->
+                part.deliversTerminalBackgroundResult(handle)
+            } -> index
+        else -> null
+    }
+}
+
+/**
+ * A record is delivered when a Runtime notice listed its current result version or a terminal
+ * retrieval result reached the model; a non-terminal retrieval leaves it undelivered.
+ */
+internal fun isBackgroundRecordDelivered(
+    record: BackgroundExecutionRecord,
+    messages: List<AgentMessage>,
+): Boolean = backgroundDeliveryIndices(
+    record.handle,
+    record.resultVersion,
+    messages,
+).isNotEmpty()
+
+/**
+ * A terminal record is acknowledged when its latest delivery point — a Runtime notice or a
+ * terminal retrieval result — is followed by a COMPLETED assistant message or by a successful
+ * `finish_without_reply` result.
  */
 internal fun isBackgroundRecordAcknowledged(
     record: BackgroundExecutionRecord,
     messages: List<AgentMessage>,
 ): Boolean {
-    val latestNoticeIndex = messages.indexOfLast { message ->
-        message.role == MessageRole.RUNTIME &&
-            message.parts.filterIsInstance<RuntimeNoticePart>().any { part ->
-                part.entries.any {
-                    it.handle == record.handle && it.resultVersion == record.resultVersion
-                }
-            }
-    }
-    if (latestNoticeIndex < 0) return false
-    return messages.drop(latestNoticeIndex + 1).any { message ->
+    val latestDeliveryIndex = backgroundDeliveryIndices(
+        record.handle,
+        record.resultVersion,
+        messages,
+    ).lastOrNull() ?: return false
+    return messages.drop(latestDeliveryIndex + 1).any { message ->
         when {
             message.role == MessageRole.ASSISTANT && message.stopReason == StopReason.COMPLETED -> true
             message.role == MessageRole.TOOL -> message.parts.filterIsInstance<ToolResultPart>().any {

@@ -25,6 +25,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
@@ -58,6 +59,7 @@ import saien.magrathea.core.RunActivation
 import saien.magrathea.core.RunActivationSource
 import saien.magrathea.core.RuntimeConfig
 import saien.magrathea.core.RuntimeNoticeDelivery
+import saien.magrathea.core.RuntimeNoticeEntry
 import saien.magrathea.core.RuntimeNoticePart
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
@@ -69,6 +71,8 @@ import saien.magrathea.core.ToolExecutionPermit
 import saien.magrathea.core.ToolExecutionRequest
 import saien.magrathea.core.ToolExecutionResult
 import saien.magrathea.core.ToolExecutor
+import saien.magrathea.core.ToolOrigin
+import saien.magrathea.core.ToolResultContextHints
 import saien.magrathea.core.ToolResultAudience
 import saien.magrathea.core.ToolResultPart
 import saien.magrathea.core.ToolResultRetention
@@ -122,8 +126,11 @@ class BackgroundToolRuntimeContractTest {
                 put("retrieve", "read_background_result")
                 put(
                     "note",
-                    "This work is still running in the background. " +
-                        "You do not have its result yet.",
+                    "This work is still running in the background. You do not have its " +
+                        "result yet. Answer now with what you already have, or call " +
+                        "await_background_results if you need the result first. Do not " +
+                        "cancel it or call the Tool again for it; a runtime notice will " +
+                        "report the result if you answer first.",
                 )
             },
             part.result,
@@ -1990,6 +1997,1111 @@ class BackgroundToolRuntimeContractTest {
         assertEquals(saien.magrathea.core.AgentStatus.CANCELLED, persisted.status)
         assertTrue(persisted.messages.none { it.role == MessageRole.TOOL })
         assertEquals(1, persisted.pendingToolCalls.size)
+    }
+
+    // S3-1: a terminal await result counts as delivery — the next turn appends no
+    // COALESCED notice and the completed Run leaves no pending activation.
+    @Test
+    fun terminalAwaitResultCountsAsDelivery() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("await-delivers")
+        val tool = DelayedTool("deep_lookup", 400, ToolBackgroundPolicy.ELIGIBLE)
+        val provider = object : ProviderAdapter {
+            override val key = "await-delivering"
+            val requests = mutableListOf<ProviderRequest>()
+            private var calls = 0
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                requests += request
+                calls += 1
+                when (calls) {
+                    1 -> emit(
+                        providerChunk(
+                            toolCalls = listOf(toolCall("call-1", "deep_lookup")),
+                            completed = true,
+                        ),
+                    )
+                    2 -> {
+                        val handle = request.messages
+                            .flatMap { it.parts }
+                            .filterIsInstance<ToolResultPart>()
+                            .firstNotNullOf { it.backgroundReceipt?.handle }
+                        emit(
+                            providerChunk(
+                                toolCalls = listOf(
+                                    toolCall(
+                                        "call-2",
+                                        "await_background_results",
+                                        """{"handles":["$handle"],"max_wait_ms":5000}""",
+                                    ),
+                                ),
+                                completed = true,
+                            ),
+                        )
+                    }
+                    else -> emit(providerChunk(text = "done", completed = true))
+                }
+            }
+        }
+        val runner = runner(provider = provider, tools = listOf(tool), background = executor)
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = InMemoryAgentPersistence(),
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        lease.start(
+            request(
+                "await-delivering",
+                sessionId,
+                config = backgroundConfig(handoffWait = 200, explicitAllowance = 10_000),
+            ),
+        )
+        advanceUntilIdle()
+        runCurrent()
+        lease.awaitIdle()
+
+        val messages = checkNotNull(lease.state.value.state).messages
+        assertTrue(messages.none { it.role == MessageRole.RUNTIME })
+        assertEquals(3, provider.requests.size)
+        assertNull(lease.state.value.background?.pendingActivation)
+        manager.close()
+    }
+
+    // S3-2: a terminal read result delivered without any Runtime notice also counts as
+    // delivery — the model reads a handle from its receipt while the execution settles
+    // mid-turn.
+    @Test
+    fun terminalReadResultCountsAsDelivery() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("read-delivers")
+        val search = DelayedTool("deep_lookup", 400, ToolBackgroundPolicy.ELIGIBLE)
+        val provider = object : ProviderAdapter {
+            override val key = "read-delivering"
+            val requests = mutableListOf<ProviderRequest>()
+            private var calls = 0
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                requests += request
+                calls += 1
+                when (calls) {
+                    1 -> emit(
+                        providerChunk(
+                            toolCalls = listOf(toolCall("call-1", "deep_lookup")),
+                            completed = true,
+                        ),
+                    )
+                    2 -> {
+                        // The execution settles while this response streams in; the model
+                        // already knows the handle from the receipt.
+                        delay(300)
+                        val handle = request.messages
+                            .flatMap { it.parts }
+                            .filterIsInstance<ToolResultPart>()
+                            .firstNotNullOf { it.backgroundReceipt?.handle }
+                        emit(
+                            providerChunk(
+                                toolCalls = listOf(
+                                    toolCall(
+                                        "call-2",
+                                        "read_background_result",
+                                        """{"handle":"$handle"}""",
+                                    ),
+                                ),
+                                completed = true,
+                            ),
+                        )
+                    }
+                    else -> emit(providerChunk(text = "done", completed = true))
+                }
+            }
+        }
+        val runner = runner(
+            provider = provider,
+            tools = listOf(search),
+            background = executor,
+        )
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = InMemoryAgentPersistence(),
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        lease.start(
+            request(
+                "read-delivering",
+                sessionId,
+                config = backgroundConfig(handoffWait = 200, explicitAllowance = 10_000),
+            ),
+        )
+        advanceUntilIdle()
+        runCurrent()
+        lease.awaitIdle()
+
+        val messages = checkNotNull(lease.state.value.state).messages
+        assertTrue(messages.none { it.role == MessageRole.RUNTIME })
+        assertEquals(3, provider.requests.size)
+        assertNull(lease.state.value.background?.pendingActivation)
+        manager.close()
+    }
+
+    // S3-3: a non-terminal retrieval leaves the record undelivered — settling later still
+    // produces a pending activation.
+    @Test
+    fun nonTerminalReadDoesNotCountAsDelivery() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("read-running")
+        val tool = DelayedTool("deep_lookup", 400, ToolBackgroundPolicy.ELIGIBLE)
+        val provider = object : ProviderAdapter {
+            override val key = "read-running"
+            val requests = mutableListOf<ProviderRequest>()
+            private var calls = 0
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                requests += request
+                calls += 1
+                when (calls) {
+                    1 -> emit(
+                        providerChunk(
+                            toolCalls = listOf(toolCall("call-1", "deep_lookup")),
+                            completed = true,
+                        ),
+                    )
+                    2 -> {
+                        val handle = request.messages
+                            .flatMap { it.parts }
+                            .filterIsInstance<ToolResultPart>()
+                            .firstNotNullOf { it.backgroundReceipt?.handle }
+                        emit(
+                            providerChunk(
+                                toolCalls = listOf(
+                                    toolCall(
+                                        "call-2",
+                                        "read_background_result",
+                                        """{"handle":"$handle"}""",
+                                    ),
+                                ),
+                                completed = true,
+                            ),
+                        )
+                    }
+                    else -> emit(providerChunk(text = "done", completed = true))
+                }
+            }
+        }
+        val runner = runner(provider = provider, tools = listOf(tool), background = executor)
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = InMemoryAgentPersistence(),
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        lease.start(
+            request(
+                "read-running",
+                sessionId,
+                config = backgroundConfig(handoffWait = 200, explicitAllowance = 10_000),
+            ),
+        )
+        advanceUntilIdle()
+        runCurrent()
+        lease.awaitIdle()
+
+        val messages = checkNotNull(lease.state.value.state).messages
+        assertTrue(messages.none { it.role == MessageRole.RUNTIME })
+        assertNotNull(lease.state.value.background?.pendingActivation)
+        manager.close()
+    }
+
+    // S3-4: a zero wait allowance removes await_background_results from the declarations
+    // and swaps the system-prompt section byte-for-byte.
+    @Test
+    fun zeroAllowanceDropsAwaitFromDeclarationsAndPrompt() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("no-wait")
+        executor.register(sessionId, NoopListener)
+        val tool = DelayedTool("slow_lookup", 50, ToolBackgroundPolicy.ELIGIBLE)
+        val provider = scriptedProvider("no-wait", toolCall("call-1", "slow_lookup"))
+        val runner = runner(provider = provider, tools = listOf(tool), background = executor)
+        runner.run(
+            request(
+                "no-wait",
+                sessionId,
+                config = backgroundConfig(handoffWait = 2_000, explicitAllowance = 0),
+                systemPrompt = "host prompt",
+            ),
+        ).toList()
+
+        assertEquals(
+            requestTools + listOf(
+                "read_background_result",
+                "cancel_background_executions",
+                "finish_without_reply",
+            ),
+            provider.requests.first().tools.map { it.name },
+        )
+        val system = provider.requests.first().messages
+            .single { it.role == MessageRole.SYSTEM }
+            .parts.filterIsInstance<TextPart>().single().text
+        assertEquals(
+            "host prompt\n\n" + BackgroundToolInstructions.SYSTEM_PROMPT_SECTION_NO_WAIT,
+            system,
+        )
+        executor.close()
+    }
+
+    // S3-5: an await call made while it is not declared falls through to the unknown-Tool
+    // rejection like any other name the model was not offered.
+    @Test
+    fun undeclaredAwaitIsRejectedLikeAnyUnknownTool() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("await-undeclared")
+        val tool = DelayedTool("deep_lookup", 100, ToolBackgroundPolicy.ELIGIBLE)
+        val provider = object : ProviderAdapter {
+            override val key = "await-undeclared"
+            private var calls = 0
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                calls += 1
+                when (calls) {
+                    1 -> emit(
+                        providerChunk(
+                            toolCalls = listOf(
+                                toolCall(
+                                    "call-1",
+                                    "await_background_results",
+                                    """{"handles":["bg_any"],"max_wait_ms":100}""",
+                                ),
+                            ),
+                            completed = true,
+                        ),
+                    )
+                    else -> emit(providerChunk(text = "done", completed = true))
+                }
+            }
+        }
+        val runner = runner(provider = provider, tools = listOf(tool), background = executor)
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = InMemoryAgentPersistence(),
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        lease.start(
+            request(
+                "await-undeclared",
+                sessionId,
+                config = backgroundConfig(handoffWait = 200, explicitAllowance = 0),
+            ),
+        )
+        advanceUntilIdle()
+        runCurrent()
+        lease.awaitIdle()
+
+        val rejected = checkNotNull(lease.state.value.state).messages
+            .filter { it.role == MessageRole.TOOL }
+            .flatMap { it.parts.filterIsInstance<ToolResultPart>() }
+            .single { it.toolCallId == "call-1" }
+        assertTrue(rejected.isError)
+        assertEquals("Tool not advertised", rejected.displayText)
+        manager.close()
+    }
+
+    // S3-6: the CONTINUATION restriction line lists only the declared controls.
+    @Test
+    fun continuationRestrictionLineListsOnlyDeclaredControls() {
+        val entries = listOf(
+            RuntimeNoticeEntry(
+                handle = "bg_x",
+                toolName = "deep_lookup",
+                callId = "call-1",
+                outcome = BackgroundOutcome.SUCCEEDED,
+                resultVersion = 1,
+            ),
+        )
+        val withoutAwait = renderRuntimeNotice(
+            entries,
+            RuntimeNoticeDelivery.CONTINUATION,
+            BackgroundConsumptionPolicy.LATEST_CONTEXT,
+            businessToolsAllowed = false,
+            awaitDeclared = false,
+        )
+        assertTrue(
+            "only these Tools are available: read_background_result, " +
+                "cancel_background_executions, finish_without_reply." in withoutAwait,
+        )
+        assertTrue("await_background_results," !in withoutAwait)
+
+        val withAwait = renderRuntimeNotice(
+            entries,
+            RuntimeNoticeDelivery.CONTINUATION,
+            BackgroundConsumptionPolicy.LATEST_CONTEXT,
+            businessToolsAllowed = false,
+            awaitDeclared = true,
+        )
+        assertTrue(
+            "read_background_result, await_background_results, " +
+                "cancel_background_executions, finish_without_reply." in withAwait,
+        )
+    }
+
+    // S3-7: an await that finds no remaining allowance returns immediately with the
+    // exhaustion marker.
+    @Test
+    fun exhaustedAllowanceAwaitReportsTheExhaustion() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("await-exhausted")
+        val tool = DelayedTool("deep_lookup", 60_000, ToolBackgroundPolicy.ELIGIBLE)
+        val provider = object : ProviderAdapter {
+            override val key = "await-exhausted"
+            val requests = mutableListOf<ProviderRequest>()
+            private var calls = 0
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                requests += request
+                calls += 1
+                when (calls) {
+                    1 -> emit(
+                        providerChunk(
+                            toolCalls = listOf(toolCall("call-1", "deep_lookup")),
+                            completed = true,
+                        ),
+                    )
+                    2 -> {
+                        val handle = request.messages
+                            .flatMap { it.parts }
+                            .filterIsInstance<ToolResultPart>()
+                            .firstNotNullOf { it.backgroundReceipt?.handle }
+                        emit(
+                            providerChunk(
+                                toolCalls = listOf(
+                                    toolCall(
+                                        "call-2",
+                                        "await_background_results",
+                                        """{"handles":["$handle"],"max_wait_ms":50}""",
+                                    ),
+                                ),
+                                completed = true,
+                            ),
+                        )
+                    }
+                    3 -> {
+                        val handle = request.messages
+                            .flatMap { it.parts }
+                            .filterIsInstance<ToolResultPart>()
+                            .firstNotNullOf { it.backgroundReceipt?.handle }
+                        emit(
+                            providerChunk(
+                                toolCalls = listOf(
+                                    toolCall(
+                                        "call-3",
+                                        "await_background_results",
+                                        """{"handles":["$handle"],"max_wait_ms":50}""",
+                                    ),
+                                ),
+                                completed = true,
+                            ),
+                        )
+                    }
+                    else -> emit(providerChunk(text = "done", completed = true))
+                }
+            }
+        }
+        val runner = runner(provider = provider, tools = listOf(tool), background = executor)
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = InMemoryAgentPersistence(),
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        lease.start(
+            request(
+                "await-exhausted",
+                sessionId,
+                config = backgroundConfig(handoffWait = 200, explicitAllowance = 50),
+            ),
+        )
+        advanceUntilIdle()
+        runCurrent()
+        lease.awaitIdle()
+
+        val results = checkNotNull(lease.state.value.state).messages
+            .filter { it.role == MessageRole.TOOL }
+            .flatMap { it.parts.filterIsInstance<ToolResultPart>() }
+        val firstAwait = results.single { it.toolCallId == "call-2" }
+        assertTrue(firstAwait.result.jsonObject["wait_allowance_exhausted"] == null)
+        val secondAwait = results.single { it.toolCallId == "call-3" }
+        assertEquals(
+            JsonPrimitive(true),
+            secondAwait.result.jsonObject["wait_allowance_exhausted"],
+        )
+        assertEquals(
+            "No waiting time is left in this Run. Answer now with what you have; " +
+                "a runtime notice will report results that arrive later.",
+            secondAwait.result.jsonObject["note"]!!.jsonPrimitive.content,
+        )
+        assertEquals(0L, secondAwait.result.jsonObject["waited_ms"]!!.jsonPrimitive.long)
+        manager.close()
+    }
+
+    // S4-1: the receipt note tells the model plainly what to do — with and without the
+    // wait control.
+    @Test
+    fun receiptNoteFollowsTheWaitAllowance() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+
+        suspend fun receiptJson(explicitAllowance: Long): JsonObject {
+            val sessionId = AgentSessionId("receipt-note-$explicitAllowance")
+            executor.register(sessionId, NoopListener)
+            val tool = DelayedTool("slow_lookup", 60_000, ToolBackgroundPolicy.ELIGIBLE)
+            val provider = scriptedProvider(
+                "receipt-note-$explicitAllowance",
+                toolCall("call-1", "slow_lookup"),
+            )
+            val runner = runner(
+                provider = provider,
+                tools = listOf(tool),
+                background = executor,
+            )
+            val events = runner.run(
+                request(
+                    "receipt-note-$explicitAllowance",
+                    sessionId,
+                    config = backgroundConfig(
+                        handoffWait = 100,
+                        explicitAllowance = explicitAllowance,
+                    ),
+                ),
+            ).toList()
+            val state = events.filterIsInstance<AgentEvent.Completed>().single().state
+            return state.messages
+                .single { it.role == MessageRole.TOOL }
+                .parts.filterIsInstance<ToolResultPart>().single().result.jsonObject
+        }
+
+        assertEquals(
+            "This work is still running in the background. You do not have its result " +
+                "yet. Answer now with what you already have, or call " +
+                "await_background_results if you need the result first. Do not cancel it " +
+                "or call the Tool again for it; a runtime notice will report the result " +
+                "if you answer first.",
+            receiptJson(10_000)["note"]!!.jsonPrimitive.content,
+        )
+        assertEquals(
+            "This work is still running in the background. You do not have its result " +
+                "yet. Answer now with what you already have; a runtime notice will " +
+                "report the result when it arrives. Do not cancel it or call the Tool " +
+                "again for it.",
+            receiptJson(0)["note"]!!.jsonPrimitive.content,
+        )
+        executor.close()
+    }
+
+    // S4-2: a read against a still-running record carries the matching not-ready note.
+    @Test
+    fun runningReadNoteFollowsTheWaitAllowance() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+
+        suspend fun readJson(explicitAllowance: Long): JsonObject {
+            val sessionId = AgentSessionId("read-note-$explicitAllowance")
+            val tool = DelayedTool("deep_lookup", 60_000, ToolBackgroundPolicy.ELIGIBLE)
+            val provider = object : ProviderAdapter {
+                override val key = "read-note-$explicitAllowance"
+                private var calls = 0
+                override suspend fun generate(
+                    request: ProviderRequest,
+                ): Flow<ProviderChunk> = flow {
+                    calls += 1
+                    when (calls) {
+                        1 -> emit(
+                            providerChunk(
+                                toolCalls = listOf(toolCall("call-1", "deep_lookup")),
+                                completed = true,
+                            ),
+                        )
+                        2 -> {
+                            val handle = request.messages
+                                .flatMap { it.parts }
+                                .filterIsInstance<ToolResultPart>()
+                                .firstNotNullOf { it.backgroundReceipt?.handle }
+                            emit(
+                                providerChunk(
+                                    toolCalls = listOf(
+                                        toolCall(
+                                            "call-2",
+                                            "read_background_result",
+                                            """{"handle":"$handle"}""",
+                                        ),
+                                    ),
+                                    completed = true,
+                                ),
+                            )
+                        }
+                        else -> emit(providerChunk(text = "done", completed = true))
+                    }
+                }
+            }
+            val runner = runner(provider = provider, tools = listOf(tool), background = executor)
+            val manager = DefaultAgentSessionManager(
+                runner = runner,
+                persistence = InMemoryAgentPersistence(),
+                dispatcher = StandardTestDispatcher(testScheduler),
+                background = executor,
+            )
+            val lease = manager.create(sessionId)
+            lease.start(
+                request(
+                    "read-note-$explicitAllowance",
+                    sessionId,
+                    config = backgroundConfig(
+                        handoffWait = 100,
+                        explicitAllowance = explicitAllowance,
+                    ),
+                ),
+            )
+            advanceUntilIdle()
+            runCurrent()
+            lease.awaitIdle()
+            val part = checkNotNull(lease.state.value.state).messages
+                .filter { it.role == MessageRole.TOOL }
+                .flatMap { it.parts.filterIsInstance<ToolResultPart>() }
+                .single { it.toolCallId == "call-2" }
+            return part.result.jsonObject
+        }
+
+        val running = readJson(10_000)
+        assertEquals("running", running["status"]!!.jsonPrimitive.content)
+        assertEquals(
+            "This result is not ready yet. Answer now with what you already have, or " +
+                "call await_background_results if you need it first. Do not cancel it " +
+                "or call the Tool again for it.",
+            running["note"]!!.jsonPrimitive.content,
+        )
+        val noWait = readJson(0)
+        assertEquals("running", noWait["status"]!!.jsonPrimitive.content)
+        assertEquals(
+            "This result is not ready yet. Answer now with what you already have; a " +
+                "runtime notice will report the result when it arrives. Do not cancel " +
+                "it or call the Tool again for it.",
+            noWait["note"]!!.jsonPrimitive.content,
+        )
+        executor.close()
+    }
+
+    // S4-3: an await that ends with work still running and allowance left carries the
+    // not-ready note instead of the exhausted one.
+    @Test
+    fun awaitWithWorkStillRunningCarriesTheNotReadyNote() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("await-not-ready")
+        val tool = DelayedTool("deep_lookup", 60_000, ToolBackgroundPolicy.ELIGIBLE)
+        val provider = object : ProviderAdapter {
+            override val key = "await-not-ready"
+            private var calls = 0
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                calls += 1
+                when (calls) {
+                    1 -> emit(
+                        providerChunk(
+                            toolCalls = listOf(toolCall("call-1", "deep_lookup")),
+                            completed = true,
+                        ),
+                    )
+                    2 -> {
+                        val handle = request.messages
+                            .flatMap { it.parts }
+                            .filterIsInstance<ToolResultPart>()
+                            .firstNotNullOf { it.backgroundReceipt?.handle }
+                        emit(
+                            providerChunk(
+                                toolCalls = listOf(
+                                    toolCall(
+                                        "call-2",
+                                        "await_background_results",
+                                        """{"handles":["$handle"],"max_wait_ms":50}""",
+                                    ),
+                                ),
+                                completed = true,
+                            ),
+                        )
+                    }
+                    else -> emit(providerChunk(text = "done", completed = true))
+                }
+            }
+        }
+        val runner = runner(provider = provider, tools = listOf(tool), background = executor)
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = InMemoryAgentPersistence(),
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        lease.start(
+            request(
+                "await-not-ready",
+                sessionId,
+                config = backgroundConfig(handoffWait = 100, explicitAllowance = 10_000),
+            ),
+        )
+        advanceUntilIdle()
+        runCurrent()
+        lease.awaitIdle()
+
+        val awaitResult = checkNotNull(lease.state.value.state).messages
+            .filter { it.role == MessageRole.TOOL }
+            .flatMap { it.parts.filterIsInstance<ToolResultPart>() }
+            .single { it.toolCallId == "call-2" }
+        val json = awaitResult.result.jsonObject
+        assertNull(json["wait_allowance_exhausted"])
+        assertEquals(
+            "Some results are not ready yet. Answer now with what you already have; a " +
+                "runtime notice will report them when they arrive. Do not cancel them " +
+                "or call the Tool again for them.",
+            json["note"]!!.jsonPrimitive.content,
+        )
+        manager.close()
+    }
+
+    // S5-1: a single-handle settled await carries the record's stored result fields exactly
+    // like a direct read — content, origin, contextHints, and the background metadata.
+    @Test
+    fun singleHandleAwaitCarriesTheReadResultFields() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("await-carries")
+        executor.register(sessionId, NoopListener)
+        val stored = seededResult().copy(
+            origin = ToolOrigin("src-1", "source one", "tool-1", "tool one"),
+            contextHints = ToolResultContextHints(retention = ToolResultRetention.PINNED),
+        )
+        store.upsert(
+            seededRecord(sessionId, "bg_settled", outcome = BackgroundOutcome.SUCCEEDED)
+                .copy(result = stored),
+        )
+        val provider = scriptedProvider(
+            "await-carries",
+            toolCall(
+                "await-1",
+                "await_background_results",
+                """{"handles":["bg_settled"],"max_wait_ms":50}""",
+            ),
+            toolCall("read-1", "read_background_result", """{"handle":"bg_settled"}"""),
+        )
+        val runner = runner(provider = provider, tools = emptyList(), background = executor)
+        val events = runner.run(
+            request("await-carries", sessionId, config = backgroundConfig()),
+        ).toList()
+        val parts = events.filterIsInstance<AgentEvent.Completed>().single().state.messages
+            .single { it.role == MessageRole.TOOL }.parts.filterIsInstance<ToolResultPart>()
+        val awaitPart = parts.single { it.toolCallId == "await-1" }
+        val readPart = parts.single { it.toolCallId == "read-1" }
+        assertFalse(awaitPart.isError)
+        assertEquals(stored.content, awaitPart.content)
+        assertEquals(stored.origin, awaitPart.origin)
+        assertEquals(stored.contextHints, awaitPart.contextHints)
+        assertEquals(readPart.metadata, awaitPart.metadata)
+        val json = awaitPart.result.jsonObject
+        assertNotNull(json["results"])
+        assertNotNull(json["waited_ms"])
+        executor.close()
+    }
+
+    // S5-2: a second read of the same still-running handle inside one Run is refused
+    // instead of returned again.
+    @Test
+    fun repeatedPendingReadIsRefused() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("read-poll")
+        val tool = DelayedTool("deep_lookup", 60_000, ToolBackgroundPolicy.ELIGIBLE)
+        val provider = object : ProviderAdapter {
+            override val key = "read-poll"
+            private var calls = 0
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                calls += 1
+                when (calls) {
+                    1 -> emit(
+                        providerChunk(
+                            toolCalls = listOf(toolCall("call-1", "deep_lookup")),
+                            completed = true,
+                        ),
+                    )
+                    2, 3 -> {
+                        val handle = request.messages
+                            .flatMap { it.parts }
+                            .filterIsInstance<ToolResultPart>()
+                            .firstNotNullOf { it.backgroundReceipt?.handle }
+                        emit(
+                            providerChunk(
+                                toolCalls = listOf(
+                                    toolCall(
+                                        "call-$calls",
+                                        "read_background_result",
+                                        """{"handle":"$handle"}""",
+                                    ),
+                                ),
+                                completed = true,
+                            ),
+                        )
+                    }
+                    else -> emit(providerChunk(text = "done", completed = true))
+                }
+            }
+        }
+        val runner = runner(provider = provider, tools = listOf(tool), background = executor)
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = InMemoryAgentPersistence(),
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        lease.start(
+            request(
+                "read-poll",
+                sessionId,
+                config = backgroundConfig(handoffWait = 100, explicitAllowance = 0),
+            ),
+        )
+        advanceUntilIdle()
+        runCurrent()
+        lease.awaitIdle()
+
+        val handle = store.load(sessionId).records.single().handle
+        val parts = checkNotNull(lease.state.value.state).messages
+            .filter { it.role == MessageRole.TOOL }
+            .flatMap { it.parts.filterIsInstance<ToolResultPart>() }
+        val first = parts.single { it.toolCallId == "call-2" }
+        assertFalse(first.isError)
+        assertEquals("running", first.result.jsonObject["status"]!!.jsonPrimitive.content)
+        val second = parts.single { it.toolCallId == "call-3" }
+        assertTrue(second.isError)
+        val json = second.result.jsonObject
+        assertEquals(handle, json["handle"]!!.jsonPrimitive.content)
+        assertEquals("running", json["status"]!!.jsonPrimitive.content)
+        assertEquals(
+            "Already checked: this result is still not ready. Stop checking and answer " +
+                "now; a runtime notice will report it when it arrives.",
+            json["error"]!!.jsonPrimitive.content,
+        )
+        manager.close()
+    }
+
+    // S5-3: an await after the allowance was already exhausted returns an error instead of
+    // another exhausted payload.
+    @Test
+    fun awaitAfterExhaustionIsRefused() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("await-poll")
+        val tool = DelayedTool("deep_lookup", 60_000, ToolBackgroundPolicy.ELIGIBLE)
+        val provider = object : ProviderAdapter {
+            override val key = "await-poll"
+            private var calls = 0
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                calls += 1
+                when (calls) {
+                    1 -> emit(
+                        providerChunk(
+                            toolCalls = listOf(toolCall("call-1", "deep_lookup")),
+                            completed = true,
+                        ),
+                    )
+                    2, 3, 4 -> {
+                        val handle = request.messages
+                            .flatMap { it.parts }
+                            .filterIsInstance<ToolResultPart>()
+                            .firstNotNullOf { it.backgroundReceipt?.handle }
+                        emit(
+                            providerChunk(
+                                toolCalls = listOf(
+                                    toolCall(
+                                        "call-$calls",
+                                        "await_background_results",
+                                        """{"handles":["$handle"],"max_wait_ms":50}""",
+                                    ),
+                                ),
+                                completed = true,
+                            ),
+                        )
+                    }
+                    else -> emit(providerChunk(text = "done", completed = true))
+                }
+            }
+        }
+        val runner = runner(provider = provider, tools = listOf(tool), background = executor)
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = InMemoryAgentPersistence(),
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        lease.start(
+            request(
+                "await-poll",
+                sessionId,
+                config = backgroundConfig(handoffWait = 100, explicitAllowance = 50),
+            ),
+        )
+        advanceUntilIdle()
+        runCurrent()
+        lease.awaitIdle()
+
+        val parts = checkNotNull(lease.state.value.state).messages
+            .filter { it.role == MessageRole.TOOL }
+            .flatMap { it.parts.filterIsInstance<ToolResultPart>() }
+        // The first await consumes the 50 ms allowance; the second finds none left and
+        // returns the non-error exhausted payload; the third is refused outright.
+        val waited = parts.single { it.toolCallId == "call-2" }
+        assertFalse(waited.isError)
+        assertNull(waited.result.jsonObject["wait_allowance_exhausted"])
+        val exhausted = parts.single { it.toolCallId == "call-3" }
+        assertFalse(exhausted.isError)
+        assertEquals(
+            JsonPrimitive(true),
+            exhausted.result.jsonObject["wait_allowance_exhausted"],
+        )
+        val refused = parts.single { it.toolCallId == "call-4" }
+        assertTrue(refused.isError)
+        val json = refused.result.jsonObject
+        assertEquals(
+            "No waiting time is left in this Run. Stop waiting and answer now; a " +
+                "runtime notice will report results that arrive later.",
+            json["error"]!!.jsonPrimitive.content,
+        )
+        assertEquals(JsonPrimitive(true), json["wait_allowance_exhausted"])
+        manager.close()
+    }
+
+    // S5-4: the polling guard counts only non-terminal reads — a read after the record
+    // settles still returns the payload.
+    @Test
+    fun readAfterSettleReturnsThePayload() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("read-after-settle")
+        val tool = DelayedTool("deep_lookup", 400, ToolBackgroundPolicy.ELIGIBLE)
+        val provider = object : ProviderAdapter {
+            override val key = "read-after-settle"
+            private var calls = 0
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                calls += 1
+                when (calls) {
+                    1 -> emit(
+                        providerChunk(
+                            toolCalls = listOf(toolCall("call-1", "deep_lookup")),
+                            completed = true,
+                        ),
+                    )
+                    2 -> {
+                        val handle = request.messages
+                            .flatMap { it.parts }
+                            .filterIsInstance<ToolResultPart>()
+                            .firstNotNullOf { it.backgroundReceipt?.handle }
+                        emit(
+                            providerChunk(
+                                toolCalls = listOf(
+                                    toolCall(
+                                        "call-2",
+                                        "read_background_result",
+                                        """{"handle":"$handle"}""",
+                                    ),
+                                ),
+                                completed = true,
+                            ),
+                        )
+                    }
+                    3 -> {
+                        delay(400)
+                        val handle = request.messages
+                            .flatMap { it.parts }
+                            .filterIsInstance<ToolResultPart>()
+                            .firstNotNullOf { it.backgroundReceipt?.handle }
+                        emit(
+                            providerChunk(
+                                toolCalls = listOf(
+                                    toolCall(
+                                        "call-3",
+                                        "read_background_result",
+                                        """{"handle":"$handle"}""",
+                                    ),
+                                ),
+                                completed = true,
+                            ),
+                        )
+                    }
+                    else -> emit(providerChunk(text = "done", completed = true))
+                }
+            }
+        }
+        val runner = runner(provider = provider, tools = listOf(tool), background = executor)
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = InMemoryAgentPersistence(),
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        lease.start(
+            request(
+                "read-after-settle",
+                sessionId,
+                config = backgroundConfig(handoffWait = 100, explicitAllowance = 0),
+            ),
+        )
+        advanceUntilIdle()
+        runCurrent()
+        lease.awaitIdle()
+
+        val parts = checkNotNull(lease.state.value.state).messages
+            .filter { it.role == MessageRole.TOOL }
+            .flatMap { it.parts.filterIsInstance<ToolResultPart>() }
+        assertFalse(parts.single { it.toolCallId == "call-2" }.isError)
+        assertEquals(
+            "running",
+            parts.single { it.toolCallId == "call-2" }
+                .result.jsonObject["status"]!!.jsonPrimitive.content,
+        )
+        val settledRead = parts.single { it.toolCallId == "call-3" }
+        assertFalse(settledRead.isError)
+        val json = settledRead.result.jsonObject
+        assertEquals("succeeded", json["status"]!!.jsonPrimitive.content)
+        assertEquals(JsonPrimitive("result-deep_lookup"), json["result"])
+        manager.close()
+    }
+
+    // S6-1: the settle-after-last-turn race — the record settles while the Provider streams
+    // the Run's final answer, so no COALESCED notice can be appended; pendingActivation must
+    // still surface when the Run completes.
+    @Test
+    fun settleDuringFinalAnswerSurfacesPendingActivation() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("late-settle")
+        val tool = DelayedTool("deep_lookup", 400, ToolBackgroundPolicy.ELIGIBLE)
+        val provider = object : ProviderAdapter {
+            override val key = "late-settle"
+            private var calls = 0
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                calls += 1
+                if (calls == 1) {
+                    emit(
+                        providerChunk(
+                            toolCalls = listOf(toolCall("call-1", "deep_lookup")),
+                            completed = true,
+                        ),
+                    )
+                } else {
+                    // The execution settles while this answer streams.
+                    delay(400)
+                    emit(providerChunk(text = "done", completed = true))
+                }
+            }
+        }
+        val runner = runner(provider = provider, tools = listOf(tool), background = executor)
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = InMemoryAgentPersistence(),
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        lease.start(
+            request(
+                "late-settle",
+                sessionId,
+                config = backgroundConfig(handoffWait = 100),
+            ),
+        )
+        advanceUntilIdle()
+        runCurrent()
+        lease.awaitIdle()
+
+        assertEquals(
+            BackgroundOutcome.SUCCEEDED,
+            store.load(sessionId).records.single().outcome,
+        )
+        val messages = checkNotNull(lease.state.value.state).messages
+        assertTrue(messages.none { it.role == MessageRole.RUNTIME })
+        assertNotNull(assertNotNull(lease.state.value.background).pendingActivation)
+        manager.close()
+    }
+
+    // S6-2: a record that settles mid-Run is still delivered by a COALESCED notice and
+    // acknowledged — pendingActivation stays null after completion.
+    @Test
+    fun midRunSettleDeliveredByNoticeStaysAcknowledged() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("mid-settle")
+        val tool = DelayedTool("deep_lookup", 300, ToolBackgroundPolicy.ELIGIBLE)
+        val blocker = DelayedTool("blocker", 50, ToolBackgroundPolicy.BLOCKING)
+        val provider = object : ProviderAdapter {
+            override val key = "mid-settle"
+            val requests = mutableListOf<ProviderRequest>()
+            private var calls = 0
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                requests += request
+                calls += 1
+                when (calls) {
+                    1 -> emit(
+                        providerChunk(
+                            toolCalls = listOf(toolCall("call-1", "deep_lookup")),
+                            completed = true,
+                        ),
+                    )
+                    2 -> {
+                        // The execution settles while this response streams.
+                        delay(250)
+                        emit(
+                            providerChunk(
+                                toolCalls = listOf(toolCall("call-2", "blocker")),
+                                completed = true,
+                            ),
+                        )
+                    }
+                    else -> emit(providerChunk(text = "done", completed = true))
+                }
+            }
+        }
+        val runner = runner(
+            provider = provider,
+            tools = listOf(tool, blocker),
+            background = executor,
+        )
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = InMemoryAgentPersistence(),
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        lease.start(
+            request(
+                "mid-settle",
+                sessionId,
+                config = backgroundConfig(handoffWait = 100),
+            ),
+        )
+        advanceUntilIdle()
+        runCurrent()
+        lease.awaitIdle()
+
+        val messages = checkNotNull(lease.state.value.state).messages
+        assertEquals(1, messages.count { it.role == MessageRole.RUNTIME })
+        assertNull(assertNotNull(lease.state.value.background).pendingActivation)
+        manager.close()
     }
 
     // ---- harness ----

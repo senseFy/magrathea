@@ -140,6 +140,93 @@ class ChatbotBackgroundContractTest {
         executor.close()
     }
 
+    // 1b. A single-handle await that returns the settled payload lands the stored result —
+    // citations included — on the original activity.
+    @Test
+    fun singleHandleAwaitCarriesTheResultOntoTheOriginalActivity() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val tool = GatedTool("deep_lookup")
+        val provider = ScriptedProvider("test")
+        provider.script += { chunk(toolCalls = listOf(toolCall("call-1", "deep_lookup"))) }
+        provider.script += { request ->
+            val handle = request.messages
+                .flatMap { it.parts }
+                .filterIsInstance<ToolResultPart>()
+                .firstNotNullOf { it.backgroundReceipt?.handle }
+            chunk(
+                toolCalls = listOf(
+                    toolCall(
+                        "await-1",
+                        "await_background_results",
+                        """{"handles":["$handle"],"max_wait_ms":5000}""",
+                    ),
+                ),
+            )
+        }
+        provider.script += { chunk(text = "answer") }
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(provider, listOf(tool), executor, persistence)
+        val client = client(runner, persistence, executor, backgroundConfig())
+        val session = client.createSession(testChatbotConfiguration(provider = "test"))
+
+        session.send("look up project atlas")
+        advanceTimeBy(50)
+        runCurrent()
+        tool.gate.complete(Unit)
+        advanceUntilIdle()
+
+        val snapshot = session.snapshot()
+        assertEquals(ChatbotStatus.COMPLETED, snapshot.status)
+        assertFalse(assertNotNull(snapshot.background).hasPendingActivation)
+        val activity = snapshot.toolActivities.single { it.call.id == "call-1" }
+        assertEquals(ChatbotToolActivityStatus.SUCCEEDED, activity.status)
+        val result = assertNotNull(activity.result)
+        assertEquals("call-1", result.id)
+        assertEquals("deep_lookup", result.name)
+        assertEquals(listOf(ChatbotCitation("Atlas", "https://atlas", "note")), result.citations)
+        assertTrue(snapshot.toolActivities.none { it.call.id == "await-1" })
+
+        client.close()
+        executor.close()
+    }
+
+    // 1c. The record settles while the final answer streams — too late for a COALESCED
+    // notice; hasPendingActivation still becomes true and the continuation starts.
+    @Test
+    fun settleDuringFinalAnswerFlagsPendingActivationForContinuation() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val tool = GatedTool("deep_lookup")
+        val provider = ScriptedProvider("test")
+        provider.script += { chunk(toolCalls = listOf(toolCall("call-1", "deep_lookup"))) }
+        provider.script += {
+            tool.gate.complete(Unit)
+            chunk(text = "answer")
+        }
+        provider.script += { chunk(text = "supplement") }
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(provider, listOf(tool), executor, persistence)
+        val client = client(runner, persistence, executor, backgroundConfig())
+        val session = client.createSession(testChatbotConfiguration(provider = "test"))
+
+        session.send("look up project atlas")
+        advanceUntilIdle()
+
+        val snapshot = session.snapshot()
+        assertEquals(ChatbotStatus.COMPLETED, snapshot.status)
+        assertTrue(assertNotNull(snapshot.background).hasPendingActivation)
+        assertTrue(session.continueWithBackgroundResults())
+        advanceUntilIdle()
+
+        val continued = session.snapshot()
+        assertFalse(assertNotNull(continued.background).hasPendingActivation)
+        assertEquals("supplement", continued.messages.last().text)
+
+        client.close()
+        executor.close()
+    }
+
     // 2. continueWithBackgroundResults is false without a pending activation or while running.
     @Test
     fun continueWithBackgroundResultsRejectsWhenNothingIsPending() = runTest {

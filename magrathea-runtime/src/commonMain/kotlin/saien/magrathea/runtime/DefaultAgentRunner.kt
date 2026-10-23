@@ -1277,18 +1277,20 @@ class DefaultAgentRunner(
                             activeRequest,
                             runState.value.toolCallCounts,
                         )
+                        val backgroundConfig = activeRequest.engine.runtime.background
                         val backgroundEnabled = isBackgroundEnabled(activeRequest)
-                        val projectedTools = if (backgroundEnabled) {
-                            turnTools + BackgroundToolInstructions.CONTROL_TOOLS
+                        val projectedTools = if (backgroundEnabled && backgroundConfig != null) {
+                            turnTools + BackgroundToolInstructions.controlToolsFor(backgroundConfig)
                         } else {
                             turnTools
                         }
-                        val providerSystemPrompt = if (backgroundEnabled) {
+                        val providerSystemPrompt = if (backgroundEnabled && backgroundConfig != null) {
+                            val section =
+                                BackgroundToolInstructions.systemPromptSectionFor(backgroundConfig)
                             if (activeRequest.systemPrompt.isBlank()) {
-                                BackgroundToolInstructions.SYSTEM_PROMPT_SECTION
+                                section
                             } else {
-                                activeRequest.systemPrompt + "\n\n" +
-                                    BackgroundToolInstructions.SYSTEM_PROMPT_SECTION
+                                activeRequest.systemPrompt + "\n\n" + section
                             }
                         } else {
                             activeRequest.systemPrompt
@@ -2220,13 +2222,12 @@ class DefaultAgentRunner(
         val executor = background ?: return state
         val config = request.engine.runtime.background ?: return state
         if (!executor.isManaged(request.sessionId)) return state
-        val noticed = noticedBackgroundEntries(state.messages)
         val pending = executor.records(request.sessionId).records.filter { record ->
             record.state == BackgroundExecutionState.TERMINAL &&
                 record.outcome != null &&
                 record.outcome != BackgroundOutcome.CANCELLED &&
                 !record.activationSuppressed &&
-                (record.handle to record.resultVersion) !in noticed
+                !isBackgroundRecordDelivered(record, state.messages)
         }
         if (pending.isEmpty()) return state
         val entries = pending.map { record ->
@@ -2249,6 +2250,7 @@ class DefaultAgentRunner(
                         RuntimeNoticeDelivery.COALESCED,
                         config.consumptionPolicy,
                         config.allowBusinessToolsInContinuations,
+                        awaitDeclared = BackgroundToolInstructions.awaitDeclared(config),
                     ),
                 ),
             ),
@@ -2339,6 +2341,8 @@ class DefaultAgentRunner(
                             callOrdinal = entry.indexed.ordinal,
                             previousRunCalls = previousRunCalls[entry.indexed.toolCall.toolName] ?: 0,
                             backgroundEnabled = backgroundEnabled,
+                            awaitDeclared = backgroundConfig
+                                ?.let { BackgroundToolInstructions.awaitDeclared(it) } ?: false,
                             businessRestricted = businessRestricted,
                         )
                     ) {
@@ -2576,7 +2580,11 @@ class DefaultAgentRunner(
                 executionId = execution.executionId,
                 state = record.state,
             )
-            val receiptResult = backgroundReceiptResult(entry.indexed.toolCall, receipt)
+            val receiptResult = backgroundReceiptResult(
+                entry.indexed.toolCall,
+                receipt,
+                awaitDeclared = BackgroundToolInstructions.awaitDeclared(backgroundConfig),
+            )
             endSpan(receiptResult, handedOff = true)
             persistCompleted(entry, receiptResult)
             results[eligible.index] = receiptResult
@@ -2660,15 +2668,65 @@ class DefaultAgentRunner(
                         explicitWaitMillis = 0L,
                         finishRequested = false,
                     )
+                } else if (
+                    record.state != BackgroundExecutionState.TERMINAL &&
+                    state.messages.pendingReadResultCount(handle) > 0
+                ) {
+                    ControlOutcome(
+                        result = backgroundControlError(
+                            toolCall,
+                            buildJsonObject {
+                                put("handle", handle)
+                                put(
+                                    "status",
+                                    if (record.state == BackgroundExecutionState.QUEUED) {
+                                        "queued"
+                                    } else {
+                                        "running"
+                                    },
+                                )
+                                put(
+                                    "error",
+                                    "Already checked: this result is still not ready. " +
+                                        "Stop checking and answer now; a runtime notice " +
+                                        "will report it when it arrives.",
+                                )
+                            },
+                        ),
+                        explicitWaitMillis = 0L,
+                        finishRequested = false,
+                    )
                 } else {
                     ControlOutcome(
-                        result = backgroundReadResult(toolCall, record),
+                        result = backgroundReadResult(
+                            toolCall,
+                            record,
+                            awaitDeclared = BackgroundToolInstructions.awaitDeclared(config),
+                        ),
                         explicitWaitMillis = 0L,
                         finishRequested = false,
                     )
                 }
             }
             BackgroundToolInstructions.AWAIT_TOOL -> {
+                if (state.messages.awaitAllowanceExhaustedEarlier()) {
+                    return ControlOutcome(
+                        result = backgroundControlError(
+                            toolCall,
+                            buildJsonObject {
+                                put(
+                                    "error",
+                                    "No waiting time is left in this Run. Stop waiting " +
+                                        "and answer now; a runtime notice will report " +
+                                        "results that arrive later.",
+                                )
+                                put("wait_allowance_exhausted", true)
+                            },
+                        ),
+                        explicitWaitMillis = 0L,
+                        finishRequested = false,
+                    )
+                }
                 val handles = arguments["handles"]?.jsonArray?.mapNotNull {
                     it.jsonPrimitive.contentOrNull
                 } ?: emptyList()
@@ -2694,17 +2752,54 @@ class DefaultAgentRunner(
                                     },
                                 )
                             } else {
-                                add(backgroundReadJson(record))
+                                add(
+                                    backgroundReadJson(
+                                        record,
+                                        BackgroundToolInstructions.awaitDeclared(config),
+                                    ),
+                                )
                             }
                         }
                     }
                     put("waited_ms", waited)
+                    if (remaining <= 0L) {
+                        put("wait_allowance_exhausted", true)
+                        put(
+                            "note",
+                            "No waiting time is left in this Run. Answer now with what " +
+                                "you have; a runtime notice will report results that " +
+                                "arrive later.",
+                        )
+                    } else {
+                        val stillRunning = handles.any { handle ->
+                            records.firstOrNull { it.handle == handle }
+                                ?.let {
+                                    it.state == BackgroundExecutionState.QUEUED ||
+                                        it.state == BackgroundExecutionState.RUNNING
+                                } == true
+                        }
+                        if (stillRunning) {
+                            put(
+                                "note",
+                                "Some results are not ready yet. Answer now with what " +
+                                    "you already have; a runtime notice will report them " +
+                                    "when they arrive. Do not cancel them or call the " +
+                                    "Tool again for them.",
+                            )
+                        }
+                    }
                 }
                 val content = handles.mapNotNull { handle ->
                     records.firstOrNull {
                         it.handle == handle && it.state == BackgroundExecutionState.TERMINAL
                     }
                 }.flatMap { it.result?.content ?: emptyList() }
+                // A single-handle settled await carries the record's stored result fields
+                // (content/origin/contextHints/metadata) exactly like a direct read, so
+                // downstream projections see the same citations and identity.
+                val single = handles.singleOrNull()
+                    ?.let { wanted -> records.firstOrNull { it.handle == wanted } }
+                    ?.takeIf { it.state == BackgroundExecutionState.TERMINAL }
                 ControlOutcome(
                     result = ToolExecutionResult(
                         toolCallId = toolCall.toolCallId,
@@ -2712,6 +2807,18 @@ class DefaultAgentRunner(
                         result = resultJson,
                         isError = false,
                         content = content,
+                        origin = single?.result?.origin,
+                        contextHints = single?.result?.contextHints,
+                        metadata = single?.let { record ->
+                            buildJsonObject {
+                                record.result?.metadata?.forEach { (key, value) ->
+                                    put(key, value)
+                                }
+                                put("magrathea.background.handle", record.handle)
+                                put("magrathea.background.execution_id", record.executionId)
+                                put("magrathea.background.tool_name", record.toolName)
+                            }
+                        } ?: JsonObject(emptyMap()),
                     ),
                     explicitWaitMillis = waited,
                     finishRequested = false,
@@ -2781,12 +2888,13 @@ class DefaultAgentRunner(
     private fun backgroundReadResult(
         toolCall: ToolCallPart,
         record: BackgroundExecutionRecord,
+        awaitDeclared: Boolean,
     ): ToolExecutionResult {
         val stored = record.result
         return ToolExecutionResult(
             toolCallId = toolCall.toolCallId,
             toolName = toolCall.toolName,
-            result = backgroundReadJson(record),
+            result = backgroundReadJson(record, awaitDeclared),
             isError = false,
             displayText = stored?.displayText,
             metadata = buildJsonObject {
@@ -2801,36 +2909,58 @@ class DefaultAgentRunner(
         )
     }
 
-    private fun backgroundReadJson(record: BackgroundExecutionRecord): JsonObject =
-        buildJsonObject {
-            put("handle", record.handle)
-            put("tool", record.toolName)
-            when (record.state) {
-                BackgroundExecutionState.QUEUED -> put("status", "queued")
-                BackgroundExecutionState.RUNNING -> put("status", "running")
-                BackgroundExecutionState.TERMINAL -> when (record.outcome) {
-                    BackgroundOutcome.SUCCEEDED -> {
-                        put("status", "succeeded")
-                        if (record.result?.modelResultVisible != false) {
-                            record.result?.result?.let { put("result", it) }
-                        }
+    private fun backgroundReadJson(
+        record: BackgroundExecutionRecord,
+        awaitDeclared: Boolean,
+    ): JsonObject = buildJsonObject {
+        put("handle", record.handle)
+        put("tool", record.toolName)
+        when (record.state) {
+            BackgroundExecutionState.QUEUED -> {
+                put("status", "queued")
+                put("note", pendingReadNote(awaitDeclared))
+            }
+            BackgroundExecutionState.RUNNING -> {
+                put("status", "running")
+                put("note", pendingReadNote(awaitDeclared))
+            }
+            BackgroundExecutionState.TERMINAL -> when (record.outcome) {
+                BackgroundOutcome.SUCCEEDED -> {
+                    put("status", "succeeded")
+                    if (record.result?.modelResultVisible != false) {
+                        record.result?.result?.let { put("result", it) }
                     }
-                    BackgroundOutcome.ERROR -> {
-                        put("status", "failed")
-                        put("error", record.result?.result ?: JsonNull)
-                    }
-                    BackgroundOutcome.TIMEOUT -> {
-                        put("status", "timed_out")
-                        put("error", record.result?.result ?: JsonNull)
-                    }
-                    BackgroundOutcome.INTERRUPTED -> {
-                        put("status", "interrupted")
-                        put("error", record.result?.result ?: JsonNull)
-                    }
-                    BackgroundOutcome.CANCELLED -> put("status", "cancelled")
-                    null -> put("status", "running")
+                }
+                BackgroundOutcome.ERROR -> {
+                    put("status", "failed")
+                    put("error", record.result?.result ?: JsonNull)
+                }
+                BackgroundOutcome.TIMEOUT -> {
+                    put("status", "timed_out")
+                    put("error", record.result?.result ?: JsonNull)
+                }
+                BackgroundOutcome.INTERRUPTED -> {
+                    put("status", "interrupted")
+                    put("error", record.result?.result ?: JsonNull)
+                }
+                BackgroundOutcome.CANCELLED -> put("status", "cancelled")
+                null -> {
+                    put("status", "running")
+                    put("note", pendingReadNote(awaitDeclared))
                 }
             }
+        }
+    }
+
+    private fun pendingReadNote(awaitDeclared: Boolean): String =
+        if (awaitDeclared) {
+            "This result is not ready yet. Answer now with what you already have, or call " +
+                "await_background_results if you need it first. Do not cancel it or call " +
+                "the Tool again for it."
+        } else {
+            "This result is not ready yet. Answer now with what you already have; a " +
+                "runtime notice will report the result when it arrives. Do not cancel it " +
+                "or call the Tool again for it."
         }
 
     /** Runtime-authored close for a call whose execution was preempted mid-flight. */
@@ -2910,6 +3040,8 @@ class DefaultAgentRunner(
                 return backgroundReceiptResult(
                     toolCall,
                     ToolBackgroundReceipt(handed.handle, handed.executionId, handed.state),
+                    awaitDeclared = request.engine.runtime.background
+                        ?.let { BackgroundToolInstructions.awaitDeclared(it) } == true,
                 )
             }
             val outcome = live.foreground.await()
@@ -2929,6 +3061,8 @@ class DefaultAgentRunner(
                     stored.state != BackgroundExecutionState.TERMINAL -> backgroundReceiptResult(
                         toolCall,
                         ToolBackgroundReceipt(stored.handle, stored.executionId, stored.state),
+                        awaitDeclared = request.engine.runtime.background
+                            ?.let { BackgroundToolInstructions.awaitDeclared(it) } == true,
                     )
                     stored.outcome == BackgroundOutcome.CANCELLED ->
                         preemptedCancelledResult(toolCall)
@@ -2985,6 +3119,7 @@ class DefaultAgentRunner(
     private fun backgroundReceiptResult(
         toolCall: ToolCallPart,
         receipt: ToolBackgroundReceipt,
+        awaitDeclared: Boolean,
     ): ToolExecutionResult = ToolExecutionResult(
         toolCallId = toolCall.toolCallId,
         toolName = toolCall.toolName,
@@ -2997,8 +3132,18 @@ class DefaultAgentRunner(
             put("retrieve", BackgroundToolInstructions.READ_TOOL)
             put(
                 "note",
-                "This work is still running in the background. " +
-                    "You do not have its result yet.",
+                if (awaitDeclared) {
+                    "This work is still running in the background. You do not have its " +
+                        "result yet. Answer now with what you already have, or call " +
+                        "await_background_results if you need the result first. Do not " +
+                        "cancel it or call the Tool again for it; a runtime notice will " +
+                        "report the result if you answer first."
+                } else {
+                    "This work is still running in the background. You do not have its " +
+                        "result yet. Answer now with what you already have; a runtime " +
+                        "notice will report the result when it arrives. Do not cancel it " +
+                        "or call the Tool again for it."
+                },
             )
         },
         isError = false,
@@ -3026,6 +3171,7 @@ class DefaultAgentRunner(
         callOrdinal: Int,
         previousRunCalls: Int,
         backgroundEnabled: Boolean,
+        awaitDeclared: Boolean,
         businessRestricted: Boolean,
     ): ToolCallDecision {
         if (toolCall.partial) {
@@ -3063,7 +3209,14 @@ class DefaultAgentRunner(
                 ),
             )
         }
-        if (backgroundEnabled && BackgroundToolInstructions.isControlTool(toolCall.toolName)) {
+        // Controls are routed only while they are actually declared; an undeclared control
+        // (for example await_background_results with a zero wait allowance) falls through to
+        // the same unknown-Tool rejection as any other name the model was not offered.
+        if (
+            backgroundEnabled &&
+            BackgroundToolInstructions.isControlTool(toolCall.toolName) &&
+            (toolCall.toolName != BackgroundToolInstructions.AWAIT_TOOL || awaitDeclared)
+        ) {
             return ToolCallDecision.Control(toolCall.toolName, arguments)
         }
         val requestDefinition = request.tools.firstOrNull { it.name == toolCall.toolName }
