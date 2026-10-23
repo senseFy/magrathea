@@ -1334,6 +1334,8 @@ private fun AgentEvent.sessionId(): AgentSessionId = when (this) {
     is AgentEvent.MessageEmitted -> sessionId
     is AgentEvent.ToolRequested -> sessionId
     is AgentEvent.ToolCompleted -> sessionId
+    is AgentEvent.ToolHandedOff -> sessionId
+    is AgentEvent.BackgroundExecutionSettled -> sessionId
     is AgentEvent.RetryScheduled -> sessionId
     is AgentEvent.CheckpointSaved -> checkpoint.sessionId
     is AgentEvent.Completed -> sessionId

@@ -17,6 +17,7 @@ import saien.magrathea.core.JsonPart
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ReasoningPart
 import saien.magrathea.core.RemoteToolImageSource
+import saien.magrathea.core.RuntimeNoticePart
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolImageAttachmentReference
@@ -78,6 +79,7 @@ internal class OpenAiResponsesRequestBuilder(
             when (message.role) {
                 MessageRole.SYSTEM -> add(systemInput(message))
                 MessageRole.USER -> add(userInput(message))
+                MessageRole.RUNTIME -> add(userInput(message.runtimeNoticeAsUser()))
                 MessageRole.ASSISTANT -> assistantInput(message, request).forEach(::add)
                 MessageRole.TOOL -> toolResultInput(message, request).forEach(::add)
             }
@@ -93,6 +95,15 @@ internal class OpenAiResponsesRequestBuilder(
         put("role", "developer")
         put("content", buildJsonArray { add(inputText(text)) })
     }
+
+    private fun AgentMessage.runtimeNoticeAsUser(): AgentMessage = copy(
+        parts = parts.map { part ->
+            (part as? RuntimeNoticePart)?.let { TextPart(it.text) }
+                ?: throw ProviderProtocolException(
+                    "OpenAI Runtime notice messages must contain only Runtime notices",
+                )
+        },
+    )
 
     private fun userInput(message: AgentMessage): JsonObject = buildJsonObject {
         val content = buildJsonArray {

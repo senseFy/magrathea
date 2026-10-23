@@ -3722,6 +3722,62 @@ class InMemoryAgentPersistence : AgentPersistence {
     }
 }
 
+/**
+ * In-memory [BackgroundExecutionStore] keyed by session. Each upsert replaces the record with the
+ * same execution ID and each origin replaces the context with the same run ID.
+ */
+class InMemoryBackgroundExecutionStore : saien.magrathea.core.BackgroundExecutionStore {
+    private val mutex = Mutex()
+    private val records = LinkedHashMap<String, LinkedHashMap<String, saien.magrathea.core.BackgroundExecutionRecord>>()
+    private val origins = LinkedHashMap<String, LinkedHashMap<String, saien.magrathea.core.BackgroundOriginContext>>()
+
+    override suspend fun upsert(record: saien.magrathea.core.BackgroundExecutionRecord) {
+        mutex.withLock {
+            records
+                .getOrPut(record.sessionId.value) { LinkedHashMap() }[record.executionId] = record
+        }
+    }
+
+    override suspend fun putOrigin(origin: saien.magrathea.core.BackgroundOriginContext) {
+        mutex.withLock {
+            origins
+                .getOrPut(origin.sessionId.value) { LinkedHashMap() }[origin.runId.value] = origin
+        }
+    }
+
+    override suspend fun load(
+        sessionId: AgentSessionId,
+    ): saien.magrathea.core.BackgroundSessionRecords = mutex.withLock {
+        saien.magrathea.core.BackgroundSessionRecords(
+            records = records[sessionId.value]?.values?.toList().orEmpty(),
+            origins = origins[sessionId.value]?.values?.toList().orEmpty(),
+        )
+    }
+
+    override suspend fun deleteOrigin(sessionId: AgentSessionId, runId: AgentRunId) {
+        mutex.withLock {
+            origins[sessionId.value]?.let { sessionOrigins ->
+                sessionOrigins.remove(runId.value)
+                if (sessionOrigins.isEmpty()) origins.remove(sessionId.value)
+            }
+        }
+    }
+
+    override suspend fun deleteSession(sessionId: AgentSessionId) {
+        mutex.withLock {
+            records.remove(sessionId.value)
+            origins.remove(sessionId.value)
+        }
+    }
+
+    override suspend fun clear() {
+        mutex.withLock {
+            records.clear()
+            origins.clear()
+        }
+    }
+}
+
 class InMemoryToolRegistry(
     executors: List<saien.magrathea.core.ToolExecutor> = emptyList(),
 ) : ToolRegistry {

@@ -204,7 +204,7 @@ private fun projectRuntime(
     val eventProjection = runtime.lastEvent?.let { reducer.reduce(previous, it) } ?: previous
     val state = runtime.state
     val runtimeFailure = runtime.failure
-    val messages = runtime.authoritativeMessages().map { it.toChatbotMessageSnapshot() }
+    val messages = runtime.authoritativeMessages().toChatbotMessageSnapshots()
     val status = runtime.toChatbotStatus(eventProjection.status)
     var toolActivities = reconcileToolActivities(messages, eventProjection.toolActivities)
     state?.pendingToolCalls?.forEach { toolCall ->

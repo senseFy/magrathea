@@ -49,9 +49,9 @@ class SerializationGoldenFixtureTest {
     }
 
     @Test
-    fun storedSessionEnvelope_matchesV8GoldenFixture() {
-        val expected = toolResultContextSessionFixture()
-        val fixture = resource("/v8/core/stored-session-envelope.json")
+    fun storedSessionEnvelope_matchesV9GoldenFixture() {
+        val expected = backgroundToolSessionFixture()
+        val fixture = resource("/v9/core/stored-session-envelope.json")
         val codec = AgentSessionSnapshotCodec(json, sdkVersion = fixtureSdkVersion)
 
         assertGolden(fixture, codec.encode(expected))
@@ -59,16 +59,9 @@ class SerializationGoldenFixtureTest {
     }
 
     @Test
-    fun storedCheckpointEnvelope_matchesV8GoldenFixture() {
-        val expected = checkpointFixture(
-            journalResult = journalToolResultFixture().copy(
-                contextHints = ToolResultContextHints(
-                    retention = ToolResultRetention.STANDARD,
-                    stub = buildJsonObject { put("query", JsonPrimitive("kmp architecture")) },
-                ),
-            ),
-        )
-        val fixture = resource("/v8/core/stored-checkpoint-envelope.json")
+    fun storedCheckpointEnvelope_matchesV9GoldenFixture() {
+        val expected = backgroundToolCheckpointFixture()
+        val fixture = resource("/v9/core/stored-checkpoint-envelope.json")
         val codec = AgentCheckpointCodec(json, sdkVersion = fixtureSdkVersion)
 
         assertGolden(fixture, codec.encode(expected))
@@ -76,7 +69,43 @@ class SerializationGoldenFixtureTest {
     }
 
     @Test
-    fun shippedV7SessionEnvelopeMigratesToV8WithADisabledToolResultPolicy() {
+    fun shippedV8SessionEnvelopeMigratesToV9WithDefaultedBackgroundToolFields() {
+        val fixture = resource("/v8/core/stored-session-envelope.json")
+        val result = AgentSessionSnapshotCodec(json, sdkVersion = fixtureSdkVersion)
+            .decodeResult(fixture)
+
+        assertEquals(8, result.sourceSchemaVersion)
+        assertEquals(toolResultContextSessionFixture(), result.value)
+        val rewrite = requireNotNull(result.rewritePayload)
+        assertEquals(9, rewrite.schemaVersion())
+        assertEquals(result.value, AgentSessionSnapshotCodec(json).decode(rewrite))
+    }
+
+    @Test
+    fun shippedV8CheckpointEnvelopeMigratesToV9() {
+        val fixture = resource("/v8/core/stored-checkpoint-envelope.json")
+        val result = AgentCheckpointCodec(json, sdkVersion = fixtureSdkVersion)
+            .decodeResult(fixture)
+
+        assertEquals(8, result.sourceSchemaVersion)
+        assertEquals(
+            checkpointFixture(
+                journalResult = journalToolResultFixture().copy(
+                    contextHints = ToolResultContextHints(
+                        retention = ToolResultRetention.STANDARD,
+                        stub = buildJsonObject { put("query", JsonPrimitive("kmp architecture")) },
+                    ),
+                ),
+            ),
+            result.value,
+        )
+        val rewrite = requireNotNull(result.rewritePayload)
+        assertEquals(9, rewrite.schemaVersion())
+        assertEquals(result.value, AgentCheckpointCodec(json).decode(rewrite))
+    }
+
+    @Test
+    fun shippedV7SessionEnvelopeMigratesToV9WithADisabledToolResultPolicy() {
         val fixture = resource("/v7/core/stored-session-envelope.json")
         val result = AgentSessionSnapshotCodec(json, sdkVersion = fixtureSdkVersion)
             .decodeResult(fixture)
@@ -84,12 +113,12 @@ class SerializationGoldenFixtureTest {
         assertEquals(7, result.sourceSchemaVersion)
         assertEquals(interruptedSessionFixture(maxOutputTokens = 16_384).migratedFromSchema7(), result.value)
         val rewrite = requireNotNull(result.rewritePayload)
-        assertEquals(8, rewrite.schemaVersion())
+        assertEquals(9, rewrite.schemaVersion())
         assertEquals(result.value, AgentSessionSnapshotCodec(json).decode(rewrite))
     }
 
     @Test
-    fun shippedV7CheckpointEnvelopeMigratesToV8() {
+    fun shippedV7CheckpointEnvelopeMigratesToV9() {
         val fixture = resource("/v7/core/stored-checkpoint-envelope.json")
         val result = AgentCheckpointCodec(json, sdkVersion = fixtureSdkVersion)
             .decodeResult(fixture)
@@ -97,7 +126,7 @@ class SerializationGoldenFixtureTest {
         assertEquals(7, result.sourceSchemaVersion)
         assertEquals(checkpointFixture(journalResult = journalToolResultFixture()), result.value)
         val rewrite = requireNotNull(result.rewritePayload)
-        assertEquals(8, rewrite.schemaVersion())
+        assertEquals(9, rewrite.schemaVersion())
         assertEquals(result.value, AgentCheckpointCodec(json).decode(rewrite))
     }
 
@@ -146,7 +175,7 @@ class SerializationGoldenFixtureTest {
     }
 
     @Test
-    fun shippedV6SessionEnvelopeMigratesToV8WithUnknownOutputCapability() {
+    fun shippedV6SessionEnvelopeMigratesToV9WithUnknownOutputCapability() {
         val fixture = resource("/v6/core/stored-session-envelope.json")
         val result = AgentSessionSnapshotCodec(json, sdkVersion = fixtureSdkVersion)
             .decodeResult(fixture)
@@ -154,19 +183,19 @@ class SerializationGoldenFixtureTest {
         assertEquals(6, result.sourceSchemaVersion)
         assertEquals(null, result.value.request.model.maxOutputTokens)
         val rewrite = requireNotNull(result.rewritePayload)
-        assertEquals(8, rewrite.schemaVersion())
+        assertEquals(9, rewrite.schemaVersion())
         assertEquals(result.value, AgentSessionSnapshotCodec(json).decode(rewrite))
     }
 
     @Test
-    fun shippedV6CheckpointEnvelopeMigratesToV8() {
+    fun shippedV6CheckpointEnvelopeMigratesToV9() {
         val fixture = resource("/v6/core/stored-checkpoint-envelope.json")
         val result = AgentCheckpointCodec(json, sdkVersion = fixtureSdkVersion)
             .decodeResult(fixture)
 
         assertEquals(6, result.sourceSchemaVersion)
         val rewrite = requireNotNull(result.rewritePayload)
-        assertEquals(8, rewrite.schemaVersion())
+        assertEquals(9, rewrite.schemaVersion())
         assertEquals(result.value, AgentCheckpointCodec(json).decode(rewrite))
     }
 
@@ -428,6 +457,128 @@ class SerializationGoldenFixtureTest {
                         freedTokens = 4_200,
                         trigger = ToolResultClearingTrigger.PRESSURE,
                         createdAtEpochMs = 1_700_000_000_004,
+                    ),
+                ),
+            ),
+        )
+    }
+
+    /** Schema-9 fields a session fixture exercises beyond the schema-8 baseline. */
+    private fun backgroundToolSessionFixture(): AgentSessionSnapshot {
+        val session = toolResultContextSessionFixture()
+        val runtime = session.request.engine.runtime
+        val notice = AgentMessage(
+            id = "runtime-notice-fixture-1",
+            role = MessageRole.RUNTIME,
+            parts = listOf(
+                RuntimeNoticePart(
+                    entries = listOf(
+                        RuntimeNoticeEntry(
+                            handle = "bg_fixture1",
+                            toolName = "image_search",
+                            callId = "image-call-fixture-1",
+                            outcome = BackgroundOutcome.SUCCEEDED,
+                            resultVersion = 0,
+                        ),
+                    ),
+                    delivery = RuntimeNoticeDelivery.COALESCED,
+                    text = "<runtime_notice>\nA background result is available.\n</runtime_notice>",
+                ),
+            ),
+            createdAtEpochMs = 1_700_000_000_006,
+        )
+        val receiptMessage = AgentMessage(
+            id = "tool-receipt-fixture-1",
+            role = MessageRole.TOOL,
+            parts = listOf(
+                ToolResultPart(
+                    toolCallId = "search-call-fixture-1",
+                    toolName = "web_search",
+                    result = buildJsonObject {
+                        put("status", JsonPrimitive("running"))
+                        put("handle", JsonPrimitive("bg_fixture1"))
+                        put("retrieve", JsonPrimitive("read_background_result"))
+                    },
+                    backgroundReceipt = ToolBackgroundReceipt(
+                        handle = "bg_fixture1",
+                        executionId = "execution-fixture-1",
+                        state = BackgroundExecutionState.RUNNING,
+                    ),
+                ),
+            ),
+            createdAtEpochMs = 1_700_000_000_005,
+        )
+        return session.copy(
+            request = session.request.copy(
+                messages = session.request.messages + receiptMessage + notice,
+                engine = session.request.engine.copy(
+                    runtime = runtime.copy(
+                        background = BackgroundExecutionConfig(
+                            handoffWaitMillis = 30_000,
+                            explicitWaitAllowanceMillis = 60_000,
+                            maxAutomaticActivationsPerSource = 3,
+                            maxQueuedLifetimeMillis = 300_000,
+                            consumptionPolicy = BackgroundConsumptionPolicy.LATEST_CONTEXT,
+                            allowBusinessToolsInContinuations = true,
+                        ),
+                    ),
+                ),
+                activation = RunActivation(
+                    source = RunActivationSource.BACKGROUND_RESULTS,
+                    anchorMessageId = notice.id,
+                    sourceIds = listOf("user-fixture-1"),
+                ),
+            ),
+            state = session.state.copy(
+                messages = session.state.messages + receiptMessage + notice,
+            ).copy(
+                foregroundToolWaitMillis = 4_000,
+                explicitWaitMillis = 1_500,
+            ),
+        )
+    }
+
+    private fun backgroundToolCheckpointFixture(): AgentCheckpoint {
+        val session = backgroundToolSessionFixture()
+        return AgentCheckpoint(
+            sessionId = session.sessionId,
+            runId = session.runId,
+            cursor = AgentResumeCursor(
+                turn = session.state.turn,
+                phase = AgentResumePhase.MODEL_PENDING,
+                provider = AgentProviderInvocationCursor(
+                    nextPhysicalAttempt = 3,
+                    pending = AgentPendingProviderInvocation(
+                        requestId = "run-fixture-1:turn-2:attempt-2",
+                        purpose = ProviderRequestPurpose.CONTEXT_SUMMARY,
+                        inputIdentity = "context-summary-input-fixture-1",
+                    ),
+                ),
+            ),
+            state = session.state.copy(
+                status = AgentStatus.RUNNING,
+                stopReason = null,
+            ),
+            toolExecutions = listOf(
+                ToolExecutionRecord(
+                    executionId = "execution-fixture-1",
+                    toolCallId = "search-call-fixture-1",
+                    toolName = "web_search",
+                    callOrdinal = 1,
+                    state = ToolExecutionState.COMPLETED,
+                    result = ToolExecutionResult(
+                        toolCallId = "search-call-fixture-1",
+                        toolName = "web_search",
+                        result = buildJsonObject {
+                            put("status", JsonPrimitive("running"))
+                            put("handle", JsonPrimitive("bg_fixture1"))
+                            put("retrieve", JsonPrimitive("read_background_result"))
+                        },
+                        backgroundReceipt = ToolBackgroundReceipt(
+                            handle = "bg_fixture1",
+                            executionId = "execution-fixture-1",
+                            state = BackgroundExecutionState.RUNNING,
+                        ),
                     ),
                 ),
             ),

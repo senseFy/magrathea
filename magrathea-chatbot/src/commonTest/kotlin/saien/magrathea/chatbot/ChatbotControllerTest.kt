@@ -130,6 +130,73 @@ class ChatbotControllerTest {
     }
 
     @Test
+    fun runtimeNoticesStayOutOfTheSnapshotButReachTheNextRequest() = runTest {
+        val notice = AgentMessage(
+            id = "runtime-notice-1",
+            role = MessageRole.RUNTIME,
+            parts = listOf(
+                saien.magrathea.core.RuntimeNoticePart(
+                    entries = listOf(
+                        saien.magrathea.core.RuntimeNoticeEntry(
+                            handle = "bg_1",
+                            toolName = "slow_lookup",
+                            callId = "c1",
+                            outcome = saien.magrathea.core.BackgroundOutcome.SUCCEEDED,
+                            resultVersion = 0,
+                        ),
+                    ),
+                    delivery = saien.magrathea.core.RuntimeNoticeDelivery.COALESCED,
+                    text = "<runtime_notice>\nA background result is available.\n</runtime_notice>",
+                ),
+            ),
+        )
+        val runner = ScriptedAgentRunner(runScript = { request ->
+            val user = request.messages.last()
+            listOf(
+                AgentEvent.Started(request.sessionId, TEST_RUN_ID),
+                AgentEvent.Completed(
+                    request.sessionId,
+                    AgentStateSnapshot(
+                        messages = request.messages + notice,
+                        status = AgentStatus.COMPLETED,
+                        stopReason = StopReason.COMPLETED,
+                    ),
+                ),
+            )
+        })
+        val fixture = ManagedChatbotControllerFixture.create(runner = runner, scope = this)
+        try {
+            fixture.controller.sendMessage("first")
+            advanceUntilIdle()
+
+            // The Runtime notice is not conversation content; it never reaches the snapshot.
+            assertEquals(listOf("first"), fixture.controller.state.value.messages.map { it.text })
+            assertTrue(
+                fixture.controller.state.value.messages.none {
+                    it.text.contains("runtime_notice")
+                },
+            )
+
+            fixture.controller.sendMessage("second")
+            advanceUntilIdle()
+
+            // The authoritative history used for the next request keeps the notice.
+            assertEquals(2, runner.requests.size)
+            assertTrue(runner.requests[1].messages.any { it.role == MessageRole.RUNTIME })
+            assertEquals(
+                notice.id,
+                runner.requests[1].messages.single { it.role == MessageRole.RUNTIME }.id,
+            )
+            assertEquals(
+                listOf("first", "second"),
+                fixture.controller.state.value.messages.map { it.text },
+            )
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test
     fun cancelShouldCancelActiveSessionAndState() = runTest {
         val runner = ScriptedAgentRunner(runScript = { request ->
             listOf(AgentEvent.Started(request.sessionId, TEST_RUN_ID))

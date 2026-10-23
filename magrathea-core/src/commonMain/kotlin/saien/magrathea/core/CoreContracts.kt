@@ -366,6 +366,10 @@ interface ToolExecutor {
     fun executionPermit(request: ToolExecutionRequest): ToolExecutionPermit =
         UnlimitedToolExecutionPermit
 
+    /** Whether this Tool may continue as Session-owned background work after a Run-local handoff. */
+    val backgroundPolicy: ToolBackgroundPolicy
+        get() = ToolBackgroundPolicy.BLOCKING
+
     suspend fun execute(request: ToolExecutionRequest): ToolExecutionResult
 }
 
@@ -398,7 +402,7 @@ data class AgentSessionSnapshot(
     }
 }
 
-const val CURRENT_STORAGE_SCHEMA_VERSION: Int = 8
+const val CURRENT_STORAGE_SCHEMA_VERSION: Int = 9
 
 /** The first schema covered by the SDK-owned migration chain; older schemas are a clean break. */
 const val MINIMUM_READABLE_STORAGE_SCHEMA_VERSION: Int = 6
@@ -416,6 +420,11 @@ private val storageSchemaEvolution = StorageSchemaEvolution(
             id = "agent-storage-v7-to-v8-tool-result-context",
             fromVersion = 7,
             migration = StorageSchemaV7ToV8Migration,
+        ),
+        RegisteredStorageSchemaMigration(
+            id = "agent-storage-v8-to-v9-background-tools",
+            fromVersion = 8,
+            migration = StorageSchemaV8ToV9Migration,
         ),
     ),
 )
@@ -466,7 +475,7 @@ class AgentSessionSnapshotCodec(
 
     fun encode(snapshot: AgentSessionSnapshot): String {
         validateSessionIdentity(snapshot)
-        return StorageSchemaV8Adapter.encodeSession(json, sdkVersion, snapshot)
+        return StorageSchemaV9Adapter.encodeSession(json, sdkVersion, snapshot)
     }
 
     fun decode(payload: String): AgentSessionSnapshot {
@@ -477,7 +486,7 @@ class AgentSessionSnapshotCodec(
     fun decodeResult(payload: String): StoredEnvelopeDecodeResult<AgentSessionSnapshot> {
         val evolved = storageSchemaEvolution.evolve(payload, json)
         return evolved.decodeCurrentResult {
-            val envelope = StorageSchemaV8Adapter.decodeSession(json, evolved.document)
+            val envelope = StorageSchemaV9Adapter.decodeSession(json, evolved.document)
             validateEnvelope(envelope.schemaVersion, envelope.sdkVersion)
             validateSessionIdentity(envelope.payload)
             validateCanonicalEnvelope(
@@ -501,7 +510,7 @@ class AgentCheckpointCodec(
 
     fun encode(checkpoint: AgentCheckpoint): String {
         validateCheckpointIdentity(checkpoint)
-        return StorageSchemaV8Adapter.encodeCheckpoint(json, sdkVersion, checkpoint)
+        return StorageSchemaV9Adapter.encodeCheckpoint(json, sdkVersion, checkpoint)
     }
 
     fun decode(payload: String): AgentCheckpoint {
@@ -512,7 +521,7 @@ class AgentCheckpointCodec(
     fun decodeResult(payload: String): StoredEnvelopeDecodeResult<AgentCheckpoint> {
         val evolved = storageSchemaEvolution.evolve(payload, json)
         return evolved.decodeCurrentResult {
-            val envelope = StorageSchemaV8Adapter.decodeCheckpoint(json, evolved.document)
+            val envelope = StorageSchemaV9Adapter.decodeCheckpoint(json, evolved.document)
             validateEnvelope(envelope.schemaVersion, envelope.sdkVersion)
             validateCheckpointIdentity(envelope.payload)
             validateCanonicalEnvelope(
@@ -632,6 +641,26 @@ sealed interface AgentEvent {
     @Serializable
     @SerialName("tool_completed")
     data class ToolCompleted(val sessionId: AgentSessionId, val result: ToolExecutionResult) : AgentEvent
+
+    /** A finalized Tool call received a receipt and continues as Session-owned background work. */
+    @Serializable
+    @SerialName("tool_handed_off")
+    data class ToolHandedOff(
+        val sessionId: AgentSessionId,
+        val toolCallId: String,
+        val toolName: String,
+        val receipt: ToolBackgroundReceipt,
+    ) : AgentEvent
+
+    /** A Session-owned background execution reached a terminal outcome. */
+    @Serializable
+    @SerialName("background_execution_settled")
+    data class BackgroundExecutionSettled(
+        val sessionId: AgentSessionId,
+        val executionId: String,
+        val handle: String,
+        val outcome: BackgroundOutcome,
+    ) : AgentEvent
 
     @Serializable
     @SerialName("retry_scheduled")

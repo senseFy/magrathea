@@ -171,6 +171,8 @@ data class RuntimeConfig(
     val toolExecutionMode: ToolExecutionMode = ToolExecutionMode.PARALLEL,
     val defaultToolTimeoutMillis: Long = 120_000,
     val runTimeoutMillis: Long = 1_800_000,
+    /** Session-owned background execution configuration; null keeps every Tool blocking. */
+    val background: BackgroundExecutionConfig? = null,
 ) {
     init {
         require(maxTurns > 0) { "maxTurns must be greater than zero" }
@@ -186,6 +188,58 @@ data class RuntimeConfig(
         require(defaultToolTimeoutMillis > 0) { "defaultToolTimeoutMillis must be greater than zero" }
         require(runTimeoutMillis > 0) { "runTimeoutMillis must be greater than zero" }
     }
+
+    /** Retains the constructor and default-argument signature published before background Tools. */
+    constructor(
+        maxTurns: Int = 8,
+        contextManagement: ContextManagementConfig = ContextManagementConfig(),
+        maxProviderRetries: Int = 2,
+        maxToolResultChars: Int = 1_048_576,
+        maxToolResultContentItems: Int = 32,
+        maxInlineToolResultBytes: Int = 20 * 1_024 * 1_024,
+        maxInlineAttachmentBytes: Int = 20 * 1_024 * 1_024,
+        toolExecutionMode: ToolExecutionMode = ToolExecutionMode.PARALLEL,
+        defaultToolTimeoutMillis: Long = 120_000,
+        runTimeoutMillis: Long = 1_800_000,
+    ) : this(
+        maxTurns,
+        contextManagement,
+        maxProviderRetries,
+        maxToolResultChars,
+        maxToolResultContentItems,
+        maxInlineToolResultBytes,
+        maxInlineAttachmentBytes,
+        toolExecutionMode,
+        defaultToolTimeoutMillis,
+        runTimeoutMillis,
+        background = null,
+    )
+
+    /** Retains the published copy/default-copy signatures while preserving background Tools. */
+    fun copy(
+        maxTurns: Int = this.maxTurns,
+        contextManagement: ContextManagementConfig = this.contextManagement,
+        maxProviderRetries: Int = this.maxProviderRetries,
+        maxToolResultChars: Int = this.maxToolResultChars,
+        maxToolResultContentItems: Int = this.maxToolResultContentItems,
+        maxInlineToolResultBytes: Int = this.maxInlineToolResultBytes,
+        maxInlineAttachmentBytes: Int = this.maxInlineAttachmentBytes,
+        toolExecutionMode: ToolExecutionMode = this.toolExecutionMode,
+        defaultToolTimeoutMillis: Long = this.defaultToolTimeoutMillis,
+        runTimeoutMillis: Long = this.runTimeoutMillis,
+    ): RuntimeConfig = RuntimeConfig(
+        maxTurns,
+        contextManagement,
+        maxProviderRetries,
+        maxToolResultChars,
+        maxToolResultContentItems,
+        maxInlineToolResultBytes,
+        maxInlineAttachmentBytes,
+        toolExecutionMode,
+        defaultToolTimeoutMillis,
+        runTimeoutMillis,
+        background,
+    )
 }
 
 /**
@@ -374,10 +428,56 @@ data class AgentRequest(
     val tools: List<ToolDefinition> = emptyList(),
     val metadata: JsonObject = buildJsonObject { },
     val engine: AgentEngineConfig = AgentEngineConfig(),
+    /** Why this Run exists; null is user input. */
+    val activation: RunActivation? = null,
 ) {
     init {
         model.requireSupports(reasoningPreference)
     }
+
+    /** Retains the constructor and default-argument signature published before Run activations. */
+    constructor(
+        sessionId: AgentSessionId = AgentSessionId.create(),
+        systemPrompt: String = "",
+        messages: List<AgentMessage>,
+        model: ModelDescriptor,
+        reasoningPreference: ReasoningPreference = ReasoningPreference.Auto,
+        tools: List<ToolDefinition> = emptyList(),
+        metadata: JsonObject = buildJsonObject { },
+        engine: AgentEngineConfig = AgentEngineConfig(),
+    ) : this(
+        sessionId,
+        systemPrompt,
+        messages,
+        model,
+        reasoningPreference,
+        tools,
+        metadata,
+        engine,
+        activation = null,
+    )
+
+    /** Retains the published copy/default-copy signatures while preserving the Run activation. */
+    fun copy(
+        sessionId: AgentSessionId = this.sessionId,
+        systemPrompt: String = this.systemPrompt,
+        messages: List<AgentMessage> = this.messages,
+        model: ModelDescriptor = this.model,
+        reasoningPreference: ReasoningPreference = this.reasoningPreference,
+        tools: List<ToolDefinition> = this.tools,
+        metadata: JsonObject = this.metadata,
+        engine: AgentEngineConfig = this.engine,
+    ): AgentRequest = AgentRequest(
+        sessionId,
+        systemPrompt,
+        messages,
+        model,
+        reasoningPreference,
+        tools,
+        metadata,
+        engine,
+        activation,
+    )
 }
 
 /** Input modalities accepted by a concrete model, independently from its Provider wire protocol. */
@@ -622,10 +722,74 @@ data class AgentStateSnapshot(
     val usage: TokenUsage = TokenUsage(),
     val latestRequestUsage: TokenUsage = TokenUsage(),
     val contextManagement: ContextManagementState = ContextManagementState(),
+    /** Cumulative foreground Tool handoff wait spent in this logical Run. */
+    val foregroundToolWaitMillis: Long = 0,
+    /** Cumulative explicit-wait allowance spent in this logical Run. */
+    val explicitWaitMillis: Long = 0,
 ) {
     init {
         require(retryCount >= 0) { "Retry count must not be negative" }
+        require(foregroundToolWaitMillis >= 0) { "Foreground Tool wait must not be negative" }
+        require(explicitWaitMillis >= 0) { "Explicit wait must not be negative" }
     }
+
+    /** Retains the constructor and default-argument signature published before background Tools. */
+    constructor(
+        messages: List<AgentMessage>,
+        pendingToolCalls: List<ToolCallPart> = emptyList(),
+        toolCallCounts: Map<String, Int> = emptyMap(),
+        metadata: JsonObject = buildJsonObject { },
+        turn: Int = 0,
+        status: AgentStatus = AgentStatus.IDLE,
+        retryCount: Int = 0,
+        stopReason: StopReason? = null,
+        usage: TokenUsage = TokenUsage(),
+        latestRequestUsage: TokenUsage = TokenUsage(),
+        contextManagement: ContextManagementState = ContextManagementState(),
+    ) : this(
+        messages,
+        pendingToolCalls,
+        toolCallCounts,
+        metadata,
+        turn,
+        status,
+        retryCount,
+        stopReason,
+        usage,
+        latestRequestUsage,
+        contextManagement,
+        foregroundToolWaitMillis = 0,
+        explicitWaitMillis = 0,
+    )
+
+    /** Retains the published copy/default-copy signatures while preserving the wait counters. */
+    fun copy(
+        messages: List<AgentMessage> = this.messages,
+        pendingToolCalls: List<ToolCallPart> = this.pendingToolCalls,
+        toolCallCounts: Map<String, Int> = this.toolCallCounts,
+        metadata: JsonObject = this.metadata,
+        turn: Int = this.turn,
+        status: AgentStatus = this.status,
+        retryCount: Int = this.retryCount,
+        stopReason: StopReason? = this.stopReason,
+        usage: TokenUsage = this.usage,
+        latestRequestUsage: TokenUsage = this.latestRequestUsage,
+        contextManagement: ContextManagementState = this.contextManagement,
+    ): AgentStateSnapshot = AgentStateSnapshot(
+        messages,
+        pendingToolCalls,
+        toolCallCounts,
+        metadata,
+        turn,
+        status,
+        retryCount,
+        stopReason,
+        usage,
+        latestRequestUsage,
+        contextManagement,
+        foregroundToolWaitMillis,
+        explicitWaitMillis,
+    )
 }
 
 /** Persistent Provider-context projection state; authoritative conversation messages remain intact. */
@@ -828,6 +992,13 @@ enum class MessageRole {
     USER,
     ASSISTANT,
     TOOL,
+
+    /**
+     * Runtime-authored boundary content such as background-result notices. It projects to
+     * Providers like a [USER] text message, but it is not conversation content and must never
+     * take the place of the last user message.
+     */
+    RUNTIME,
 }
 
 @Serializable
@@ -1142,10 +1313,42 @@ data class ToolResultPart(
     val origin: ToolOrigin? = null,
     /** Runtime-only context hints; never sent to a Provider. */
     val contextHints: ToolResultContextHints? = null,
+    /** Runtime-only background handoff receipt; never sent to a Provider. */
+    val backgroundReceipt: ToolBackgroundReceipt? = null,
 ) : MessagePart {
     init {
         requireValidUserErrorCode(userErrorCode, isError)
     }
+
+    /** Retains the constructor and default-argument signature published before background Tools. */
+    constructor(
+        toolCallId: String,
+        toolName: String,
+        result: JsonElement,
+        isError: Boolean = false,
+        displayText: String? = null,
+        userErrorCode: String? = null,
+        metadata: JsonObject = buildJsonObject { },
+        content: List<ToolResultContent> = emptyList(),
+        providerMetadata: JsonObject? = null,
+        modelResultVisible: Boolean = true,
+        origin: ToolOrigin? = null,
+        contextHints: ToolResultContextHints? = null,
+    ) : this(
+        toolCallId,
+        toolName,
+        result,
+        isError,
+        displayText,
+        userErrorCode,
+        metadata,
+        content,
+        providerMetadata,
+        modelResultVisible,
+        origin,
+        contextHints,
+        backgroundReceipt = null,
+    )
 
     /** Retains the constructor and default-argument signature published before context hints. */
     constructor(
@@ -1173,6 +1376,37 @@ data class ToolResultPart(
         modelResultVisible,
         origin,
         contextHints = null,
+        backgroundReceipt = null,
+    )
+
+    /** Retains the published copy/default-copy signatures while preserving the receipt. */
+    fun copy(
+        toolCallId: String = this.toolCallId,
+        toolName: String = this.toolName,
+        result: JsonElement = this.result,
+        isError: Boolean = this.isError,
+        displayText: String? = this.displayText,
+        userErrorCode: String? = this.userErrorCode,
+        metadata: JsonObject = this.metadata,
+        content: List<ToolResultContent> = this.content,
+        providerMetadata: JsonObject? = this.providerMetadata,
+        modelResultVisible: Boolean = this.modelResultVisible,
+        origin: ToolOrigin? = this.origin,
+        contextHints: ToolResultContextHints? = this.contextHints,
+    ): ToolResultPart = ToolResultPart(
+        toolCallId,
+        toolName,
+        result,
+        isError,
+        displayText,
+        userErrorCode,
+        metadata,
+        content,
+        providerMetadata,
+        modelResultVisible,
+        origin,
+        contextHints,
+        backgroundReceipt,
     )
 
     /** Retains the published copy/default-copy signatures while preserving context hints. */
@@ -1201,6 +1435,7 @@ data class ToolResultPart(
         modelResultVisible,
         origin,
         contextHints,
+        backgroundReceipt,
     )
 }
 
@@ -1412,10 +1647,40 @@ data class ToolExecutionResult(
     val origin: ToolOrigin? = null,
     /** Runtime-only context hints; never sent to a Provider. */
     val contextHints: ToolResultContextHints? = null,
+    /** Runtime-only background handoff receipt; never sent to a Provider. */
+    val backgroundReceipt: ToolBackgroundReceipt? = null,
 ) {
     init {
         requireValidUserErrorCode(userErrorCode, isError)
     }
+
+    /** Retains the constructor and default-argument signature published before background Tools. */
+    constructor(
+        toolCallId: String,
+        toolName: String,
+        result: JsonElement,
+        isError: Boolean = false,
+        displayText: String? = null,
+        userErrorCode: String? = null,
+        metadata: JsonObject = buildJsonObject { },
+        content: List<ToolResultContent> = emptyList(),
+        modelResultVisible: Boolean = true,
+        origin: ToolOrigin? = null,
+        contextHints: ToolResultContextHints? = null,
+    ) : this(
+        toolCallId,
+        toolName,
+        result,
+        isError,
+        displayText,
+        userErrorCode,
+        metadata,
+        content,
+        modelResultVisible,
+        origin,
+        contextHints,
+        backgroundReceipt = null,
+    )
 
     /** Retains the constructor and default-argument signature published before context hints. */
     constructor(
@@ -1441,6 +1706,35 @@ data class ToolExecutionResult(
         modelResultVisible,
         origin,
         contextHints = null,
+        backgroundReceipt = null,
+    )
+
+    /** Retains the published copy/default-copy signatures while preserving the receipt. */
+    fun copy(
+        toolCallId: String = this.toolCallId,
+        toolName: String = this.toolName,
+        result: JsonElement = this.result,
+        isError: Boolean = this.isError,
+        displayText: String? = this.displayText,
+        userErrorCode: String? = this.userErrorCode,
+        metadata: JsonObject = this.metadata,
+        content: List<ToolResultContent> = this.content,
+        modelResultVisible: Boolean = this.modelResultVisible,
+        origin: ToolOrigin? = this.origin,
+        contextHints: ToolResultContextHints? = this.contextHints,
+    ): ToolExecutionResult = ToolExecutionResult(
+        toolCallId,
+        toolName,
+        result,
+        isError,
+        displayText,
+        userErrorCode,
+        metadata,
+        content,
+        modelResultVisible,
+        origin,
+        contextHints,
+        backgroundReceipt,
     )
 
     /** Retains the published copy/default-copy signatures while preserving context hints. */
@@ -1467,6 +1761,7 @@ data class ToolExecutionResult(
         modelResultVisible,
         origin,
         contextHints,
+        backgroundReceipt,
     )
 }
 
@@ -1491,6 +1786,7 @@ fun ToolExecutionResult.toMessagePart(providerMetadata: JsonObject? = null): Too
         modelResultVisible = modelResultVisible,
         origin = origin,
         contextHints = contextHints,
+        backgroundReceipt = backgroundReceipt,
     )
 }
 

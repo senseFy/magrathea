@@ -19,6 +19,7 @@ import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelInputModality
 import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.core.ReasoningPart
+import saien.magrathea.core.RuntimeNoticePart
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolImageAttachmentReference
@@ -78,6 +79,7 @@ internal class OpenAiChatCompletionsRequestBuilder(
             when (message.role) {
                 MessageRole.SYSTEM -> add(systemMessage(message))
                 MessageRole.USER -> add(userMessage(message))
+                MessageRole.RUNTIME -> add(userMessage(message.runtimeNoticeAsUser()))
                 MessageRole.ASSISTANT -> add(assistantMessage(message, request))
                 MessageRole.TOOL -> toolMessages(message, request).forEach(::add)
             }
@@ -95,6 +97,15 @@ internal class OpenAiChatCompletionsRequestBuilder(
         if (text.isBlank()) throw ProviderProtocolException("OpenAI-compatible system message must not be blank")
         return textMessage("system", text)
     }
+
+    private fun AgentMessage.runtimeNoticeAsUser(): AgentMessage = copy(
+        parts = parts.map { part ->
+            (part as? RuntimeNoticePart)?.let { TextPart(it.text) }
+                ?: throw ProviderProtocolException(
+                    "OpenAI Runtime notice messages must contain only Runtime notices",
+                )
+        },
+    )
 
     private fun userMessage(message: AgentMessage): JsonObject {
         val textParts = mutableListOf<String>()

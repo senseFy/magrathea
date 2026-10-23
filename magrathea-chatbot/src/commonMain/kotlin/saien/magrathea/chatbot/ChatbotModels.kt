@@ -450,6 +450,10 @@ class ChatbotException(
     constructor(failure: ChatbotFailure) : this(failure, ChatbotInvalidationScope.NONE)
 }
 
+/** Runtime notices are not conversation content; request-building lists keep them, snapshots skip them. */
+internal fun List<AgentMessage>.toChatbotMessageSnapshots(): List<ChatbotMessageSnapshot> =
+    filter { it.role != MessageRole.RUNTIME }.map { it.toChatbotMessageSnapshot() }
+
 internal fun AgentMessage.toChatbotMessageSnapshot(): ChatbotMessageSnapshot = ChatbotMessageSnapshot(
     id = id,
     role = role.toChatbotRole(),
@@ -651,4 +655,5 @@ private fun MessageRole.toChatbotRole(): ChatbotMessageRole = when (this) {
     MessageRole.ASSISTANT -> ChatbotMessageRole.ASSISTANT
     MessageRole.TOOL -> ChatbotMessageRole.TOOL
     MessageRole.SYSTEM -> ChatbotMessageRole.SYSTEM
+    MessageRole.RUNTIME -> error("Runtime notices are not Chatbot conversation messages")
 }

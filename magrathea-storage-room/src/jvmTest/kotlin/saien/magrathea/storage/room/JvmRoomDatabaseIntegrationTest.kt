@@ -237,10 +237,10 @@ class JvmRoomDatabaseIntegrationTest {
         val rewrittenCheckpoint = assertNotNull(
             rewrittenDatabase.checkpointDao().findById(session.sessionId.value),
         ).payload
-        assertTrue("\"schemaVersion\":8" in rewrittenSession)
+        assertTrue("\"schemaVersion\":9" in rewrittenSession)
         assertTrue("\"maxOutputTokens\":null" in rewrittenSession)
         assertTrue("\"estimationUnit\":\"UTF16_CHARS\"" in rewrittenSession)
-        assertTrue("\"schemaVersion\":8" in rewrittenCheckpoint)
+        assertTrue("\"schemaVersion\":9" in rewrittenCheckpoint)
         rewrittenDatabase.close()
 
         check(directory.toFile().deleteRecursively()) {
@@ -639,8 +639,14 @@ private fun String.toSchemaV6(): String {
         ",\"toolResults\":{\"budget\":null,\"clearing\":null,\"maxStubChars\":2000},\"estimationUnit\":\"UTF16_CHARS\"",
         ",\"toolResultClearing\":null",
     )
-    return schema7Fields
-        .fold(replaceFirst("\"schemaVersion\":8", "\"schemaVersion\":6")) { payload, field -> payload.replace(field, "") }
+    val schema9Fields = listOf(
+        ",\"background\":null",
+        ",\"activation\":null",
+        ",\"foregroundToolWaitMillis\":0,\"explicitWaitMillis\":0",
+        ",\"backgroundReceipt\":null",
+    )
+    return (schema7Fields + schema9Fields)
+        .fold(replaceFirst("\"schemaVersion\":9", "\"schemaVersion\":6")) { payload, field -> payload.replace(field, "") }
         .replace(",\"maxOutputTokens\":null", "")
 }
 

@@ -16,7 +16,7 @@ internal class ChatbotEventReducer {
         is AgentEvent.RetryScheduled -> state
         is AgentEvent.ContextTransformed -> state.copy(replay = event.replay)
         is AgentEvent.CheckpointSaved -> {
-            val messages = event.checkpoint.state.messages.map { it.toChatbotMessageSnapshot() }
+            val messages = event.checkpoint.state.messages.toChatbotMessageSnapshots()
             state.copy(
                 messages = messages,
                 stopReason = event.checkpoint.state.stopReason?.toChatbotStopReason(),
@@ -28,7 +28,11 @@ internal class ChatbotEventReducer {
             )
         }
         is AgentEvent.MessageEmitted -> {
-            val messages = state.messages.replaceOrAppend(event.message.toChatbotMessageSnapshot())
+            val messages = if (event.message.role == saien.magrathea.core.MessageRole.RUNTIME) {
+                state.messages
+            } else {
+                state.messages.replaceOrAppend(event.message.toChatbotMessageSnapshot())
+            }
             state.copy(
                 messages = messages,
                 status = ChatbotStatus.RUNNING,
@@ -45,8 +49,11 @@ internal class ChatbotEventReducer {
             status = ChatbotStatus.RUNNING,
             toolActivities = state.toolActivities.withToolCompleted(event.result),
         )
+        // A receipt never resolves its activity; background state projects in a later slice.
+        is AgentEvent.ToolHandedOff,
+        is AgentEvent.BackgroundExecutionSettled -> state
         is AgentEvent.Completed -> {
-            val messages = event.state.messages.map { it.toChatbotMessageSnapshot() }
+            val messages = event.state.messages.toChatbotMessageSnapshots()
             state.copy(
                 messages = messages,
                 status = ChatbotStatus.COMPLETED,
@@ -82,7 +89,7 @@ internal class ChatbotEventReducer {
             ),
         )
         is AgentEvent.Interrupted -> {
-            val messages = event.state.messages.map { it.toChatbotMessageSnapshot() }
+            val messages = event.state.messages.toChatbotMessageSnapshots()
             state.copy(
                 messages = messages,
                 status = ChatbotStatus.INTERRUPTED,

@@ -542,6 +542,18 @@ private fun reduceSessionState(
                 AgentStatus.RUNNING
             },
         )
+        is AgentEvent.ToolHandedOff -> state?.copy(
+            pendingToolCalls = state.pendingToolCalls
+                .filterNot { call -> call.toolCallId == event.toolCallId },
+            status = if (
+                state.pendingToolCalls.any { call -> call.toolCallId != event.toolCallId }
+            ) {
+                AgentStatus.WAITING_FOR_TOOLS
+            } else {
+                AgentStatus.RUNNING
+            },
+        )
+        is AgentEvent.BackgroundExecutionSettled -> state
         is AgentEvent.RetryScheduled -> state?.copy(
             retryCount = if (state.retryCount == Int.MAX_VALUE) Int.MAX_VALUE else state.retryCount + 1,
         )

@@ -374,6 +374,12 @@ internal fun formatProviderLiveEvent(event: AgentEvent): List<String> = when (ev
     is AgentEvent.ToolCompleted -> listOf(
         "[event] tool-complete name=${event.result.toolName} error=${event.result.isError} resultChars=${event.result.result.toString().length}",
     )
+    is AgentEvent.ToolHandedOff -> listOf(
+        "[event] tool-handed-off call=${event.toolCallId} name=${event.toolName} handle=${event.receipt.handle} state=${event.receipt.state.name}",
+    )
+    is AgentEvent.BackgroundExecutionSettled -> listOf(
+        "[event] background-settled execution=${event.executionId} handle=${event.handle} outcome=${event.outcome.name}",
+    )
     is AgentEvent.RetryScheduled -> listOf("[event] retry attempt=${event.attempt} code=${event.code.name}")
     is AgentEvent.CheckpointSaved -> listOf(
         "[event] checkpoint turn=${event.checkpoint.turn} stop=${event.checkpoint.state.stopReason} pendingToolCalls=${event.checkpoint.state.pendingToolCalls.size} messages=${event.checkpoint.state.messages.size}",
