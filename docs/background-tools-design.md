@@ -402,3 +402,23 @@ Decided on 2026-10-24. Implementation evidence, especially from S0, can reopen a
 | R3 | Acknowledgement by a later completed assistant message | Accept. It needs no extra writes and matches replay exclusion; revisit only if evaluation shows duplicate notices |
 | R4 | Extend a Run that ends while results wait | No. Turn-start delivery plus host-triggered continuation keeps every automatic supplement behind host admission and scheduling, activation limits, and the business-Tool restriction, at the cost of one Run boundary |
 | R5 | A separate store versus extending `AgentPersistence` atomically | Separate optional store. The existing port stays unchanged, adapters without the store stay blocking, and section 5.10 covers the crash windows |
+
+## 9. S0 protocol evidence
+
+Recorded on 2026-10-24 with the `background-pull` scenario of the
+[Provider live harness](../tooling/provider-live-harness/README.md). Each run spans two Runs: a
+pending receipt and an initial answer, then a notice in the user-input envelope and a real read.
+Every passing run made exactly one business call, read the correct handle, never guessed one, and
+included the late result in its final answer.
+
+| Wire path | Model | Variants | Result |
+|---|---|---|---|
+| OpenAI Chat Completions (OpenRouter) | `openai/gpt-4o-mini` | continuation, coalesced, tool-loop | 3/3 pass |
+| OpenAI Responses (xAI) | `grok-4.5` | continuation, coalesced, tool-loop | 3/3 pass |
+| Anthropic Messages (OpenRouter compatible endpoint) | `anthropic/claude-haiku-5.5` | continuation, coalesced, tool-loop | 3/3 pass |
+| Anthropic Messages with adaptive thinking (`reasoning=medium`) | `anthropic/claude-haiku-5.5` | continuation, coalesced, tool-loop | 3/3 pass |
+| Gemini Interactions | none | none | Not run: the Gemini API rejects this network location. Offline fixtures cover the request shape until a supported network is available |
+
+The spike sent each notice as a `USER` message, which is its proposed wire form; S1 verifies offline
+that a `RUNTIME` message projects to the same request. The Anthropic path used OpenRouter's
+compatible Messages endpoint rather than the first-party API. D4 stands.
