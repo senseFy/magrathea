@@ -29,3 +29,9 @@ dependency direction. Platform limitations and external validation gaps are trac
 Changes to an accepted decision require an explicit update to the affected record, public docs,
 and executable contract tests. A new record is preferred when a decision introduces a distinct
 security boundary or public protocol.
+
+## Proposed records
+
+| ADR | Proposal |
+|---|---|
+| [019](ADR-019-session-owned-background-tools.md) | Session-owned background Tools, pull-based result retrieval, and model-directed continuation; scope/protocol gates remain open |

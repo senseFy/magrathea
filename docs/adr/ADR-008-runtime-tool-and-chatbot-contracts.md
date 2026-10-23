@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-11
+- Extended by: [ADR-019](ADR-019-session-owned-background-tools.md) (proposed; not yet effective)
 
 ## Runtime
 
