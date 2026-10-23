@@ -81,8 +81,58 @@ class BackgroundToolExecutor(
         job.cancelAndJoin()
     }
 
+    /**
+     * Registers a Session and reconciles its durable records: a QUEUED/RUNNING record with no
+     * live job in this process is treated as host loss — [ToolRecoveryPolicy.REPLAY_SAFE] Tools
+     * return to QUEUED for a later resume; the rest settle TERMINAL INTERRUPTED. Nothing is
+     * executed until the host calls [resumeSession].
+     */
     internal suspend fun register(sessionId: AgentSessionId, listener: SessionListener) {
-        guard.withLock { listeners[sessionId.value] = listener }
+        val alreadyRegistered = guard.withLock {
+            val existing = sessionId.value in listeners
+            listeners[sessionId.value] = listener
+            existing
+        }
+        if (!alreadyRegistered) {
+            sweepRestoredRecords(sessionId)
+        }
+    }
+
+    /**
+     * The register-time half of [suspendSession]: job-less records adopt the host-loss outcome
+     * without touching any live admission, so re-registration inside one process stays inert.
+     */
+    private suspend fun sweepRestoredRecords(sessionId: AgentSessionId) {
+        val sessionMutex = sessionMutex(sessionId)
+        val settled = mutableListOf<BackgroundExecutionRecord>()
+        val changed = mutableListOf<BackgroundExecutionRecord>()
+        sessionMutex.withLock {
+            for (record in store.load(sessionId).records) {
+                if (record.state == BackgroundExecutionState.TERMINAL) continue
+                val live = guard.withLock { executions[record.executionId] }
+                if (live != null) continue
+                val tool = jobFactory?.toolFor(record)
+                val updated = if (tool?.recoveryPolicy == ToolRecoveryPolicy.REPLAY_SAFE) {
+                    record.copy(state = BackgroundExecutionState.QUEUED, startedAtEpochMs = null)
+                } else {
+                    record.copy(
+                        state = BackgroundExecutionState.TERMINAL,
+                        outcome = BackgroundOutcome.INTERRUPTED,
+                        result = null,
+                        settledAtEpochMs = epochClock(),
+                    )
+                }
+                if (updated == record) continue
+                writeRecord(updated)
+                if (updated.state == BackgroundExecutionState.TERMINAL) {
+                    settled += updated
+                } else {
+                    changed += updated
+                }
+            }
+        }
+        settled.forEach { notifySettled(sessionId, it) }
+        changed.forEach { notifyRecordChanged(sessionId, it) }
     }
 
     internal suspend fun unregister(sessionId: AgentSessionId) {

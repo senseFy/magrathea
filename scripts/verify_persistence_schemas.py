@@ -326,8 +326,9 @@ def verify_fixture(
     fixture = expect_object(raw_fixture, label)
     expect_exact_keys(fixture, {"kind", "path", "sha256"}, label)
     kind = expect_string(fixture["kind"], f"{label}.kind")
-    if kind not in {"session", "checkpoint"}:
-        fail(f"{label}.kind must be session or checkpoint")
+    allowed_kinds = {"session", "checkpoint", "background_execution", "background_origin"}
+    if kind not in allowed_kinds:
+        fail(f"{label}.kind must be one of {sorted(allowed_kinds)}")
     raw_path = expect_string(fixture["path"], f"{label}.path")
     if raw_path in used_paths:
         fail(f"fixture path is registered more than once: {raw_path}")
@@ -496,9 +497,13 @@ def validate_ledger(
                 "migrationProbe",
                 "versions",
                 "transitions",
+                "notes",
             },
             domain_label,
         )
+        if "notes" in domain:
+            for note_index, note in enumerate(expect_array(domain["notes"], f"{domain_label}.notes")):
+                expect_string(note, f"{domain_label}.notes[{note_index}]")
         domain_id = expect_string(domain["id"], f"{domain_label}.id")
         if not re.fullmatch(r"[a-z][a-z0-9-]*", domain_id) or domain_id in domain_ids:
             fail(f"{domain_label}.id must be unique kebab-case")
@@ -575,8 +580,12 @@ def validate_ledger(
                     )
                     for fixture_index, fixture in enumerate(fixtures)
                 }
-                if kinds != {"session", "checkpoint"} or len(fixtures) != 2:
-                    fail(f"{version_label} must freeze one session and one checkpoint fixture")
+                required_kinds = {"session", "checkpoint"}
+                if not required_kinds.issubset(kinds) or len(kinds) != len(fixtures):
+                    fail(
+                        f"{version_label} must freeze one fixture per kind including "
+                        f"{sorted(required_kinds)}"
+                    )
         if not version_numbers:
             fail(f"{domain_label}.versions must not be empty")
         expected_versions = list(range(version_numbers[0], current + 1))

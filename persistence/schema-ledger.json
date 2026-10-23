@@ -1,254 +1,271 @@
 {
-  "ledgerFormatVersion": 1,
-  "policyDocument": "docs/adr/ADR-005-persistence-contracts.md#schema-evolution",
-  "migrationIds": [
-    "agent-storage-v6-to-v7-max-output-tokens",
-    "agent-storage-v7-to-v8-tool-result-context",
-    "agent-storage-v8-to-v9-background-tools"
-  ],
-  "descriptorRefreezes": [
+ "ledgerFormatVersion": 1,
+ "policyDocument": "docs/adr/ADR-005-persistence-contracts.md#schema-evolution",
+ "migrationIds": [
+  "agent-storage-v6-to-v7-max-output-tokens",
+  "agent-storage-v7-to-v8-tool-result-context",
+  "agent-storage-v8-to-v9-background-tools"
+ ],
+ "descriptorRefreezes": [
+  {
+   "id": "agent-storage.v6.provider-permission-enum",
+   "domain": "agent-storage-envelopes",
+   "version": 6,
+   "descriptorPath": "serialization-fixtures/v6/core/storage-schema-descriptor.sha256",
+   "fromSha256": "eeaa79450d6dbea8733fc15c33ce9986e9cb72a14c76d3ace75d9154287054f8",
+   "toSha256": "0139cd2f86ad6d91936deafe614794767f93659e901b0ca6378dc6c0a86752d1",
+   "decision": "docs/adr/ADR-005-persistence-contracts.md#additive-enum-evolution-within-a-frozen-schema",
+   "reason": "PROVIDER_PERMISSION cannot occur in the only persisted AgentFailureCode field, so persisted payloads remain unchanged."
+  }
+ ],
+ "domains": [
+  {
+   "id": "agent-storage-envelopes",
+   "owner": "magrathea-core",
+   "versionField": "schemaVersion",
+   "currentVersion": 9,
+   "migrationBaselineVersion": 6,
+   "minimumReadableVersion": 6,
+   "versionProbe": {
+    "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/CoreContracts.kt",
+    "pattern": "const\\s+val\\s+CURRENT_STORAGE_SCHEMA_VERSION\\s*:\\s*Int\\s*=\\s*([0-9]+)"
+   },
+   "currentCodecProbe": {
+    "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/CoreContracts.kt",
+    "requiredPatterns": [
+     "StorageSchemaV9Adapter.encodeSession",
+     "StorageSchemaV9Adapter.decodeSession",
+     "StorageSchemaV9Adapter.encodeCheckpoint",
+     "StorageSchemaV9Adapter.decodeCheckpoint",
+     "StorageSchemaV9Adapter.encodeBackgroundExecution",
+     "StorageSchemaV9Adapter.decodeBackgroundExecution",
+     "StorageSchemaV9Adapter.encodeBackgroundOrigin",
+     "StorageSchemaV9Adapter.decodeBackgroundOrigin"
+    ]
+   },
+   "migrationProbe": {
+    "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/CoreContracts.kt",
+    "pattern": "RegisteredStorageSchemaMigration\\(\\s*id\\s*=\\s*\"([a-z0-9][a-z0-9.-]+)\""
+   },
+   "versions": [
     {
-      "id": "agent-storage.v6.provider-permission-enum",
-      "domain": "agent-storage-envelopes",
-      "version": 6,
-      "descriptorPath": "serialization-fixtures/v6/core/storage-schema-descriptor.sha256",
-      "fromSha256": "eeaa79450d6dbea8733fc15c33ce9986e9cb72a14c76d3ace75d9154287054f8",
-      "toSha256": "0139cd2f86ad6d91936deafe614794767f93659e901b0ca6378dc6c0a86752d1",
-      "decision": "docs/adr/ADR-005-persistence-contracts.md#additive-enum-evolution-within-a-frozen-schema",
-      "reason": "PROVIDER_PERMISSION cannot occur in the only persisted AgentFailureCode field, so persisted payloads remain unchanged."
-    }
-  ],
-  "domains": [
+     "version": 3,
+     "adapter": null,
+     "fixtures": [
+      {
+       "kind": "session",
+       "path": "serialization-fixtures/v3/core/stored-session-envelope.json",
+       "sha256": "cfc13fb4344d9b5ecd809df8facb54dcae301a30ff4976bee790dd5a29de47b1"
+      },
+      {
+       "kind": "checkpoint",
+       "path": "serialization-fixtures/v3/core/stored-checkpoint-envelope.json",
+       "sha256": "964a46b0dfbb123025832059d198241278d0a5e2b445fb3219a6a36c31818819"
+      }
+     ]
+    },
     {
-      "id": "agent-storage-envelopes",
-      "owner": "magrathea-core",
-      "versionField": "schemaVersion",
-      "currentVersion": 9,
-      "migrationBaselineVersion": 6,
-      "minimumReadableVersion": 6,
-      "versionProbe": {
-        "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/CoreContracts.kt",
-        "pattern": "const\\s+val\\s+CURRENT_STORAGE_SCHEMA_VERSION\\s*:\\s*Int\\s*=\\s*([0-9]+)"
+     "version": 4,
+     "adapter": null,
+     "fixtures": [
+      {
+       "kind": "session",
+       "path": "serialization-fixtures/v4/core/stored-session-envelope.json",
+       "sha256": "20a82c31e5876eee1c8f04a280d05adfc86f4358cfdb7da3afa75dcf19e8c481"
       },
-      "currentCodecProbe": {
-        "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/CoreContracts.kt",
-        "requiredPatterns": [
-          "StorageSchemaV9Adapter.encodeSession",
-          "StorageSchemaV9Adapter.decodeSession",
-          "StorageSchemaV9Adapter.encodeCheckpoint",
-          "StorageSchemaV9Adapter.decodeCheckpoint"
-        ]
+      {
+       "kind": "checkpoint",
+       "path": "serialization-fixtures/v4/core/stored-checkpoint-envelope.json",
+       "sha256": "e621c746b8e1169763e365fe6a52cfec9015e612b5ac25ae4ebfefecdfb5d456"
+      }
+     ]
+    },
+    {
+     "version": 5,
+     "adapter": null,
+     "fixtures": [
+      {
+       "kind": "session",
+       "path": "serialization-fixtures/v5/core/stored-session-envelope.json",
+       "sha256": "c38965a7de35aaaf168df7cdfdae6b17f8525f694232539f4d35d64a6aeb6904"
       },
-      "migrationProbe": {
-        "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/CoreContracts.kt",
-        "pattern": "RegisteredStorageSchemaMigration\\(\\s*id\\s*=\\s*\"([a-z0-9][a-z0-9.-]+)\""
+      {
+       "kind": "checkpoint",
+       "path": "serialization-fixtures/v5/core/stored-checkpoint-envelope.json",
+       "sha256": "b672daf7be5743566b8b21399c5c4001f45c71ef0051ff142f37058d418d1997"
+      }
+     ]
+    },
+    {
+     "version": 6,
+     "adapter": {
+      "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/StorageSchemaV6.kt",
+      "sha256": "448a6c69514aa3180a5c5254a1c21e08d9586b22e63779c64394743d370ace5c",
+      "symbol": "StorageSchemaV6Adapter",
+      "versionPattern": "internal\\s+const\\s+val\\s+STORAGE_SCHEMA_V6_VERSION\\s*:\\s*Int\\s*=\\s*([0-9]+)",
+      "descriptorFixture": {
+       "path": "serialization-fixtures/v6/core/storage-schema-descriptor.sha256",
+       "sha256": "0139cd2f86ad6d91936deafe614794767f93659e901b0ca6378dc6c0a86752d1"
+      }
+     },
+     "fixtures": [
+      {
+       "kind": "session",
+       "path": "serialization-fixtures/v6/core/stored-session-envelope.json",
+       "sha256": "8e8d3f2c00383aea09fa078b19086b3afc2c070152a9c2c76ccfd5bb9a91bf60"
       },
-      "versions": [
-        {
-          "version": 3,
-          "adapter": null,
-          "fixtures": [
-            {
-              "kind": "session",
-              "path": "serialization-fixtures/v3/core/stored-session-envelope.json",
-              "sha256": "cfc13fb4344d9b5ecd809df8facb54dcae301a30ff4976bee790dd5a29de47b1"
-            },
-            {
-              "kind": "checkpoint",
-              "path": "serialization-fixtures/v3/core/stored-checkpoint-envelope.json",
-              "sha256": "964a46b0dfbb123025832059d198241278d0a5e2b445fb3219a6a36c31818819"
-            }
-          ]
-        },
-        {
-          "version": 4,
-          "adapter": null,
-          "fixtures": [
-            {
-              "kind": "session",
-              "path": "serialization-fixtures/v4/core/stored-session-envelope.json",
-              "sha256": "20a82c31e5876eee1c8f04a280d05adfc86f4358cfdb7da3afa75dcf19e8c481"
-            },
-            {
-              "kind": "checkpoint",
-              "path": "serialization-fixtures/v4/core/stored-checkpoint-envelope.json",
-              "sha256": "e621c746b8e1169763e365fe6a52cfec9015e612b5ac25ae4ebfefecdfb5d456"
-            }
-          ]
-        },
-        {
-          "version": 5,
-          "adapter": null,
-          "fixtures": [
-            {
-              "kind": "session",
-              "path": "serialization-fixtures/v5/core/stored-session-envelope.json",
-              "sha256": "c38965a7de35aaaf168df7cdfdae6b17f8525f694232539f4d35d64a6aeb6904"
-            },
-            {
-              "kind": "checkpoint",
-              "path": "serialization-fixtures/v5/core/stored-checkpoint-envelope.json",
-              "sha256": "b672daf7be5743566b8b21399c5c4001f45c71ef0051ff142f37058d418d1997"
-            }
-          ]
-        },
-        {
-          "version": 6,
-          "adapter": {
-            "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/StorageSchemaV6.kt",
-            "sha256": "448a6c69514aa3180a5c5254a1c21e08d9586b22e63779c64394743d370ace5c",
-            "symbol": "StorageSchemaV6Adapter",
-            "versionPattern": "internal\\s+const\\s+val\\s+STORAGE_SCHEMA_V6_VERSION\\s*:\\s*Int\\s*=\\s*([0-9]+)",
-            "descriptorFixture": {
-              "path": "serialization-fixtures/v6/core/storage-schema-descriptor.sha256",
-              "sha256": "0139cd2f86ad6d91936deafe614794767f93659e901b0ca6378dc6c0a86752d1"
-            }
-          },
-          "fixtures": [
-            {
-              "kind": "session",
-              "path": "serialization-fixtures/v6/core/stored-session-envelope.json",
-              "sha256": "8e8d3f2c00383aea09fa078b19086b3afc2c070152a9c2c76ccfd5bb9a91bf60"
-            },
-            {
-              "kind": "checkpoint",
-              "path": "serialization-fixtures/v6/core/stored-checkpoint-envelope.json",
-              "sha256": "74aa70a793d5ad27df0e3a8a7a067af77f9664dab0f7b45a4560f5cdae31f175"
-            }
-          ]
-        },
-        {
-          "version": 7,
-          "adapter": {
-            "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/StorageSchemaV7.kt",
-            "sha256": "0ec4b80acc825f8c17c14e3cb74c551dbf8d904fd68b089662321c00f1db3fc1",
-            "symbol": "StorageSchemaV7Adapter",
-            "versionPattern": "internal\\s+const\\s+val\\s+STORAGE_SCHEMA_V7_VERSION\\s*:\\s*Int\\s*=\\s*([0-9]+)",
-            "descriptorFixture": {
-              "path": "serialization-fixtures/v7/core/storage-schema-descriptor.sha256",
-              "sha256": "250851e500dda7621aaeb61e253538d1b0e4ff740bacb924c3d7b0d11d2e6d40"
-            }
-          },
-          "fixtures": [
-            {
-              "kind": "session",
-              "path": "serialization-fixtures/v7/core/stored-session-envelope.json",
-              "sha256": "f438eaafe1ea0a213b65ab52baaeb52249150a7785fa0e66152b1a1f0f141349"
-            },
-            {
-              "kind": "checkpoint",
-              "path": "serialization-fixtures/v7/core/stored-checkpoint-envelope.json",
-              "sha256": "191f10498699ecfc8e1f7c93f06d5ee2e52baaee7b9a7ac2c7a530a813b0e623"
-            }
-          ]
-        },
-        {
-          "version": 8,
-          "adapter": {
-            "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/StorageSchemaV8.kt",
-            "sha256": "83391d30aac9df3353aafd376e356020dc25de75ee13824330f84b5175d6e3a2",
-            "symbol": "StorageSchemaV8Adapter",
-            "versionPattern": "internal\\s+const\\s+val\\s+STORAGE_SCHEMA_V8_VERSION\\s*:\\s*Int\\s*=\\s*([0-9]+)",
-            "descriptorFixture": {
-              "path": "serialization-fixtures/v8/core/storage-schema-descriptor.sha256",
-              "sha256": "8556c8ba6794a382c1e39d8dd786587e400fba27dceb817f8ed19990659fe634"
-            }
-          },
-          "fixtures": [
-            {
-              "kind": "session",
-              "path": "serialization-fixtures/v8/core/stored-session-envelope.json",
-              "sha256": "c8c5f00956df7089b4d7cdc53082672fa34f4daa04236afe7dd4313b40a0cfe9"
-            },
-            {
-              "kind": "checkpoint",
-              "path": "serialization-fixtures/v8/core/stored-checkpoint-envelope.json",
-              "sha256": "72ada61274411ac095ba74c0789d390532ce5e5ab16c2bb8e722201abfc4e6a5"
-            }
-          ]
-        },
-        {
-          "version": 9,
-          "adapter": {
-            "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/StorageSchemaV9.kt",
-            "sha256": "fe24ea263c1bcaf96d054e42600642202b6b20cea4e92c6042c077ad63188461",
-            "symbol": "StorageSchemaV9Adapter",
-            "versionPattern": "internal\\s+const\\s+val\\s+STORAGE_SCHEMA_V9_VERSION\\s*:\\s*Int\\s*=\\s*([0-9]+)",
-            "descriptorFixture": {
-              "path": "serialization-fixtures/v9/core/storage-schema-descriptor.sha256",
-              "sha256": "6199a68dc0793406f17492323d83a2d8a787a31bbe3f480c690a7ac27a6d1968"
-            }
-          },
-          "fixtures": [
-            {
-              "kind": "session",
-              "path": "serialization-fixtures/v9/core/stored-session-envelope.json",
-              "sha256": "3fcdd48e849c76d330f4668168f0c7a2fce4c7084910a9ef72c1011a69604e2d"
-            },
-            {
-              "kind": "checkpoint",
-              "path": "serialization-fixtures/v9/core/stored-checkpoint-envelope.json",
-              "sha256": "92951ba47a56e67b93a110e8394c369a7e7f52cadb6ed92b437ef4fd92bfe9e6"
-            }
-          ]
-        }
-      ],
-      "transitions": [
-        {
-          "from": 3,
-          "to": 4,
-          "kind": "clean-break",
-          "decision": "docs/adr/ADR-005-persistence-contracts.md#historical-clean-breaks",
-          "reason": "Alpha schema 4 changed recovery state without a trustworthy schema-3 reconstruction."
-        },
-        {
-          "from": 4,
-          "to": 5,
-          "kind": "clean-break",
-          "decision": "docs/adr/ADR-005-persistence-contracts.md#historical-clean-breaks",
-          "reason": "Alpha schema 5 introduced typed tool content that schema 4 cannot reconstruct safely."
-        },
-        {
-          "from": 5,
-          "to": 6,
-          "kind": "clean-break",
-          "decision": "docs/adr/ADR-005-persistence-contracts.md#historical-clean-breaks",
-          "reason": "Alpha schema 6 added structured reasoning intent that schema 5 cannot infer safely."
-        },
-        {
-          "from": 6,
-          "to": 7,
-          "kind": "migration",
-          "migrationId": "agent-storage-v6-to-v7-max-output-tokens",
-          "implementation": {
-            "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/StorageSchemaV6ToV7Migration.kt",
-            "sha256": "3e54d648c1ec6a5249cfcd8c781bd6271918559f1940d29751e7bc2a4c1f77cb",
-            "symbol": "StorageSchemaV6ToV7Migration"
-          }
-        },
-        {
-          "from": 7,
-          "to": 8,
-          "kind": "migration",
-          "migrationId": "agent-storage-v7-to-v8-tool-result-context",
-          "implementation": {
-            "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/StorageSchemaV7ToV8Migration.kt",
-            "sha256": "838d3b7f3b388529868c39308b3ed1383a985ae8173e8f30feb1d08f79f37b57",
-            "symbol": "StorageSchemaV7ToV8Migration"
-          }
-        },
-        {
-          "from": 8,
-          "to": 9,
-          "kind": "migration",
-          "migrationId": "agent-storage-v8-to-v9-background-tools",
-          "implementation": {
-            "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/StorageSchemaV8ToV9Migration.kt",
-            "sha256": "7949e10fd7bbfc41d9aa49973298c14297c131afb3e49f4a946a8fdded4cf1b2",
-            "symbol": "StorageSchemaV8ToV9Migration"
-          }
-        }
-      ]
+      {
+       "kind": "checkpoint",
+       "path": "serialization-fixtures/v6/core/stored-checkpoint-envelope.json",
+       "sha256": "74aa70a793d5ad27df0e3a8a7a067af77f9664dab0f7b45a4560f5cdae31f175"
+      }
+     ]
+    },
+    {
+     "version": 7,
+     "adapter": {
+      "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/StorageSchemaV7.kt",
+      "sha256": "0ec4b80acc825f8c17c14e3cb74c551dbf8d904fd68b089662321c00f1db3fc1",
+      "symbol": "StorageSchemaV7Adapter",
+      "versionPattern": "internal\\s+const\\s+val\\s+STORAGE_SCHEMA_V7_VERSION\\s*:\\s*Int\\s*=\\s*([0-9]+)",
+      "descriptorFixture": {
+       "path": "serialization-fixtures/v7/core/storage-schema-descriptor.sha256",
+       "sha256": "250851e500dda7621aaeb61e253538d1b0e4ff740bacb924c3d7b0d11d2e6d40"
+      }
+     },
+     "fixtures": [
+      {
+       "kind": "session",
+       "path": "serialization-fixtures/v7/core/stored-session-envelope.json",
+       "sha256": "f438eaafe1ea0a213b65ab52baaeb52249150a7785fa0e66152b1a1f0f141349"
+      },
+      {
+       "kind": "checkpoint",
+       "path": "serialization-fixtures/v7/core/stored-checkpoint-envelope.json",
+       "sha256": "191f10498699ecfc8e1f7c93f06d5ee2e52baaee7b9a7ac2c7a530a813b0e623"
+      }
+     ]
+    },
+    {
+     "version": 8,
+     "adapter": {
+      "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/StorageSchemaV8.kt",
+      "sha256": "83391d30aac9df3353aafd376e356020dc25de75ee13824330f84b5175d6e3a2",
+      "symbol": "StorageSchemaV8Adapter",
+      "versionPattern": "internal\\s+const\\s+val\\s+STORAGE_SCHEMA_V8_VERSION\\s*:\\s*Int\\s*=\\s*([0-9]+)",
+      "descriptorFixture": {
+       "path": "serialization-fixtures/v8/core/storage-schema-descriptor.sha256",
+       "sha256": "8556c8ba6794a382c1e39d8dd786587e400fba27dceb817f8ed19990659fe634"
+      }
+     },
+     "fixtures": [
+      {
+       "kind": "session",
+       "path": "serialization-fixtures/v8/core/stored-session-envelope.json",
+       "sha256": "c8c5f00956df7089b4d7cdc53082672fa34f4daa04236afe7dd4313b40a0cfe9"
+      },
+      {
+       "kind": "checkpoint",
+       "path": "serialization-fixtures/v8/core/stored-checkpoint-envelope.json",
+       "sha256": "72ada61274411ac095ba74c0789d390532ce5e5ab16c2bb8e722201abfc4e6a5"
+      }
+     ]
+    },
+    {
+     "version": 9,
+     "adapter": {
+      "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/StorageSchemaV9.kt",
+      "sha256": "32c967613614042d797be78c28b965247095946adbc11a27cd5d0bbb2d08ca76",
+      "symbol": "StorageSchemaV9Adapter",
+      "versionPattern": "internal\\s+const\\s+val\\s+STORAGE_SCHEMA_V9_VERSION\\s*:\\s*Int\\s*=\\s*([0-9]+)",
+      "descriptorFixture": {
+       "path": "serialization-fixtures/v9/core/storage-schema-descriptor.sha256",
+       "sha256": "6199a68dc0793406f17492323d83a2d8a787a31bbe3f480c690a7ac27a6d1968"
+      }
+     },
+     "fixtures": [
+      {
+       "kind": "session",
+       "path": "serialization-fixtures/v9/core/stored-session-envelope.json",
+       "sha256": "3fcdd48e849c76d330f4668168f0c7a2fce4c7084910a9ef72c1011a69604e2d"
+      },
+      {
+       "kind": "checkpoint",
+       "path": "serialization-fixtures/v9/core/stored-checkpoint-envelope.json",
+       "sha256": "92951ba47a56e67b93a110e8394c369a7e7f52cadb6ed92b437ef4fd92bfe9e6"
+      },
+      {
+       "kind": "background_execution",
+       "path": "serialization-fixtures/v9/core/stored-background-execution-envelope.json",
+       "sha256": "3bd25639351570f76e9d4836a6d85c7eb9864b292fe7ca860af66be36ef1a563"
+      },
+      {
+       "kind": "background_origin",
+       "path": "serialization-fixtures/v9/core/stored-background-origin-envelope.json",
+       "sha256": "56f528ddce0c92f9f495048b67986cd5e177456d31e38df3fd3b747cb7eda5b8"
+      }
+     ]
     }
-  ]
+   ],
+   "transitions": [
+    {
+     "from": 3,
+     "to": 4,
+     "kind": "clean-break",
+     "decision": "docs/adr/ADR-005-persistence-contracts.md#historical-clean-breaks",
+     "reason": "Alpha schema 4 changed recovery state without a trustworthy schema-3 reconstruction."
+    },
+    {
+     "from": 4,
+     "to": 5,
+     "kind": "clean-break",
+     "decision": "docs/adr/ADR-005-persistence-contracts.md#historical-clean-breaks",
+     "reason": "Alpha schema 5 introduced typed tool content that schema 4 cannot reconstruct safely."
+    },
+    {
+     "from": 5,
+     "to": 6,
+     "kind": "clean-break",
+     "decision": "docs/adr/ADR-005-persistence-contracts.md#historical-clean-breaks",
+     "reason": "Alpha schema 6 added structured reasoning intent that schema 5 cannot infer safely."
+    },
+    {
+     "from": 6,
+     "to": 7,
+     "kind": "migration",
+     "migrationId": "agent-storage-v6-to-v7-max-output-tokens",
+     "implementation": {
+      "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/StorageSchemaV6ToV7Migration.kt",
+      "sha256": "3e54d648c1ec6a5249cfcd8c781bd6271918559f1940d29751e7bc2a4c1f77cb",
+      "symbol": "StorageSchemaV6ToV7Migration"
+     }
+    },
+    {
+     "from": 7,
+     "to": 8,
+     "kind": "migration",
+     "migrationId": "agent-storage-v7-to-v8-tool-result-context",
+     "implementation": {
+      "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/StorageSchemaV7ToV8Migration.kt",
+      "sha256": "838d3b7f3b388529868c39308b3ed1383a985ae8173e8f30feb1d08f79f37b57",
+      "symbol": "StorageSchemaV7ToV8Migration"
+     }
+    },
+    {
+     "from": 8,
+     "to": 9,
+     "kind": "migration",
+     "migrationId": "agent-storage-v8-to-v9-background-tools",
+     "implementation": {
+      "path": "magrathea-core/src/commonMain/kotlin/saien/magrathea/core/StorageSchemaV8ToV9Migration.kt",
+      "sha256": "7949e10fd7bbfc41d9aa49973298c14297c131afb3e49f4a946a8fdded4cf1b2",
+      "symbol": "StorageSchemaV8ToV9Migration"
+     }
+    }
+   ],
+   "notes": [
+    "Schema-9 introduces the background_execution and background_origin envelope kinds carrying an explicit `kind` discriminator; every later migration must transform or explicitly preserve these payloads and must never infer the kind from field shapes."
+   ]
+  }
+ ]
 }

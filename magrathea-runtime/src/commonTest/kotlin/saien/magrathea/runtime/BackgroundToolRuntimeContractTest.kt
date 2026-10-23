@@ -43,8 +43,13 @@ import saien.magrathea.core.AgentInterceptor
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentPersistence
 import saien.magrathea.core.AgentRequest
+import saien.magrathea.core.AgentResumeCursor
+import saien.magrathea.core.AgentResumePhase
 import saien.magrathea.core.AgentRunId
+import saien.magrathea.core.AgentCheckpoint
 import saien.magrathea.core.AgentSessionId
+import saien.magrathea.core.AgentSessionSnapshot
+import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.BackgroundConsumptionPolicy
 import saien.magrathea.core.BackgroundExecutionConfig
 import saien.magrathea.core.BackgroundExecutionRecord
@@ -68,9 +73,12 @@ import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolDefinition
 import saien.magrathea.core.ToolExecutionMode
 import saien.magrathea.core.ToolExecutionPermit
+import saien.magrathea.core.ToolExecutionRecord
 import saien.magrathea.core.ToolExecutionRequest
 import saien.magrathea.core.ToolExecutionResult
+import saien.magrathea.core.ToolExecutionState
 import saien.magrathea.core.ToolExecutor
+import saien.magrathea.core.ToolRecoveryPolicy
 import saien.magrathea.core.ToolOrigin
 import saien.magrathea.core.ToolResultContextHints
 import saien.magrathea.core.ToolResultAudience
@@ -1344,9 +1352,16 @@ class BackgroundToolRuntimeContractTest {
         store.upsert(
             seededRecord(sessionId, "bg_other", state = BackgroundExecutionState.RUNNING),
         )
+        // Registration applies the host-loss sweep to records with no live job; REPLAY_SAFE
+        // Tools keep their records queued, so deep_lookup is registered as replay-safe here.
         val runner = runner(
             provider = scriptedProvider("hostcancel"),
-            tools = emptyList(),
+            tools = listOf(
+                CountingTool(
+                    "deep_lookup",
+                    recoveryPolicy = ToolRecoveryPolicy.REPLAY_SAFE,
+                ),
+            ),
             background = executor,
         )
         val manager = DefaultAgentSessionManager(
@@ -1365,7 +1380,7 @@ class BackgroundToolRuntimeContractTest {
         assertEquals(BackgroundOutcome.CANCELLED, records["bg_live"]?.outcome)
         assertTrue(records["bg_live"]?.activationSuppressed == true)
         assertEquals(BackgroundOutcome.SUCCEEDED, records["bg_done"]?.outcome)
-        assertEquals(BackgroundExecutionState.RUNNING, records["bg_other"]?.state)
+        assertEquals(BackgroundExecutionState.QUEUED, records["bg_other"]?.state)
         manager.close()
         executor.close()
     }
@@ -3104,6 +3119,263 @@ class BackgroundToolRuntimeContractTest {
         manager.close()
     }
 
+    // ---- S3: durable restore across process restarts ----
+
+    // A new executor+manager over the same store: RUNNING REPLAY_SAFE becomes QUEUED on
+    // registration and resumeBackground() re-executes with the same execution ID.
+    @Test
+    fun restartRequeuesReplaySafeWorkForResume() = runTest {
+        val sessionId = AgentSessionId("restart-replay")
+        val store = InMemoryBackgroundExecutionStore()
+        store.upsert(
+            seededRecord(
+                sessionId,
+                "bg_live",
+                state = BackgroundExecutionState.RUNNING,
+            ),
+        )
+        store.putOrigin(
+            BackgroundOriginContext(
+                sessionId = sessionId,
+                runId = AgentRunId("origin-run"),
+                request = AgentRequest(
+                    sessionId = sessionId,
+                    messages = emptyList(),
+                    model = ModelDescriptor(provider = "restart-replay", model = "model"),
+                ),
+            ),
+        )
+        val tool = CountingTool("deep_lookup", recoveryPolicy = ToolRecoveryPolicy.REPLAY_SAFE)
+        val provider = scriptedProvider("restart-replay", toolCall("call-1", "deep_lookup"))
+        val executor = executor(store)
+        val runner = runner(provider = provider, tools = listOf(tool), background = executor)
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = InMemoryAgentPersistence(),
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+
+        val lease = manager.create(sessionId)
+        runCurrent()
+
+        val requeued = store.load(sessionId).records.single()
+        assertEquals(BackgroundExecutionState.QUEUED, requeued.state)
+        assertNull(requeued.startedAtEpochMs)
+        assertEquals(0, tool.executions)
+
+        lease.resumeBackground()
+        advanceUntilIdle()
+        runCurrent()
+
+        val settled = store.load(sessionId).records.single()
+        assertEquals(BackgroundExecutionState.TERMINAL, settled.state)
+        assertEquals(BackgroundOutcome.SUCCEEDED, settled.outcome)
+        assertEquals("exec-bg_live", settled.executionId)
+        assertEquals(1, tool.executions)
+        manager.close()
+    }
+
+    // A FAIL_CLOSED record without a live job settles TERMINAL INTERRUPTED at registration.
+    @Test
+    fun restartInterruptsFailClosedWork() = runTest {
+        val sessionId = AgentSessionId("restart-fail-closed")
+        val store = InMemoryBackgroundExecutionStore()
+        store.upsert(
+            seededRecord(
+                sessionId,
+                "bg_closed",
+                state = BackgroundExecutionState.RUNNING,
+            ),
+        )
+        val tool = CountingTool("deep_lookup", recoveryPolicy = ToolRecoveryPolicy.FAIL_CLOSED)
+        val provider = scriptedProvider("restart-closed", toolCall("call-1", "deep_lookup"))
+        val executor = executor(store)
+        val runner = runner(provider = provider, tools = listOf(tool), background = executor)
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = InMemoryAgentPersistence(),
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+
+        manager.create(sessionId)
+        runCurrent()
+
+        val record = store.load(sessionId).records.single()
+        assertEquals(BackgroundExecutionState.TERMINAL, record.state)
+        assertEquals(BackgroundOutcome.INTERRUPTED, record.outcome)
+        assertNotNull(record.settledAtEpochMs)
+        assertEquals(0, tool.executions)
+        manager.close()
+    }
+
+    // An unacknowledged TERMINAL record surfaces as a pending activation after restore.
+    @Test
+    fun restartProjectsPendingActivationForAnUnacknowledgedResult() = runTest {
+        val sessionId = AgentSessionId("restart-activation")
+        val store = InMemoryBackgroundExecutionStore()
+        store.upsert(
+            seededRecord(
+                sessionId,
+                "bg_done",
+                state = BackgroundExecutionState.TERMINAL,
+                outcome = BackgroundOutcome.SUCCEEDED,
+            ),
+        )
+        val persistence = InMemoryAgentPersistence()
+        persistence.commit(
+            AgentSessionSnapshot(
+                sessionId = sessionId,
+                runId = AgentRunId("restored-run"),
+                request = request(
+                    "restart-activation",
+                    sessionId,
+                    config = backgroundConfig(),
+                ),
+                state = AgentStateSnapshot(messages = emptyList()),
+                updatedAtEpochMs = 1,
+            ),
+            checkpoint = null,
+        )
+        val provider = scriptedProvider("restart-activation")
+        val executor = executor(store)
+        val runner = runner(
+            provider = provider,
+            tools = emptyList(),
+            background = executor,
+            persistence = persistence,
+        )
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = persistence,
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+
+        val lease = manager.acquire(sessionId)
+        runCurrent()
+
+        assertNotNull(assertNotNull(lease.state.value.background).pendingActivation)
+        manager.close()
+    }
+
+    // A resumed Run whose STARTED journal entry already owns a stored record reuses the
+    // receipt built from that record; the Tool is never executed a second time.
+    @Test
+    fun resumeWithStartedJournalAndStoredRecordReusesTheReceipt() = runTest {
+        val sessionId = AgentSessionId("restart-receipt")
+        val store = InMemoryBackgroundExecutionStore()
+        val call = toolCall("call-crash", "deep_lookup")
+        val assistant = AgentMessage(
+            id = "assistant-crash",
+            role = MessageRole.ASSISTANT,
+            parts = listOf(call),
+            createdAtEpochMs = 1,
+        )
+        val storedRecord = seededRecord(
+            sessionId,
+            "bg_crash",
+            state = BackgroundExecutionState.RUNNING,
+        ).copy(
+            executionId = "exec-crash",
+            originCallId = call.toolCallId,
+            executionRequest = ToolExecutionRequest(
+                sessionId = sessionId,
+                runId = AgentRunId("crash-run"),
+                executionId = "exec-crash",
+                assistantMessage = assistant,
+                toolCall = call,
+            ),
+        )
+        store.upsert(storedRecord)
+        val user = userMessage("look it up")
+        val persistence = InMemoryAgentPersistence()
+        persistence.commit(
+            AgentSessionSnapshot(
+                sessionId = sessionId,
+                runId = AgentRunId("crash-run"),
+                request = request(
+                    "restart-receipt",
+                    sessionId,
+                    config = backgroundConfig(handoffWait = 100),
+                ).copy(messages = listOf(user, assistant)),
+                state = AgentStateSnapshot(
+                    messages = listOf(user, assistant),
+                    turn = 1,
+                    pendingToolCalls = listOf(call),
+                    status = saien.magrathea.core.AgentStatus.INTERRUPTED,
+                    stopReason = StopReason.INTERRUPTED,
+                ),
+                interruption = saien.magrathea.core.AgentInterruption(
+                    reason = saien.magrathea.core.AgentInterruptionReason.ORPHANED,
+                    occurredAtEpochMs = 1,
+                ),
+                updatedAtEpochMs = 1,
+            ),
+            AgentCheckpoint(
+                sessionId = sessionId,
+                runId = AgentRunId("crash-run"),
+                cursor = AgentResumeCursor(
+                    turn = 1,
+                    phase = AgentResumePhase.TOOLS_PENDING,
+                ),
+                state = AgentStateSnapshot(
+                    messages = listOf(user, assistant),
+                    turn = 1,
+                    pendingToolCalls = listOf(call),
+                    status = saien.magrathea.core.AgentStatus.WAITING_FOR_TOOLS,
+                ),
+                toolExecutions = listOf(
+                    ToolExecutionRecord(
+                        executionId = "exec-crash",
+                        toolCallId = call.toolCallId,
+                        toolName = call.toolName,
+                        callOrdinal = 1,
+                        state = ToolExecutionState.STARTED,
+                    ),
+                ),
+            ),
+        )
+        val tool = CountingTool(
+            "deep_lookup",
+            recoveryPolicy = ToolRecoveryPolicy.REPLAY_SAFE,
+            backgroundPolicy = ToolBackgroundPolicy.ELIGIBLE,
+        )
+        val provider = scriptedProvider("restart-receipt")
+        val executor = executor(store)
+        val runner = runner(
+            provider = provider,
+            tools = listOf(tool),
+            background = executor,
+            persistence = persistence,
+        )
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = persistence,
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+
+        val lease = manager.acquire(sessionId)
+        runCurrent()
+        // The Tool executed once before the crash; the resumed Run must not execute it again.
+        tool.executions = 1
+        lease.resume()
+        advanceUntilIdle()
+        runCurrent()
+        lease.awaitIdle()
+
+        val messages = checkNotNull(lease.state.value.state).messages
+        val receiptPart = messages.filter { it.role == MessageRole.TOOL }
+            .flatMap { it.parts.filterIsInstance<ToolResultPart>() }
+            .single { it.toolCallId == call.toolCallId }
+        assertEquals("bg_crash", receiptPart.backgroundReceipt?.handle)
+        assertEquals("exec-crash", receiptPart.backgroundReceipt?.executionId)
+        assertEquals(1, tool.executions)
+        manager.close()
+    }
+
     // ---- harness ----
 
     private fun TestScope.executor(store: BackgroundExecutionStore): BackgroundToolExecutor =
@@ -3332,7 +3604,11 @@ class BackgroundToolRuntimeContractTest {
             )
     }
 
-    private class CountingTool(name: String) : ToolExecutor {
+    private class CountingTool(
+        name: String,
+        override val recoveryPolicy: ToolRecoveryPolicy = ToolRecoveryPolicy.REPLAY_SAFE,
+        override val backgroundPolicy: ToolBackgroundPolicy = ToolBackgroundPolicy.BLOCKING,
+    ) : ToolExecutor {
         override val definition = ToolDefinition(
             name = name,
             description = "counting",

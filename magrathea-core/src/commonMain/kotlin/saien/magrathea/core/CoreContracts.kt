@@ -533,6 +533,78 @@ class AgentCheckpointCodec(
     }
 }
 
+/** Durable codec for one Session-owned background execution record (ADR-019). */
+class BackgroundExecutionRecordCodec(
+    json: Json = Json,
+    private val sdkVersion: String = MAGRATHEA_CORE_SDK_VERSION,
+) {
+    private val json = fixedStorageJson(json)
+
+    init {
+        require(sdkVersion.isNotBlank()) { "sdkVersion must not be blank" }
+    }
+
+    fun encode(record: BackgroundExecutionRecord): String {
+        validateBackgroundExecutionIdentity(record)
+        return StorageSchemaV9Adapter.encodeBackgroundExecution(json, sdkVersion, record)
+    }
+
+    fun decode(payload: String): BackgroundExecutionRecord {
+        return decodeResult(payload).value
+    }
+
+    /** Decodes completely and reports a canonical payload when an adjacent migration was applied. */
+    fun decodeResult(payload: String): StoredEnvelopeDecodeResult<BackgroundExecutionRecord> {
+        val evolved = storageSchemaEvolution.evolve(payload, json)
+        return evolved.decodeCurrentResult {
+            val envelope = StorageSchemaV9Adapter.decodeBackgroundExecution(json, evolved.document)
+            validateEnvelope(envelope.schemaVersion, envelope.sdkVersion)
+            validateBackgroundExecutionIdentity(envelope.payload)
+            validateCanonicalEnvelope(
+                encoded = evolved.document,
+                canonical = envelope.canonicalDocument,
+            )
+            ValidatedCurrentStoredEnvelope(envelope.payload, envelope.canonicalPayload)
+        }
+    }
+}
+
+/** Durable codec for the originating request context of a handed-off Run (ADR-019). */
+class BackgroundOriginContextCodec(
+    json: Json = Json,
+    private val sdkVersion: String = MAGRATHEA_CORE_SDK_VERSION,
+) {
+    private val json = fixedStorageJson(json)
+
+    init {
+        require(sdkVersion.isNotBlank()) { "sdkVersion must not be blank" }
+    }
+
+    fun encode(origin: BackgroundOriginContext): String {
+        validateBackgroundOriginIdentity(origin)
+        return StorageSchemaV9Adapter.encodeBackgroundOrigin(json, sdkVersion, origin)
+    }
+
+    fun decode(payload: String): BackgroundOriginContext {
+        return decodeResult(payload).value
+    }
+
+    /** Decodes completely and reports a canonical payload when an adjacent migration was applied. */
+    fun decodeResult(payload: String): StoredEnvelopeDecodeResult<BackgroundOriginContext> {
+        val evolved = storageSchemaEvolution.evolve(payload, json)
+        return evolved.decodeCurrentResult {
+            val envelope = StorageSchemaV9Adapter.decodeBackgroundOrigin(json, evolved.document)
+            validateEnvelope(envelope.schemaVersion, envelope.sdkVersion)
+            validateBackgroundOriginIdentity(envelope.payload)
+            validateCanonicalEnvelope(
+                encoded = evolved.document,
+                canonical = envelope.canonicalDocument,
+            )
+            ValidatedCurrentStoredEnvelope(envelope.payload, envelope.canonicalPayload)
+        }
+    }
+}
+
 /** The storage wire format is SDK-owned; caller JSON settings must not create same-version variants. */
 private fun fixedStorageJson(
     @Suppress("UNUSED_PARAMETER") source: Json,
@@ -577,6 +649,33 @@ private fun validateCheckpointIdentity(checkpoint: AgentCheckpoint) {
     }
     if (checkpoint.turn < 0 || checkpoint.state.turn != checkpoint.turn) {
         throw SerializationException("Stored checkpoint turn does not match state.turn")
+    }
+}
+
+private fun validateBackgroundExecutionIdentity(record: BackgroundExecutionRecord) {
+    if (record.sessionId.value.isBlank()) {
+        throw SerializationException("Stored background sessionId must not be blank")
+    }
+    if (record.executionId.isBlank()) {
+        throw SerializationException("Stored background executionId must not be blank")
+    }
+    if (record.handle.isBlank()) {
+        throw SerializationException("Stored background handle must not be blank")
+    }
+    if (record.originRunId.value.isBlank()) {
+        throw SerializationException("Stored background originRunId must not be blank")
+    }
+    if (record.originCallId.isBlank()) {
+        throw SerializationException("Stored background originCallId must not be blank")
+    }
+}
+
+private fun validateBackgroundOriginIdentity(origin: BackgroundOriginContext) {
+    if (origin.sessionId.value.isBlank()) {
+        throw SerializationException("Stored background origin sessionId must not be blank")
+    }
+    if (origin.runId.value.isBlank()) {
+        throw SerializationException("Stored background origin runId must not be blank")
     }
 }
 

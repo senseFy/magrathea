@@ -69,6 +69,66 @@ class SerializationGoldenFixtureTest {
     }
 
     @Test
+    fun storedBackgroundExecutionEnvelope_matchesV9GoldenFixture() {
+        val expected = backgroundExecutionFixture()
+        val fixture = resource("/v9/core/stored-background-execution-envelope.json")
+        val codec = BackgroundExecutionRecordCodec(json, sdkVersion = fixtureSdkVersion)
+
+        assertGolden(fixture, codec.encode(expected))
+        assertEquals(expected, codec.decode(fixture))
+    }
+
+    @Test
+    fun storedBackgroundOriginEnvelope_matchesV9GoldenFixture() {
+        val expected = backgroundOriginFixture()
+        val fixture = resource("/v9/core/stored-background-origin-envelope.json")
+        val codec = BackgroundOriginContextCodec(json, sdkVersion = fixtureSdkVersion)
+
+        assertGolden(fixture, codec.encode(expected))
+        assertEquals(expected, codec.decode(fixture))
+    }
+
+    @Test
+    fun v8EnvelopeCarryingBackgroundKindsIsRejected() {
+        val recordV8 = withVersion(resource("/v9/core/stored-background-execution-envelope.json"), 8)
+        val originV8 = withVersion(resource("/v9/core/stored-background-origin-envelope.json"), 8)
+        val recordCodec = BackgroundExecutionRecordCodec(json, sdkVersion = fixtureSdkVersion)
+        val originCodec = BackgroundOriginContextCodec(json, sdkVersion = fixtureSdkVersion)
+
+        val recordFailure = assertThrows(StoredEnvelopeDecodeException::class.java) {
+            recordCodec.decodeResult(recordV8)
+        }
+        assertEquals(StoredEnvelopeDecodeFailure.MIGRATION_FAILED, recordFailure.failure)
+        val originFailure = assertThrows(StoredEnvelopeDecodeException::class.java) {
+            originCodec.decodeResult(originV8)
+        }
+        assertEquals(StoredEnvelopeDecodeFailure.MIGRATION_FAILED, originFailure.failure)
+    }
+
+    @Test
+    fun backgroundEnvelopeKindsAreDiscriminatedByTheExplicitField() {
+        val recordFixture = resource("/v9/core/stored-background-execution-envelope.json")
+        val originFixture = resource("/v9/core/stored-background-origin-envelope.json")
+        val recordCodec = BackgroundExecutionRecordCodec(json, sdkVersion = fixtureSdkVersion)
+        val originCodec = BackgroundOriginContextCodec(json, sdkVersion = fixtureSdkVersion)
+
+        // Cross-decoding fails on the kind discriminator, not on field shapes.
+        assertThrows(StoredEnvelopeDecodeException::class.java) {
+            recordCodec.decodeResult(originFixture)
+        }
+        assertThrows(StoredEnvelopeDecodeException::class.java) {
+            originCodec.decodeResult(recordFixture)
+        }
+        // A forged kind value never silently upgrades the payload.
+        assertThrows(StoredEnvelopeDecodeException::class.java) {
+            recordCodec.decodeResult(withKind(recordFixture, "session"))
+        }
+        assertThrows(StoredEnvelopeDecodeException::class.java) {
+            originCodec.decodeResult(withKind(originFixture, "checkpoint"))
+        }
+    }
+
+    @Test
     fun shippedV8SessionEnvelopeMigratesToV9WithDefaultedBackgroundToolFields() {
         val fixture = resource("/v8/core/stored-session-envelope.json")
         val result = AgentSessionSnapshotCodec(json, sdkVersion = fixtureSdkVersion)
@@ -601,6 +661,63 @@ class SerializationGoldenFixtureTest {
             ),
         )
     }
+
+    private fun backgroundExecutionFixture(): BackgroundExecutionRecord {
+        val call = ToolCallPart(
+            toolCallId = "search-call-fixture-1",
+            toolName = "web_search",
+            arguments = buildJsonObject { put("query", JsonPrimitive("kmp architecture")) },
+        )
+        return BackgroundExecutionRecord(
+            sessionId = AgentSessionId("session-fixture-1"),
+            executionId = "execution-fixture-1",
+            handle = "bg_fixture1",
+            originRunId = AgentRunId("run-fixture-1"),
+            originCallId = "search-call-fixture-1",
+            toolName = "web_search",
+            sourceId = "user-fixture-1",
+            state = BackgroundExecutionState.RUNNING,
+            executionRequest = ToolExecutionRequest(
+                sessionId = AgentSessionId("session-fixture-1"),
+                runId = AgentRunId("run-fixture-1"),
+                executionId = "execution-fixture-1",
+                assistantMessage = AgentMessage(
+                    id = "assistant-fixture-1",
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(call),
+                    createdAtEpochMs = 1_700_000_000_004,
+                ),
+                toolCall = call,
+                resultBudgetTokens = 8_000,
+            ),
+            effectiveTimeoutMillis = 120_000,
+            queuedAtEpochMs = 1_700_000_000_005,
+            startedAtEpochMs = 1_700_000_000_006,
+        )
+    }
+
+    private fun backgroundOriginFixture() = BackgroundOriginContext(
+        sessionId = AgentSessionId("session-fixture-1"),
+        runId = AgentRunId("run-fixture-1"),
+        request = AgentRequest(
+            sessionId = AgentSessionId("session-fixture-1"),
+            systemPrompt = "You are concise.",
+            messages = emptyList(),
+            model = ModelDescriptor(provider = "gemini", model = "gemini-contract"),
+        ),
+    )
+
+    private fun withVersion(payload: String, version: Int): String = buildJsonObject {
+        json.parseToJsonElement(payload).jsonObject.forEach { (key, value) ->
+            put(key, if (key == "schemaVersion") JsonPrimitive(version) else value)
+        }
+    }.toString()
+
+    private fun withKind(payload: String, kind: String): String = buildJsonObject {
+        json.parseToJsonElement(payload).jsonObject.forEach { (key, value) ->
+            put(key, if (key == "kind") JsonPrimitive(kind) else value)
+        }
+    }.toString()
 
     private fun String.schemaVersion(): Int =
         json.parseToJsonElement(this).jsonObject.getValue("schemaVersion").jsonPrimitive.content.toInt()

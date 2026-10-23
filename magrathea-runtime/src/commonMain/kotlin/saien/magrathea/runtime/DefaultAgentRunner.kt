@@ -2386,56 +2386,77 @@ class DefaultAgentRunner(
                                 persistCompleted(entry, result)
                                 CallResolution.Final(result)
                             } else {
-                                val admitted = checkNotNull(backgroundExecutor).admit(
-                                    AdmittedSpec(
-                                        sessionId = request.sessionId,
-                                        runId = runId,
-                                        toolCallId = call.toolCall.toolCallId,
-                                        toolName = call.toolCall.toolName,
-                                        executor = call.executor,
-                                        executionRequest = call.executionRequest,
-                                        effectiveTimeoutMillis = call.timeoutMs,
-                                        maxQueuedLifetimeMillis =
-                                            backgroundConfig.maxQueuedLifetimeMillis,
-                                        onExecutionStarted = {
-                                            check(!executionStarted) {
-                                                "Tool execution cannot start more than once"
-                                            }
-                                            persistRecord(
-                                                entry.record.copy(
-                                                    state = ToolExecutionState.STARTED,
-                                                ),
-                                            )
-                                            executionStarted = true
-                                        },
-                                        spanFactory = {
-                                            tracing.startSpan(
-                                                RuntimeTraceNames.BACKGROUND_EXECUTION,
-                                                toolSpan.context,
-                                                traceAttributes(
-                                                    "magrathea.agent.session_id" to
-                                                        request.sessionId.value,
-                                                    "magrathea.agent.run_id" to runId.value,
-                                                    "magrathea.tool.name" to
-                                                        call.toolCall.toolName,
-                                                    "magrathea.tool.call_id" to
-                                                        call.toolCall.toolCallId,
-                                                    "magrathea.tool.execution_id" to
-                                                        call.executionRequest.executionId,
-                                                ),
-                                            )
-                                        },
-                                        lateFinalize = { outcome, record, origin ->
-                                            finalizeLateToolOutcome(
-                                                call.executionRequest,
-                                                record,
-                                                origin,
-                                                outcome,
-                                            )
-                                        },
-                                    ),
-                                )
-                                CallResolution.EligiblePending(index, admitted, call, toolSpan)
+                                val stored = checkNotNull(backgroundExecutor)
+                                    .records(request.sessionId).records
+                                    .firstOrNull { it.executionId == entry.record.executionId }
+                                if (stored != null) {
+                                    // Crash window: the record was persisted but its receipt
+                                    // never reached the journal — answer from the stored record
+                                    // instead of executing the call a second time.
+                                    val result = storedBackgroundCallResult(
+                                        request,
+                                        entry.indexed.toolCall,
+                                        stored,
+                                    )
+                                    persistCompleted(entry, result)
+                                    CallResolution.Final(result)
+                                } else {
+                                    val admitted = checkNotNull(backgroundExecutor).admit(
+                                        AdmittedSpec(
+                                            sessionId = request.sessionId,
+                                            runId = runId,
+                                            toolCallId = call.toolCall.toolCallId,
+                                            toolName = call.toolCall.toolName,
+                                            executor = call.executor,
+                                            executionRequest = call.executionRequest,
+                                            effectiveTimeoutMillis = call.timeoutMs,
+                                            maxQueuedLifetimeMillis =
+                                                backgroundConfig.maxQueuedLifetimeMillis,
+                                            onExecutionStarted = {
+                                                check(!executionStarted) {
+                                                    "Tool execution cannot start more than once"
+                                                }
+                                                persistRecord(
+                                                    entry.record.copy(
+                                                        state = ToolExecutionState.STARTED,
+                                                    ),
+                                                )
+                                                executionStarted = true
+                                            },
+                                            spanFactory = {
+                                                tracing.startSpan(
+                                                    RuntimeTraceNames.BACKGROUND_EXECUTION,
+                                                    toolSpan.context,
+                                                    traceAttributes(
+                                                        "magrathea.agent.session_id" to
+                                                            request.sessionId.value,
+                                                        "magrathea.agent.run_id" to runId.value,
+                                                        "magrathea.tool.name" to
+                                                            call.toolCall.toolName,
+                                                        "magrathea.tool.call_id" to
+                                                            call.toolCall.toolCallId,
+                                                        "magrathea.tool.execution_id" to
+                                                            call.executionRequest.executionId,
+                                                    ),
+                                                )
+                                            },
+                                            lateFinalize = { outcome, record, origin ->
+                                                finalizeLateToolOutcome(
+                                                    call.executionRequest,
+                                                    record,
+                                                    origin,
+                                                    outcome,
+                                                )
+                                            },
+                                        ),
+                                    )
+                                    CallResolution.EligiblePending(
+                                        index,
+                                        admitted,
+                                        call,
+                                        toolSpan,
+                                    )
+                                }
                             }
                         }
                     }
@@ -3057,18 +3078,7 @@ class DefaultAgentRunner(
             val stored = background.records(request.sessionId).records
                 .firstOrNull { it.executionId == record.executionId }
             if (stored != null) {
-                return when {
-                    stored.state != BackgroundExecutionState.TERMINAL -> backgroundReceiptResult(
-                        toolCall,
-                        ToolBackgroundReceipt(stored.handle, stored.executionId, stored.state),
-                        awaitDeclared = request.engine.runtime.background
-                            ?.let { BackgroundToolInstructions.awaitDeclared(it) } == true,
-                    )
-                    stored.outcome == BackgroundOutcome.CANCELLED ->
-                        preemptedCancelledResult(toolCall)
-                    stored.result != null -> checkNotNull(stored.result)
-                    else -> preemptedCancelledResult(toolCall)
-                }
+                return storedBackgroundCallResult(request, toolCall, stored)
             }
         }
         return if (record?.state == ToolExecutionState.STARTED) {
@@ -3076,6 +3086,26 @@ class DefaultAgentRunner(
         } else {
             preemptedNotExecutedResult(toolCall)
         }
+    }
+
+    /**
+     * The model-facing answer for a call that already owns a durable background record: its
+     * receipt while the record is live, or its settled outcome once terminal.
+     */
+    private fun storedBackgroundCallResult(
+        request: AgentRequest,
+        toolCall: ToolCallPart,
+        stored: BackgroundExecutionRecord,
+    ): ToolExecutionResult = when {
+        stored.state != BackgroundExecutionState.TERMINAL -> backgroundReceiptResult(
+            toolCall,
+            ToolBackgroundReceipt(stored.handle, stored.executionId, stored.state),
+            awaitDeclared = request.engine.runtime.background
+                ?.let { BackgroundToolInstructions.awaitDeclared(it) } == true,
+        )
+        stored.outcome == BackgroundOutcome.CANCELLED -> preemptedCancelledResult(toolCall)
+        stored.result != null -> checkNotNull(stored.result)
+        else -> preemptedCancelledResult(toolCall)
     }
 
     /**

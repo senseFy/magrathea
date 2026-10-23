@@ -24,6 +24,29 @@ private data class StoredCheckpointEnvelopeV9(
     val payload: JsonObject,
 )
 
+/**
+ * Background envelopes carry an explicit kind discriminator: a future migration must never
+ * infer the payload type from field shapes (ADR-005/ADR-019).
+ */
+@Serializable
+private data class StoredBackgroundExecutionEnvelopeV9(
+    val schemaVersion: Int,
+    val sdkVersion: String,
+    val kind: String,
+    val payload: JsonObject,
+)
+
+@Serializable
+private data class StoredBackgroundOriginEnvelopeV9(
+    val schemaVersion: Int,
+    val sdkVersion: String,
+    val kind: String,
+    val payload: JsonObject,
+)
+
+private const val STORED_BACKGROUND_EXECUTION_KIND = "background_execution"
+private const val STORED_BACKGROUND_ORIGIN_KIND = "background_origin"
+
 internal data class DecodedStorageEnvelopeV9<T>(
     val schemaVersion: Int,
     val sdkVersion: String,
@@ -109,6 +132,102 @@ internal object StorageSchemaV9Adapter {
         sdkVersion = sdkVersion,
         payload = checkpoint.toPersistedV9(json),
     )
+
+    fun encodeBackgroundExecution(
+        json: Json,
+        sdkVersion: String,
+        record: BackgroundExecutionRecord,
+    ): String = json.encodeToString(
+        StoredBackgroundExecutionEnvelopeV9.serializer(),
+        backgroundExecutionEnvelope(json, sdkVersion, record),
+    )
+
+    fun decodeBackgroundExecution(
+        json: Json,
+        document: JsonObject,
+    ): DecodedStorageEnvelopeV9<BackgroundExecutionRecord> {
+        val encoded = json.decodeFromJsonElement(
+            StoredBackgroundExecutionEnvelopeV9.serializer(),
+            document,
+        )
+        require(encoded.kind == STORED_BACKGROUND_EXECUTION_KIND) {
+            "Stored background execution envelope kind must be $STORED_BACKGROUND_EXECUTION_KIND"
+        }
+        val record = encoded.payload.toBackgroundExecutionV9(json)
+        val canonical = backgroundExecutionEnvelope(json, encoded.sdkVersion, record)
+        return DecodedStorageEnvelopeV9(
+            schemaVersion = encoded.schemaVersion,
+            sdkVersion = encoded.sdkVersion,
+            payload = record,
+            canonicalPayload = json.encodeToString(
+                StoredBackgroundExecutionEnvelopeV9.serializer(),
+                canonical,
+            ),
+            canonicalDocument = json.encodeToJsonElement(
+                StoredBackgroundExecutionEnvelopeV9.serializer(),
+                canonical,
+            ).jsonObject,
+        )
+    }
+
+    fun encodeBackgroundOrigin(
+        json: Json,
+        sdkVersion: String,
+        origin: BackgroundOriginContext,
+    ): String = json.encodeToString(
+        StoredBackgroundOriginEnvelopeV9.serializer(),
+        backgroundOriginEnvelope(json, sdkVersion, origin),
+    )
+
+    fun decodeBackgroundOrigin(
+        json: Json,
+        document: JsonObject,
+    ): DecodedStorageEnvelopeV9<BackgroundOriginContext> {
+        val encoded = json.decodeFromJsonElement(
+            StoredBackgroundOriginEnvelopeV9.serializer(),
+            document,
+        )
+        require(encoded.kind == STORED_BACKGROUND_ORIGIN_KIND) {
+            "Stored background origin envelope kind must be $STORED_BACKGROUND_ORIGIN_KIND"
+        }
+        val origin = encoded.payload.toBackgroundOriginV9(json)
+        val canonical = backgroundOriginEnvelope(json, encoded.sdkVersion, origin)
+        return DecodedStorageEnvelopeV9(
+            schemaVersion = encoded.schemaVersion,
+            sdkVersion = encoded.sdkVersion,
+            payload = origin,
+            canonicalPayload = json.encodeToString(
+                StoredBackgroundOriginEnvelopeV9.serializer(),
+                canonical,
+            ),
+            canonicalDocument = json.encodeToJsonElement(
+                StoredBackgroundOriginEnvelopeV9.serializer(),
+                canonical,
+            ).jsonObject,
+        )
+    }
+
+    private fun backgroundExecutionEnvelope(
+        json: Json,
+        sdkVersion: String,
+        record: BackgroundExecutionRecord,
+    ) = StoredBackgroundExecutionEnvelopeV9(
+        schemaVersion = STORAGE_SCHEMA_V9_VERSION,
+        sdkVersion = sdkVersion,
+        kind = STORED_BACKGROUND_EXECUTION_KIND,
+        payload = record.toPersistedV9(json),
+    )
+
+    private fun backgroundOriginEnvelope(
+        json: Json,
+        sdkVersion: String,
+        origin: BackgroundOriginContext,
+    ) = StoredBackgroundOriginEnvelopeV9(
+        schemaVersion = STORAGE_SCHEMA_V9_VERSION,
+        sdkVersion = sdkVersion,
+        kind = STORED_BACKGROUND_ORIGIN_KIND,
+        payload = origin.toPersistedV9(json),
+    )
 }
 
 private fun AgentSessionSnapshot.toPersistedV9(json: Json): JsonObject =
@@ -122,3 +241,15 @@ private fun AgentCheckpoint.toPersistedV9(json: Json): JsonObject =
 
 private fun JsonObject.toCheckpointV9(json: Json): AgentCheckpoint =
     json.decodeFromJsonElement(AgentCheckpoint.serializer(), this)
+
+private fun BackgroundExecutionRecord.toPersistedV9(json: Json): JsonObject =
+    json.encodeToJsonElement(BackgroundExecutionRecord.serializer(), this).jsonObject
+
+private fun JsonObject.toBackgroundExecutionV9(json: Json): BackgroundExecutionRecord =
+    json.decodeFromJsonElement(BackgroundExecutionRecord.serializer(), this)
+
+private fun BackgroundOriginContext.toPersistedV9(json: Json): JsonObject =
+    json.encodeToJsonElement(BackgroundOriginContext.serializer(), this).jsonObject
+
+private fun JsonObject.toBackgroundOriginV9(json: Json): BackgroundOriginContext =
+    json.decodeFromJsonElement(BackgroundOriginContext.serializer(), this)
