@@ -2,7 +2,8 @@
 
 - Status: Proposed
 - Date: 2026-10-23
-- Implementation: Not implemented; protocol and rollout gates below remain open
+- Implementation: Implemented on branch `feat/background-tools` (unreleased); O-03, O-04, and
+  Gemini live evidence remain open (technical design, section 11)
 - Technical design: [Background Tools: Technical Design](../background-tools-design.md) (draft)
 - Extends: [ADR-005](ADR-005-persistence-contracts.md),
   [ADR-008](ADR-008-runtime-tool-and-chatbot-contracts.md),

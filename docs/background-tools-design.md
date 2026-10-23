@@ -1,6 +1,6 @@
 # Background Tools: Technical Design
 
-- Status: Draft; review points decided 2026-10-24
+- Status: Implemented on branch `feat/background-tools` (unreleased); see section 11
 - Date: 2026-10-24
 - Implements: [ADR-019](adr/ADR-019-session-owned-background-tools.md) (Proposed)
 - Consumer integration: Enjoy `docs/architecture/background-tools-integration-design.md`
@@ -226,7 +226,10 @@ Each upsert replaces one record, so there is no competing whole-snapshot writer.
 - Storage envelopes move from schema v8 to v9 additively (`MessageRole.RUNTIME`,
   `RuntimeNoticePart`, receipt markers, configuration, activation, wait counters), with an adjacent
   migration and refrozen descriptors under ADR-005 and `persistence/schema-ledger.json`.
-- A new ledger domain, `agent-background-envelopes` (version 1), covers record and origin envelopes.
+- Records and origin contexts are two further payload kinds, `background_execution` and
+  `background_origin`, in the existing `agent-storage-envelopes` domain at schema 9. Each envelope
+  carries an explicit kind field, so later migrations never infer a kind from its shape; the ledger
+  notes that every later migration must handle both kinds.
 - `MagratheaDatabase` moves from version 1 to 2 and adds `agent_background_executions` and
   `agent_background_origins`; `agent_sessions` and `agent_checkpoints` are unchanged.
 - `magrathea-storage-web` does not implement the port in v1.
@@ -457,3 +460,30 @@ Recommendation for hosts: keep a non-zero wait allowance. It gives models a boun
 to wait, and every model above then answers first once the allowance runs out. A zero allowance is
 a stress configuration in which some models poll; per ADR-019, such model configurations do not pass
 the evaluation gate.
+
+## 11. Implementation status and remaining gates
+
+As of 2026-10-24 the design is implemented on `feat/background-tools` in Magrathea and Enjoy, with
+deterministic tests for every slice and the live evidence in sections 9 and 10.
+
+| Slice | Status |
+|---|---|
+| S0 protocol spike | Done for Chat Completions, Responses, and Anthropic Messages; Gemini Interactions is covered by offline fixtures only |
+| S1 core types, projection, executor, handoff, controls, continuation, Chatbot facade | Done |
+| S2 preemption closure, Stop, targeted cancellation, host suspend and resume, fences | Done |
+| S3 Room persistence (database version 2) and restore after restart | Done |
+| S4 admission priority | Deferred by decision: v1 admits background work FIFO; priority ordering waits for contention measurements, because it can only reorder queued work and never preempts a held permit |
+
+Decisions made during implementation, beyond sections 2 and 8:
+
+- A terminal read or await result counts as delivery, alongside a Runtime notice.
+- Preemption closure applies only in background-enabled Runs; other cancellation is unchanged.
+- Repeated reads of an unfinished handle and awaits after the allowance is exhausted are refused
+  within a Run, and await is not declared when the allowance is zero.
+
+Gates that remain before enabling the feature for users (ADR-019 promotion):
+
+- O-03: replace the placeholder limits with values from a Free Search latency baseline.
+- O-04: agree on the evaluation matrix and thresholds; section 10 is initial evidence, not a gate.
+- Gemini Interactions live evidence from a supported network location.
+- Browser builds stay blocking until `magrathea-storage-web` implements the store.
