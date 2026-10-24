@@ -694,6 +694,17 @@ class DefaultAgentSessionManager(
                     claimed.settled.complete(Unit)
                 }
             }
+            try {
+                runtime.registerBackground()
+            } catch (failure: Throwable) {
+                rethrowWithCleanup(failure) {
+                    mutex.withLock {
+                        if (slots[sessionId.value] === claimed) slots.remove(sessionId.value)
+                    }
+                    claimed.settled.complete(Unit)
+                    runtime.shutdown(SessionShutdown.NONE)
+                }
+            }
 
             val installed = withContext(NonCancellable) {
                 var didInstall = false
@@ -719,21 +730,6 @@ class DefaultAgentSessionManager(
                 didInstall
             }
             if (installed) {
-                try {
-                    runtime.registerBackground()
-                } catch (failure: Throwable) {
-                    rethrowWithCleanup(failure) {
-                        endLeaseOperation(runtime, claimed.generation)
-                        mutex.withLock {
-                            val live = slots[sessionId.value] as? LiveSlot
-                            if (live?.runtime === runtime && live.generation == claimed.generation) {
-                                slots.remove(sessionId.value)
-                                publishLiveSessionIdsLocked()
-                            }
-                        }
-                        runtime.shutdown(SessionShutdown.NONE)
-                    }
-                }
                 return handoffLease(runtime, claimed.generation)
             }
             mutex.withLock { ensureOpenLocked() }

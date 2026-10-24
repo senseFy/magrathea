@@ -454,8 +454,19 @@ class DefaultAgentRunner(
                     provider?.invocationResumeMode == ProviderInvocationResumeMode.REATTACH
             val recoveredState = if (reattachingProviderInvocation) {
                 // The durable invocation will replay its own accounting from the checkpoint
-                // baseline. Snapshot accounting is consumed only if that invocation is replaced.
-                restoredState
+                // baseline. Tool waits are never replayed by a Provider stream, so they merge
+                // here; the rest of snapshot accounting is consumed only if the invocation is
+                // replaced.
+                restoredState.copy(
+                    foregroundToolWaitMillis = maxOf(
+                        restoredState.foregroundToolWaitMillis,
+                        snapshot.state.foregroundToolWaitMillis,
+                    ),
+                    explicitWaitMillis = maxOf(
+                        restoredState.explicitWaitMillis,
+                        snapshot.state.explicitWaitMillis,
+                    ),
+                )
             } else {
                 restoredState.withRecoveryAccounting(snapshot.state)
             }
@@ -4940,6 +4951,11 @@ private fun AgentStateSnapshot.withRecoveryAccounting(
         usageObservation = observedState.contextManagement.usageObservation
             ?: contextManagement.usageObservation,
     ),
+    foregroundToolWaitMillis = maxOf(
+        foregroundToolWaitMillis,
+        observedState.foregroundToolWaitMillis,
+    ),
+    explicitWaitMillis = maxOf(explicitWaitMillis, observedState.explicitWaitMillis),
 )
 
 private fun TokenUsage.mergeCumulativeKnown(other: TokenUsage): TokenUsage = TokenUsage(

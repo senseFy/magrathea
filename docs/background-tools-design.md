@@ -363,7 +363,7 @@ as it does today.
   the store deletes its records together with the persisted state. Records without a session are
   deleted at the next acquisition or listing.
 - `start` with a request that drops history, including regeneration, cancels, suppresses, and
-  deletes every record whose `originCallId` is absent from `request.messages`.
+  deletes every record whose receipt's execution ID no longer appears in `request.messages`.
 - A `QUEUED` record older than `maxQueuedLifetimeMillis` becomes `INTERRUPTED` without executing.
 
 ### 5.10 Crash windows

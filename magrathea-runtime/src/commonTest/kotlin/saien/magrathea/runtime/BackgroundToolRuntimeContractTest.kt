@@ -4440,6 +4440,112 @@ class BackgroundToolRuntimeContractTest {
         executor.close()
     }
 
+
+    // RF-12: a resume must carry the interrupted Run's explicit-wait spend, so a replayed
+    // await gets only the remaining allowance instead of a fresh one.
+    @Test
+    fun resumedRunUsesPersistedExplicitWaitBudget() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("resume-explicit-budget")
+        executor.register(sessionId, NoopListener)
+        val tool = GatedTool(
+            "deep_lookup",
+            ToolBackgroundPolicy.ELIGIBLE,
+            recoveryPolicy = ToolRecoveryPolicy.REPLAY_SAFE,
+        )
+        val provider = object : ProviderAdapter {
+            override val key = "resume-explicit-budget"
+            private var calls = 0
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                calls += 1
+                when {
+                    calls == 1 -> emit(
+                        providerChunk(
+                            toolCalls = listOf(toolCall("call-1", "deep_lookup")),
+                            completed = true,
+                        ),
+                    )
+                    request.messages.flatMap { it.parts }.filterIsInstance<ToolResultPart>()
+                        .any { it.toolName == "await_background_results" } -> emit(
+                        providerChunk(text = "done", completed = true),
+                    )
+                    else -> {
+                        val handle = request.messages
+                            .flatMap { it.parts }
+                            .filterIsInstance<ToolResultPart>()
+                            .firstNotNullOf { it.backgroundReceipt?.handle }
+                        emit(
+                            providerChunk(
+                                toolCalls = listOf(
+                                    toolCall(
+                                        "await-1",
+                                        "await_background_results",
+                                        """{"handles":["$handle"],"max_wait_ms":5000}""",
+                                    ),
+                                ),
+                                completed = true,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(
+            provider = provider,
+            tools = listOf(tool),
+            background = executor,
+            persistence = persistence,
+        )
+        val collected = async {
+            runner.run(
+                request(
+                    "resume-explicit-budget",
+                    sessionId,
+                    config = backgroundConfig(
+                        handoffWait = 10,
+                        explicitAllowance = 1_000,
+                    ),
+                ),
+            ).toList()
+        }
+        runCurrent()
+        advanceTimeBy(600)
+        runCurrent()
+        val interrupt = async { runner.interrupt(sessionId) }
+        runCurrent()
+        interrupt.await()
+        runCatching { collected.await() }
+        runCurrent()
+
+        val interrupted = persistence.load(sessionId)!!.snapshot.state
+        assertTrue(
+            interrupted.explicitWaitMillis in 500..600,
+            "The interrupted Run should have spent most of the await window, " +
+                "was ${interrupted.explicitWaitMillis}",
+        )
+
+        val resumed = runner.resume(sessionId).toList()
+        assertTrue(resumed.any { it is AgentEvent.Completed })
+        val finalState = persistence.load(sessionId)!!.snapshot.state
+        val awaited = finalState.messages
+            .flatMap { it.parts }
+            .filterIsInstance<ToolResultPart>()
+            .last { it.toolName == "await_background_results" }
+        val waited = awaited.result.jsonObject["waited_ms"]!!.jsonPrimitive.long
+        assertTrue(
+            waited <= 500,
+            "The replayed await gets only the ~400ms left over, not a fresh " +
+                "1000ms allowance; waited $waited ms",
+        )
+        assertEquals(
+            JsonPrimitive(true),
+            awaited.result.jsonObject["wait_allowance_exhausted"],
+        )
+        executor.close()
+    }
+
     // ---- harness ----
 
     private fun TestScope.executor(store: BackgroundExecutionStore): BackgroundToolExecutor =
