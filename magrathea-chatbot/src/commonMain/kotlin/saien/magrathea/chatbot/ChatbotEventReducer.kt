@@ -3,7 +3,11 @@ package saien.magrathea.chatbot
 import saien.magrathea.core.AgentEvent
 
 internal class ChatbotEventReducer {
-    fun reduce(state: ChatbotSnapshot, event: AgentEvent): ChatbotSnapshot = when (event) {
+    fun reduce(
+        state: ChatbotSnapshot,
+        event: AgentEvent,
+        backgroundEnabled: Boolean = false,
+    ): ChatbotSnapshot = when (event) {
         is AgentEvent.Started -> state.copy(
             sessionId = event.sessionId.value,
             status = ChatbotStatus.RUNNING,
@@ -16,7 +20,7 @@ internal class ChatbotEventReducer {
         is AgentEvent.RetryScheduled -> state
         is AgentEvent.ContextTransformed -> state.copy(replay = event.replay)
         is AgentEvent.CheckpointSaved -> {
-            val messages = event.checkpoint.state.messages.map { it.toChatbotMessageSnapshot() }
+            val messages = event.checkpoint.state.messages.toChatbotMessageSnapshots(backgroundEnabled)
             state.copy(
                 messages = messages,
                 stopReason = event.checkpoint.state.stopReason?.toChatbotStopReason(),
@@ -28,7 +32,13 @@ internal class ChatbotEventReducer {
             )
         }
         is AgentEvent.MessageEmitted -> {
-            val messages = state.messages.replaceOrAppend(event.message.toChatbotMessageSnapshot())
+            val messages = if (event.message.role == saien.magrathea.core.MessageRole.RUNTIME) {
+                state.messages
+            } else {
+                state.messages.replaceOrAppend(
+                    event.message.toChatbotMessageSnapshot(backgroundEnabled = backgroundEnabled),
+                )
+            }
             state.copy(
                 messages = messages,
                 status = ChatbotStatus.RUNNING,
@@ -37,16 +47,42 @@ internal class ChatbotEventReducer {
                 toolActivities = reconcileToolActivities(messages, state.toolActivities),
             )
         }
-        is AgentEvent.ToolRequested -> state.copy(
-            status = ChatbotStatus.WAITING_FOR_TOOL,
-            toolActivities = state.toolActivities.withToolRequested(event.toolCall),
+        is AgentEvent.ToolRequested -> {
+            // Runtime control calls never become activities.
+            if (backgroundEnabled && isBackgroundControlTool(event.toolCall.toolName)) {
+                state.copy(status = ChatbotStatus.RUNNING)
+            } else {
+                state.copy(
+                    status = ChatbotStatus.WAITING_FOR_TOOL,
+                    toolActivities = state.toolActivities.withToolRequested(event.toolCall),
+                )
+            }
+        }
+        is AgentEvent.ToolCompleted -> {
+            if (event.result.isBackgroundControlResult()) {
+                state.copy(status = ChatbotStatus.RUNNING)
+            } else {
+                state.copy(
+                    status = ChatbotStatus.RUNNING,
+                    toolActivities = state.toolActivities.withToolCompleted(event.result),
+                )
+            }
+        }
+        is AgentEvent.ToolHandedOff -> state.copy(
+            toolActivities = state.toolActivities.withToolHandedOff(
+                toolCallId = event.toolCallId,
+                toolName = event.toolName,
+                handle = event.receipt.handle,
+            ),
         )
-        is AgentEvent.ToolCompleted -> state.copy(
-            status = ChatbotStatus.RUNNING,
-            toolActivities = state.toolActivities.withToolCompleted(event.result),
+        is AgentEvent.BackgroundExecutionSettled -> state.copy(
+            toolActivities = state.toolActivities.withBackgroundSettled(
+                handle = event.handle,
+                state = event.outcome.toChatbotBackgroundState(),
+            ),
         )
         is AgentEvent.Completed -> {
-            val messages = event.state.messages.map { it.toChatbotMessageSnapshot() }
+            val messages = event.state.messages.toChatbotMessageSnapshots(backgroundEnabled)
             state.copy(
                 messages = messages,
                 status = ChatbotStatus.COMPLETED,
@@ -82,7 +118,7 @@ internal class ChatbotEventReducer {
             ),
         )
         is AgentEvent.Interrupted -> {
-            val messages = event.state.messages.map { it.toChatbotMessageSnapshot() }
+            val messages = event.state.messages.toChatbotMessageSnapshots(backgroundEnabled)
             state.copy(
                 messages = messages,
                 status = ChatbotStatus.INTERRUPTED,

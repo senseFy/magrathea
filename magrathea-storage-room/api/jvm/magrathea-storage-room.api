@@ -5,6 +5,7 @@ public final class saien/magrathea/storage/room/JvmMagratheaRoom {
 
 public final class saien/magrathea/storage/room/MagratheaRoomStoreHandle {
 	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getBackgroundStore ()Lsaien/magrathea/core/BackgroundExecutionStore;
 	public final fun getPersistence ()Lsaien/magrathea/core/AgentPersistence;
 }
 
@@ -41,6 +42,8 @@ public abstract interface class saien/magrathea/storage/room/StoredRecordCorrupt
 }
 
 public final class saien/magrathea/storage/room/StoredRecordKind : java/lang/Enum {
+	public static final field BACKGROUND_EXECUTION Lsaien/magrathea/storage/room/StoredRecordKind;
+	public static final field BACKGROUND_ORIGIN Lsaien/magrathea/storage/room/StoredRecordKind;
 	public static final field CHECKPOINT Lsaien/magrathea/storage/room/StoredRecordKind;
 	public static final field SESSION Lsaien/magrathea/storage/room/StoredRecordKind;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;

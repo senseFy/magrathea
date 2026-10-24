@@ -17,6 +17,7 @@ import saien.magrathea.core.JsonPart
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ReasoningPart
 import saien.magrathea.core.RemoteToolImageSource
+import saien.magrathea.core.RuntimeNoticePart
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolImageAttachmentReference
@@ -92,11 +93,21 @@ internal class AnthropicRequestBuilder(
             when (message.role) {
                 MessageRole.SYSTEM -> Unit
                 MessageRole.USER -> add(userMessage(message))
+                MessageRole.RUNTIME -> add(userMessage(message.runtimeNoticeAsUser()))
                 MessageRole.ASSISTANT -> add(assistantMessage(message, request))
                 MessageRole.TOOL -> add(toolResultMessage(message, request))
             }
         }
     }
+
+    private fun AgentMessage.runtimeNoticeAsUser(): AgentMessage = copy(
+        parts = parts.map { part ->
+            (part as? RuntimeNoticePart)?.let { TextPart(it.text) }
+                ?: throw ProviderProtocolException(
+                    "Anthropic Runtime notice messages must contain only Runtime notices",
+                )
+        },
+    )
 
     private fun userMessage(message: AgentMessage): JsonObject = buildJsonObject {
         val content = buildJsonArray {

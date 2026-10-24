@@ -1,7 +1,9 @@
 package saien.magrathea.chatbot
 
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import saien.magrathea.core.AgentFailureCode
 import saien.magrathea.core.AgentInterruption
 import saien.magrathea.core.AgentInterruptionReason
@@ -36,6 +38,7 @@ import saien.magrathea.core.ToolResultPart
 import saien.magrathea.core.citations
 import saien.magrathea.core.requireSupports
 import saien.magrathea.core.text
+import saien.magrathea.runtime.BackgroundToolInstructions
 
 enum class ChatbotStatus {
     IDLE,
@@ -235,6 +238,38 @@ data class ChatbotToolActivityKey(
     val callOrdinal: Int,
 )
 
+/** Product-safe lifecycle of one Session-owned background Tool execution. */
+enum class ChatbotBackgroundState {
+    QUEUED,
+    RUNNING,
+    SUCCEEDED,
+    FAILED,
+    CANCELLED,
+    INTERRUPTED,
+}
+
+/** Product-safe view of one Session-owned background execution tied to its originating call. */
+data class ChatbotBackgroundExecution(
+    val handle: String,
+    val toolName: String,
+    val originCallId: String,
+    val state: ChatbotBackgroundState,
+)
+
+/** Session-owned background work projected for hosts; null while the runtime reports none. */
+data class ChatbotBackgroundSnapshot(
+    val executions: List<ChatbotBackgroundExecution>,
+    val hasPendingActivation: Boolean,
+    val requiresExecutionHost: Boolean,
+)
+
+/** Partitioned outcome of one cancelBackground command. */
+data class ChatbotBackgroundCancellation(
+    val cancelled: List<String>,
+    val alreadyFinished: List<String>,
+    val unknown: List<String>,
+)
+
 /** Derived lifecycle for one Tool call. Canonical messages remain the persisted source of truth. */
 data class ChatbotToolActivitySnapshot(
     val key: ChatbotToolActivityKey,
@@ -242,7 +277,30 @@ data class ChatbotToolActivitySnapshot(
     val status: ChatbotToolActivityStatus,
     val resultMessageId: String? = null,
     val result: ChatbotToolResult? = null,
-)
+    /** Session-owned background execution that answers this call through a receipt. */
+    val background: ChatbotBackgroundExecution? = null,
+) {
+    /** Retains the constructor published before background activities were projected. */
+    constructor(
+        key: ChatbotToolActivityKey,
+        call: ChatbotToolCall,
+        status: ChatbotToolActivityStatus,
+        resultMessageId: String? = null,
+        result: ChatbotToolResult? = null,
+    ) : this(key, call, status, resultMessageId, result, background = null)
+
+    /** Retains the pre-background copy/default-copy signatures while keeping the execution view. */
+    fun copy(
+        key: ChatbotToolActivityKey = this.key,
+        call: ChatbotToolCall = this.call,
+        status: ChatbotToolActivityStatus = this.status,
+        resultMessageId: String? = this.resultMessageId,
+        result: ChatbotToolResult? = this.result,
+    ): ChatbotToolActivitySnapshot = ChatbotToolActivitySnapshot(
+        key, call, status, resultMessageId, result, background = background,
+    )
+
+}
 
 data class ChatbotMessageSnapshot(
     val id: String,
@@ -315,6 +373,8 @@ data class ChatbotSnapshot(
     val stopReason: ChatbotStopReason? = null,
     /** Latest whole-message replay decisions, shared with the managed Runtime snapshot. */
     val replay: ReplayReport? = null,
+    /** Session-owned background work; null while the runtime snapshot reports none. */
+    val background: ChatbotBackgroundSnapshot? = null,
 ) {
     /** Retains the constructor published with the run stop reason. */
     constructor(
@@ -332,6 +392,26 @@ data class ChatbotSnapshot(
     ) : this(
         configuration, sessionId, messages, status, failure, interruption, usage,
         latestRequestUsage, contextManagement, toolActivities, stopReason, replay = null,
+    )
+
+    /** Retains the replay-aware constructor published before the background projection. */
+    constructor(
+        configuration: ChatbotSessionConfiguration,
+        sessionId: String? = null,
+        messages: List<ChatbotMessageSnapshot> = emptyList(),
+        status: ChatbotStatus = ChatbotStatus.IDLE,
+        failure: ChatbotFailure? = null,
+        interruption: ChatbotInterruption? = null,
+        usage: ChatbotUsage = ChatbotUsage(),
+        latestRequestUsage: ChatbotUsage = ChatbotUsage(),
+        contextManagement: ChatbotContextManagementSnapshot = ChatbotContextManagementSnapshot(),
+        toolActivities: List<ChatbotToolActivitySnapshot> = emptyList(),
+        stopReason: ChatbotStopReason? = null,
+        replay: ReplayReport? = null,
+    ) : this(
+        configuration, sessionId, messages, status, failure, interruption, usage,
+        latestRequestUsage, contextManagement, toolActivities, stopReason, replay,
+        background = null,
     )
 
     /** Retains the original constructor and its default-argument signature for compiled hosts. */
@@ -367,6 +447,7 @@ data class ChatbotSnapshot(
     ): ChatbotSnapshot = ChatbotSnapshot(
         configuration, sessionId, messages, status, failure, interruption, usage,
         latestRequestUsage, contextManagement, toolActivities, stopReason, replay = replay,
+        background = background,
     )
 
     /** Retains the original copy/default-copy signatures while preserving the run's stop reason. */
@@ -383,7 +464,28 @@ data class ChatbotSnapshot(
         toolActivities: List<ChatbotToolActivitySnapshot> = this.toolActivities,
     ): ChatbotSnapshot = ChatbotSnapshot(
         configuration, sessionId, messages, status, failure, interruption, usage,
-        latestRequestUsage, contextManagement, toolActivities, stopReason = stopReason, replay = replay,
+        latestRequestUsage, contextManagement, toolActivities, stopReason = stopReason,
+        replay = replay, background = background,
+    )
+
+    /** Retains the replay-aware copy/default-copy signatures while keeping background state. */
+    fun copy(
+        configuration: ChatbotSessionConfiguration = this.configuration,
+        sessionId: String? = this.sessionId,
+        messages: List<ChatbotMessageSnapshot> = this.messages,
+        status: ChatbotStatus = this.status,
+        failure: ChatbotFailure? = this.failure,
+        interruption: ChatbotInterruption? = this.interruption,
+        usage: ChatbotUsage = this.usage,
+        latestRequestUsage: ChatbotUsage = this.latestRequestUsage,
+        contextManagement: ChatbotContextManagementSnapshot = this.contextManagement,
+        toolActivities: List<ChatbotToolActivitySnapshot> = this.toolActivities,
+        stopReason: ChatbotStopReason? = this.stopReason,
+        replay: ReplayReport? = this.replay,
+    ): ChatbotSnapshot = ChatbotSnapshot(
+        configuration, sessionId, messages, status, failure, interruption, usage,
+        latestRequestUsage, contextManagement, toolActivities, stopReason, replay,
+        background = background,
     )
 
     val isRunning: Boolean
@@ -450,29 +552,166 @@ class ChatbotException(
     constructor(failure: ChatbotFailure) : this(failure, ChatbotInvalidationScope.NONE)
 }
 
-internal fun AgentMessage.toChatbotMessageSnapshot(): ChatbotMessageSnapshot = ChatbotMessageSnapshot(
-    id = id,
-    role = role.toChatbotRole(),
-    text = text(),
-    textBlocks = parts.filterIsInstance<TextPart>().map {
-        ChatbotTextBlock(text = it.text, phase = it.phase?.toChatbotPhase())
-    },
-    reasoning = parts.filterIsInstance<ReasoningPart>().map {
-        ChatbotReasoningBlock(
-            text = it.text,
-            redacted = it.redacted,
-            kind = it.kind.toChatbotReasoningKind(),
-            phase = it.phase?.toChatbotPhase(),
+/**
+ * Runtime notices are not conversation content; request-building lists keep them, snapshots skip
+ * them. Control traffic hides by marker, not by name: a result disappears only when the Runtime
+ * marked it, a persisted call only when its paired result was marked, and an unanswered call only
+ * while the Session's request reserves control names (the `backgroundEnabled` flag).
+ */
+internal fun List<AgentMessage>.toChatbotMessageSnapshots(
+    backgroundEnabled: Boolean = false,
+): List<ChatbotMessageSnapshot> {
+    val callIndex = chatbotCallIndex(backgroundEnabled)
+    return filter { it.role != MessageRole.RUNTIME }
+        .map { message ->
+            message to message.toChatbotMessageSnapshot(callIndex)
+        }
+        .filter { (original, snapshot) ->
+            // Runtime control calls never surface; drop only messages the filtering emptied.
+            original.parts.filterIsInstance<ToolCallPart>()
+                .withIndex()
+                .none { (ordinal, _) -> callIndex.isHidden(original.id, ordinal) } &&
+                original.parts.none { it is ToolResultPart && it.isBackgroundControlResult() } ||
+                snapshot.text.isNotBlank() ||
+                snapshot.textBlocks.isNotEmpty() ||
+                snapshot.reasoning.isNotEmpty() ||
+                snapshot.attachments.isNotEmpty() ||
+                snapshot.toolCalls.isNotEmpty() ||
+                snapshot.toolResults.isNotEmpty()
+        }
+        .map { it.second }
+}
+
+/**
+ * One pass over canonical history that decides every call's visibility and identity: results
+ * pair with the most recent preceding same-ID-and-name call, a call is hidden when its paired
+ * result is runtime control traffic or it is an unanswered reserved-name call under
+ * `backgroundEnabled`, and visible calls get their activity key (message + visible ordinal).
+ */
+internal class ChatbotCallIndex(
+    val calls: List<ChatbotCallIndexEntry>,
+    val resultBindings: List<ResultBinding>,
+) {
+    class ChatbotCallIndexEntry(
+        val call: ToolCallPart,
+        val messageId: String,
+        val rawOrdinal: Int,
+        val hidden: Boolean,
+        val key: ChatbotToolActivityKey?,
+    )
+
+    class ResultBinding(
+        val result: ToolResultPart,
+        val call: ChatbotCallIndexEntry?,
+    )
+
+    private val hiddenCalls = calls.mapNotNullTo(mutableSetOf()) {
+        if (it.hidden) it.messageId to it.rawOrdinal else null
+    }
+
+    fun isHidden(messageId: String, callOrdinal: Int): Boolean =
+        (messageId to callOrdinal) in hiddenCalls
+
+    fun lastKeyFor(toolCallId: String, toolName: String): ChatbotToolActivityKey? =
+        calls.indexOfLast {
+            it.call.toolCallId == toolCallId && it.call.toolName == toolName
+        }.takeIf { it >= 0 }?.let { calls[it].key }
+}
+
+internal fun List<AgentMessage>.chatbotCallIndex(
+    backgroundEnabled: Boolean,
+): ChatbotCallIndex {
+    val calls = mutableListOf<Triple<String, Int, ToolCallPart>>()
+    val resultScan = mutableListOf<Pair<ToolResultPart, Int>>()
+    val pairedCalls = mutableSetOf<Int>()
+    val markedCalls = mutableSetOf<Int>()
+    forEach { message ->
+        message.parts.filterIsInstance<ToolCallPart>().forEachIndexed { ordinal, call ->
+            calls += Triple(message.id, ordinal, call)
+        }
+        message.parts.filterIsInstance<ToolResultPart>().forEach { part ->
+            val callIdx = calls.indexOfLast {
+                it.third.toolCallId == part.toolCallId && it.third.toolName == part.toolName
+            }
+            if (callIdx >= 0) {
+                pairedCalls += callIdx
+                if (part.isBackgroundControlResult()) markedCalls += callIdx
+            }
+            resultScan += part to callIdx
+        }
+    }
+    val visibleOrdinals = mutableMapOf<String, Int>()
+    val entries = calls.mapIndexed { idx, (messageId, rawOrdinal, call) ->
+        val hidden = idx in markedCalls ||
+            (
+                idx !in pairedCalls && backgroundEnabled &&
+                    isBackgroundControlTool(call.toolName)
+                )
+        val key = if (hidden) {
+            null
+        } else {
+            val ordinal = visibleOrdinals[messageId] ?: 0
+            visibleOrdinals[messageId] = ordinal + 1
+            ChatbotToolActivityKey(messageId, ordinal)
+        }
+        ChatbotCallIndex.ChatbotCallIndexEntry(call, messageId, rawOrdinal, hidden, key)
+    }
+    val bindings = resultScan.map { (result, callIdx) ->
+        ChatbotCallIndex.ResultBinding(
+            result,
+            callIdx.takeIf { it >= 0 }?.let(entries::get),
         )
-    },
-    attachments = parts.filterIsInstance<AttachmentPart>().map {
-        ChatbotAttachment(uri = it.uri, mimeType = it.mimeType, fileName = it.fileName)
-    },
-    toolCalls = parts.filterIsInstance<ToolCallPart>().map(ToolCallPart::toChatbotToolCall),
-    toolResults = parts.filterIsInstance<ToolResultPart>().map(ToolResultPart::toChatbotToolResult),
-    createdAtEpochMs = createdAtEpochMs,
-    stopReason = stopReason?.toChatbotStopReason(),
-)
+    }
+    return ChatbotCallIndex(entries, bindings)
+}
+
+internal fun isBackgroundControlTool(toolName: String): Boolean =
+    toolName in BackgroundToolInstructions.CONTROL_TOOL_NAMES
+
+/** A Tool result the Runtime authored as background control traffic. */
+internal fun ToolResultPart.isBackgroundControlResult(): Boolean =
+    metadata[BackgroundToolInstructions.CONTROL_RESULT_METADATA_KEY]
+        ?.jsonPrimitive?.booleanOrNull == true
+
+/** Same marker on an event-time result. */
+internal fun ToolExecutionResult.isBackgroundControlResult(): Boolean =
+    metadata[BackgroundToolInstructions.CONTROL_RESULT_METADATA_KEY]
+        ?.jsonPrimitive?.booleanOrNull == true
+
+internal fun AgentMessage.toChatbotMessageSnapshot(
+    callIndex: ChatbotCallIndex? = null,
+    backgroundEnabled: Boolean = false,
+): ChatbotMessageSnapshot {
+    val index = callIndex ?: listOf(this).chatbotCallIndex(backgroundEnabled)
+    return ChatbotMessageSnapshot(
+        id = id,
+        role = role.toChatbotRole(),
+        text = text(),
+        textBlocks = parts.filterIsInstance<TextPart>().map {
+            ChatbotTextBlock(text = it.text, phase = it.phase?.toChatbotPhase())
+        },
+        reasoning = parts.filterIsInstance<ReasoningPart>().map {
+            ChatbotReasoningBlock(
+                text = it.text,
+                redacted = it.redacted,
+                kind = it.kind.toChatbotReasoningKind(),
+                phase = it.phase?.toChatbotPhase(),
+            )
+        },
+        attachments = parts.filterIsInstance<AttachmentPart>().map {
+            ChatbotAttachment(uri = it.uri, mimeType = it.mimeType, fileName = it.fileName)
+        },
+        toolCalls = parts.filterIsInstance<ToolCallPart>()
+            .withIndex()
+            .filterNot { (ordinal, _) -> index.isHidden(id, ordinal) }
+            .map { it.value.toChatbotToolCall() },
+        toolResults = parts.filterIsInstance<ToolResultPart>()
+            .filterNot { it.isBackgroundControlResult() }
+            .map(ToolResultPart::toChatbotToolResult),
+        createdAtEpochMs = createdAtEpochMs,
+        stopReason = stopReason?.toChatbotStopReason(),
+    )
+}
 
 internal fun ToolResultPart.toChatbotToolResult(): ChatbotToolResult = ChatbotToolResult(
     id = toolCallId,
@@ -651,4 +890,5 @@ private fun MessageRole.toChatbotRole(): ChatbotMessageRole = when (this) {
     MessageRole.ASSISTANT -> ChatbotMessageRole.ASSISTANT
     MessageRole.TOOL -> ChatbotMessageRole.TOOL
     MessageRole.SYSTEM -> ChatbotMessageRole.SYSTEM
+    MessageRole.RUNTIME -> error("Runtime notices are not Chatbot conversation messages")
 }

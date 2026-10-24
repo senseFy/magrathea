@@ -31,6 +31,7 @@ import saien.magrathea.runtime.AgentSessionLease
 import saien.magrathea.runtime.AgentSessionManager
 import saien.magrathea.runtime.AgentSessionPhase
 import saien.magrathea.runtime.AgentSessionRuntimeSnapshot
+import saien.magrathea.runtime.BackgroundToolExecutor
 import saien.magrathea.runtime.DefaultAgentSessionManager
 
 fun interface ChatbotStateObserver {
@@ -134,6 +135,51 @@ class ChatbotSession internal constructor(
     suspend fun interrupt() = facadeOperation {
         lifecycleMutex.withLock {
             if (!closed) controller.interrupt()
+        }
+    }
+
+    /**
+     * Starts the pending background activation for this session. Returns false when nothing is
+     * pending, a Run is already executing, or the session rejects the continuation.
+     */
+    @Throws(ChatbotException::class, CancellationException::class)
+    suspend fun continueWithBackgroundResults(): Boolean = facadeOperation {
+        lifecycleMutex.withLock {
+            if (closed) false else controller.continueWithBackgroundResults()
+        }
+    }
+
+    /** Stops every live background execution and any pending Run, suppressing their notices. */
+    @Throws(ChatbotException::class, CancellationException::class)
+    suspend fun stopAll() = facadeOperation {
+        lifecycleMutex.withLock {
+            if (!closed) controller.stopAll()
+        }
+    }
+
+    /** Cancels the referenced background executions only. */
+    @Throws(ChatbotException::class, CancellationException::class)
+    suspend fun cancelBackground(
+        handles: List<String>,
+    ): ChatbotBackgroundCancellation = facadeOperation {
+        lifecycleMutex.withLock {
+            controller.cancelBackground(handles)
+        }
+    }
+
+    /** Stops live background work locally for host loss, leaving queued work resumable. */
+    @Throws(ChatbotException::class, CancellationException::class)
+    suspend fun suspendBackground() = facadeOperation {
+        lifecycleMutex.withLock {
+            if (!closed) controller.suspendBackground()
+        }
+    }
+
+    /** Re-admits every queued background record of this session that has no live job. */
+    @Throws(ChatbotException::class, CancellationException::class)
+    suspend fun resumeBackground() = facadeOperation {
+        lifecycleMutex.withLock {
+            if (!closed) controller.resumeBackground()
         }
     }
 
@@ -749,12 +795,33 @@ fun createChatbotClient(
     persistence: AgentPersistence,
     closeResources: suspend () -> Unit,
     sessionDispatcher: CoroutineDispatcher = Dispatchers.Default,
+): ChatbotClient = createChatbotClient(
+    runner = runner,
+    requestFactory = requestFactory,
+    persistence = persistence,
+    closeResources = closeResources,
+    sessionDispatcher = sessionDispatcher,
+    background = null,
+)
+
+/**
+ * Same as [createChatbotClient] with [background] wired into the owning session manager so
+ * background executions survive handoffs and power [ChatbotSnapshot.background].
+ */
+fun createChatbotClient(
+    runner: AgentRunner,
+    requestFactory: ChatbotRequestFactory,
+    persistence: AgentPersistence,
+    closeResources: suspend () -> Unit,
+    sessionDispatcher: CoroutineDispatcher,
+    background: BackgroundToolExecutor?,
 ): ChatbotClient = ChatbotClient(
     requestFactory = requestFactory,
     sessionManager = DefaultAgentSessionManager(
         runner = runner,
         persistence = persistence,
         dispatcher = sessionDispatcher,
+        background = background,
     ),
     ownsSessionManager = true,
     closeResources = closeResources,

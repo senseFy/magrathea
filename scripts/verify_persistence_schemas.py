@@ -326,8 +326,9 @@ def verify_fixture(
     fixture = expect_object(raw_fixture, label)
     expect_exact_keys(fixture, {"kind", "path", "sha256"}, label)
     kind = expect_string(fixture["kind"], f"{label}.kind")
-    if kind not in {"session", "checkpoint"}:
-        fail(f"{label}.kind must be session or checkpoint")
+    allowed_kinds = {"session", "checkpoint", "background_execution", "background_origin"}
+    if kind not in allowed_kinds:
+        fail(f"{label}.kind must be one of {sorted(allowed_kinds)}")
     raw_path = expect_string(fixture["path"], f"{label}.path")
     if raw_path in used_paths:
         fail(f"fixture path is registered more than once: {raw_path}")
@@ -483,7 +484,9 @@ def validate_ledger(
         domain_label = f"{label}.domains[{domain_index}]"
         domain = expect_object(raw_domain, domain_label)
         expect_exact_keys(
-            domain,
+            # Informational notes were absent from earlier format-v1 ledgers. All
+            # structural keys remain mandatory and unknown keys are still rejected.
+            {key: value for key, value in domain.items() if key != "notes"},
             {
                 "id",
                 "owner",
@@ -499,6 +502,9 @@ def validate_ledger(
             },
             domain_label,
         )
+        if "notes" in domain:
+            for note_index, note in enumerate(expect_array(domain["notes"], f"{domain_label}.notes")):
+                expect_string(note, f"{domain_label}.notes[{note_index}]")
         domain_id = expect_string(domain["id"], f"{domain_label}.id")
         if not re.fullmatch(r"[a-z][a-z0-9-]*", domain_id) or domain_id in domain_ids:
             fail(f"{domain_label}.id must be unique kebab-case")
@@ -575,8 +581,12 @@ def validate_ledger(
                     )
                     for fixture_index, fixture in enumerate(fixtures)
                 }
-                if kinds != {"session", "checkpoint"} or len(fixtures) != 2:
-                    fail(f"{version_label} must freeze one session and one checkpoint fixture")
+                required_kinds = {"session", "checkpoint"}
+                if not required_kinds.issubset(kinds) or len(kinds) != len(fixtures):
+                    fail(
+                        f"{version_label} must freeze one fixture per kind including "
+                        f"{sorted(required_kinds)}"
+                    )
         if not version_numbers:
             fail(f"{domain_label}.versions must not be empty")
         expected_versions = list(range(version_numbers[0], current + 1))
@@ -754,10 +764,40 @@ def verify_append_only(baseline: dict[str, Any], current: dict[str, Any]) -> Non
 
 
 def run_contract_self_test(root: Path, ledger: dict[str, Any]) -> None:
+    legacy = copy.deepcopy(ledger)
+    for domain in legacy["domains"]:
+        domain.pop("notes", None)
+    validate_ledger(root, legacy, "self-test legacy ledger", verify_sources_and_files=False)
+    verify_append_only(legacy, ledger)
+
+    for notes in (None, "not an array", [42], [" "]):
+        invalid = copy.deepcopy(ledger)
+        invalid["domains"][0]["notes"] = notes
+        try:
+            validate_ledger(root, invalid, "self-test invalid notes", verify_sources_and_files=False)
+        except VerificationError:
+            pass
+        else:
+            fail("self-test: schema gate accepted invalid domain notes")
+
+    for base in (legacy, ledger):
+        for mutation in ("unknown-key", "missing-required-key"):
+            invalid = copy.deepcopy(base)
+            if mutation == "unknown-key":
+                invalid["domains"][0]["unexpected"] = True
+            else:
+                del invalid["domains"][0]["owner"]
+            try:
+                validate_ledger(root, invalid, "self-test domain keys", verify_sources_and_files=False)
+            except VerificationError:
+                pass
+            else:
+                fail(f"self-test: schema gate accepted {mutation} in a domain")
+
     changed_fixture = copy.deepcopy(ledger)
     changed_fixture["domains"][0]["versions"][-1]["fixtures"][0]["sha256"] = "0" * 64
     try:
-        verify_append_only(ledger, changed_fixture)
+        verify_append_only(legacy, changed_fixture)
     except VerificationError:
         pass
     else:
@@ -766,7 +806,7 @@ def run_contract_self_test(root: Path, ledger: dict[str, Any]) -> None:
     changed_adapter = copy.deepcopy(ledger)
     changed_adapter["domains"][0]["versions"][-1]["adapter"]["sha256"] = "0" * 64
     try:
-        verify_append_only(ledger, changed_adapter)
+        verify_append_only(legacy, changed_adapter)
     except VerificationError:
         pass
     else:

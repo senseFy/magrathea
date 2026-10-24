@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-10-18
 - Extends: [ADR-014](ADR-014-token-aware-context-management.md)
+- Extended by: [ADR-019](ADR-019-session-owned-background-tools.md)
 
 ## Context
 

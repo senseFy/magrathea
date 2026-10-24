@@ -26,6 +26,14 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import saien.magrathea.core.AgentEvent
+import saien.magrathea.core.BackgroundExecutionRecord
+import saien.magrathea.core.BackgroundExecutionState
+import saien.magrathea.core.MessageRole
+import saien.magrathea.core.RunActivation
+import saien.magrathea.core.RunActivationSource
+import saien.magrathea.core.RuntimeNoticeDelivery
+import saien.magrathea.core.RuntimeNoticeEntry
+import saien.magrathea.core.RuntimeNoticePart
 import saien.magrathea.core.AgentFailureCode
 import saien.magrathea.core.AgentPersistence
 import saien.magrathea.core.AgentPersistenceRecord
@@ -36,10 +44,13 @@ import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.ReplayReport
 import saien.magrathea.core.AgentRunner
 import saien.magrathea.core.AgentSessionId
+import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.AgentStatus
+import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolExecutionRecord
+import saien.magrathea.core.ToolResultPart
 
 /** Process-local lifecycle of one canonical live Agent session runtime. */
 enum class AgentSessionPhase {
@@ -78,7 +89,27 @@ data class AgentSessionRuntimeSnapshot(
     val toolExecutions: List<ToolExecutionRecord> = emptyList(),
     /** Latest process-local replay report; null until a reporting policy prepares input. */
     val replay: ReplayReport? = null,
+    /** Session-owned background execution projection; non-null for registered Sessions. */
+    val background: BackgroundSessionSnapshot? = null,
 ) {
+    /** Retains the constructor published with the replay report. */
+    constructor(
+        revision: Long,
+        sessionId: AgentSessionId,
+        request: AgentRequest? = null,
+        runId: AgentRunId? = null,
+        state: AgentStateSnapshot? = null,
+        phase: AgentSessionPhase = AgentSessionPhase.NEW,
+        recovery: AgentRecoveryInfo? = null,
+        failure: AgentFailureCode? = null,
+        lastEvent: AgentEvent? = null,
+        toolExecutions: List<ToolExecutionRecord> = emptyList(),
+        replay: ReplayReport? = null,
+    ) : this(
+        revision, sessionId, request, runId, state, phase, recovery, failure, lastEvent,
+        toolExecutions, replay, background = null,
+    )
+
     /** Retains the constructor published with the Tool journal. */
     constructor(
         revision: Long,
@@ -112,6 +143,24 @@ data class AgentSessionRuntimeSnapshot(
         toolExecutions = emptyList(), replay = null,
     )
 
+    /** Preserves the journal- and replay-aware copy/default-copy signatures. */
+    fun copy(
+        revision: Long = this.revision,
+        sessionId: AgentSessionId = this.sessionId,
+        request: AgentRequest? = this.request,
+        runId: AgentRunId? = this.runId,
+        state: AgentStateSnapshot? = this.state,
+        phase: AgentSessionPhase = this.phase,
+        recovery: AgentRecoveryInfo? = this.recovery,
+        failure: AgentFailureCode? = this.failure,
+        lastEvent: AgentEvent? = this.lastEvent,
+        toolExecutions: List<ToolExecutionRecord> = this.toolExecutions,
+        replay: ReplayReport? = this.replay,
+    ): AgentSessionRuntimeSnapshot = AgentSessionRuntimeSnapshot(
+        revision, sessionId, request, runId, state, phase, recovery, failure, lastEvent,
+        toolExecutions, replay, background = background,
+    )
+
     /** Preserves the journal-aware copy/default-copy signatures and the replay report. */
     fun copy(
         revision: Long = this.revision,
@@ -126,7 +175,7 @@ data class AgentSessionRuntimeSnapshot(
         toolExecutions: List<ToolExecutionRecord> = this.toolExecutions,
     ): AgentSessionRuntimeSnapshot = AgentSessionRuntimeSnapshot(
         revision, sessionId, request, runId, state, phase, recovery, failure, lastEvent,
-        toolExecutions, replay = replay,
+        toolExecutions, replay = replay, background = background,
     )
 
     /** Retains the original copy/default-copy signatures while preserving the Tool journal. */
@@ -142,7 +191,7 @@ data class AgentSessionRuntimeSnapshot(
         lastEvent: AgentEvent? = this.lastEvent,
     ): AgentSessionRuntimeSnapshot = AgentSessionRuntimeSnapshot(
         revision, sessionId, request, runId, state, phase, recovery, failure, lastEvent,
-        toolExecutions = toolExecutions, replay = replay,
+        toolExecutions = toolExecutions, replay = replay, background = background,
     )
 
     val isExecuting: Boolean
@@ -200,6 +249,73 @@ interface AgentSessionLease {
     /** Starts a new run after the manager-owned collector has entered upstream collection. */
     @Throws(AgentSessionException::class, CancellationException::class)
     suspend fun start(request: AgentRequest)
+
+    /**
+     * Starts a host-triggered continuation Run for pending background results (ADR-019).
+     *
+     * The request must carry the Session's authoritative messages, no activation, and a
+     * background configuration; the Runtime appends the CONTINUATION notice and activation.
+     * Managers without a background executor reject with
+     * [AgentSessionErrorCode.INVALID_STATE].
+     */
+    @Throws(AgentSessionException::class, CancellationException::class)
+    suspend fun startContinuation(request: AgentRequest) {
+        throw AgentSessionException(
+            AgentSessionErrorCode.INVALID_STATE,
+            "Background continuations are not supported by this lease",
+        )
+    }
+
+    /**
+     * Stops everything owned by this Session: every live background execution is cancelled
+     * (records become TERMINAL CANCELLED and suppressed), unacknowledged terminal records are
+     * suppressed, and a pending Run is cancelled so its unanswered calls close as cancelled
+     * instead of producing receipts. A no-op when there is nothing to stop.
+     */
+    @Throws(AgentSessionException::class, CancellationException::class)
+    suspend fun stopAll() {
+        throw AgentSessionException(
+            AgentSessionErrorCode.INVALID_STATE,
+            "Stopping all work is not supported by this lease",
+        )
+    }
+
+    /**
+     * Cancels the referenced live background executions of this Session — the host form of the
+     * model's `cancel_background_executions` control.
+     */
+    @Throws(AgentSessionException::class, CancellationException::class)
+    suspend fun cancelBackground(handles: List<String>): BackgroundCancellationResult {
+        throw AgentSessionException(
+            AgentSessionErrorCode.INVALID_STATE,
+            "Background cancellation is not supported by this lease",
+        )
+    }
+
+    /**
+     * Host-loss suspend: stops the Session's live background jobs locally. QUEUED/RUNNING
+     * records whose Tool is REPLAY_SAFE return to QUEUED; the rest become TERMINAL INTERRUPTED.
+     */
+    @Throws(AgentSessionException::class, CancellationException::class)
+    suspend fun suspendBackground() {
+        throw AgentSessionException(
+            AgentSessionErrorCode.INVALID_STATE,
+            "Suspending background work is not supported by this lease",
+        )
+    }
+
+    /**
+     * Re-admits every QUEUED record of this Session that has no live job. Tools no longer
+     * registered settle as TERMINAL ERROR; records past their queued lifetime settle as
+     * TERMINAL INTERRUPTED.
+     */
+    @Throws(AgentSessionException::class, CancellationException::class)
+    suspend fun resumeBackground() {
+        throw AgentSessionException(
+            AgentSessionErrorCode.INVALID_STATE,
+            "Resuming background work is not supported by this lease",
+        )
+    }
 
     /** Starts recovery and returns after the manager-owned collector is registered. */
     @Throws(AgentSessionException::class, CancellationException::class)
@@ -282,7 +398,15 @@ class DefaultAgentSessionManager(
     private val runner: AgentRunner,
     private val persistence: AgentPersistence,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val background: BackgroundToolExecutor? = null,
 ) : AgentSessionManager {
+    /** Retains the constructor published before Session-owned background execution. */
+    constructor(
+        runner: AgentRunner,
+        persistence: AgentPersistence,
+        dispatcher: CoroutineDispatcher = Dispatchers.Default,
+    ) : this(runner, persistence, dispatcher, background = null)
+
     private val managerJob = SupervisorJob()
     private val scope = CoroutineScope(managerJob + dispatcher)
     private val mutex = Mutex()
@@ -358,6 +482,7 @@ class DefaultAgentSessionManager(
                     failures.capture { runtime?.shutdown(SessionShutdown.DELETE) }
                     val shutdownFailure = failures.failureOrNull()
                     if (shutdownFailure == null) {
+                        failures.capture { background?.deleteSession(sessionId) }
                         failures.capture { storageOperation { persistence.deleteSession(sessionId) } }
                     }
                     (shutdownFailure ?: failures.failureOrNull())?.let { failure -> throw failure }
@@ -422,6 +547,7 @@ class DefaultAgentSessionManager(
                     }
                     val shutdownFailure = failures.failureOrNull()
                     if (shutdownFailure == null) {
+                        failures.capture { background?.clearAll() }
                         failures.capture { storageOperation { persistence.clear() } }
                     }
                     (shutdownFailure ?: failures.failureOrNull())?.let { failure -> throw failure }
@@ -479,6 +605,7 @@ class DefaultAgentSessionManager(
                 runtimes.forEach { runtime ->
                     failures.capture { runtime.shutdown(SessionShutdown.INTERRUPT) }
                 }
+                failures.capture { background?.close() }
                 failures.capture {
                     mutex.withLock {
                         slots.clear()
@@ -556,6 +683,7 @@ class DefaultAgentSessionManager(
                     parentJob = managerJob,
                     dispatcher = dispatcher,
                     seed = seed,
+                    background = background,
                     onDisposable = { settled -> scope.launchDispose(settled) },
                 )
             } catch (failure: Throwable) {
@@ -564,6 +692,22 @@ class DefaultAgentSessionManager(
                         if (slots[sessionId.value] === claimed) slots.remove(sessionId.value)
                     }
                     claimed.settled.complete(Unit)
+                }
+            }
+            try {
+                runtime.registerBackground()
+            } catch (failure: Throwable) {
+                rethrowWithCleanup(failure) {
+                    try {
+                        runtime.shutdown(SessionShutdown.NONE)
+                    } finally {
+                        mutex.withLock {
+                            if (slots[sessionId.value] === claimed) {
+                                slots.remove(sessionId.value)
+                            }
+                        }
+                        claimed.settled.complete(Unit)
+                    }
                 }
             }
 
@@ -875,8 +1019,34 @@ private class ManagedAgentSession(
     parentJob: Job,
     dispatcher: CoroutineDispatcher,
     seed: SessionSeed?,
+    private val background: BackgroundToolExecutor?,
     private val onDisposable: (ManagedAgentSession) -> Unit,
 ) {
+    internal val backgroundListener = object : BackgroundToolExecutor.SessionListener {
+        override suspend fun onRecordChanged(
+            sessionId: AgentSessionId,
+            record: BackgroundExecutionRecord,
+        ) {
+            refreshBackground()
+        }
+
+        override suspend fun onSettled(
+            sessionId: AgentSessionId,
+            record: BackgroundExecutionRecord,
+        ) {
+            val event = AgentEvent.BackgroundExecutionSettled(
+                sessionId,
+                record.executionId,
+                record.handle,
+                checkNotNull(record.outcome),
+            )
+            stateMutex.withLock { transitionLocked(machine.recordExternalEvent(event)) }
+            mutableEvents.tryEmit(event)
+            refreshBackground()
+            onDisposable(this@ManagedAgentSession)
+        }
+    }
+
     private val sessionJob = SupervisorJob(parentJob)
     private val scope = CoroutineScope(sessionJob + dispatcher)
     private val commandMutex = Mutex()
@@ -891,15 +1061,70 @@ private class ManagedAgentSession(
     val state: StateFlow<AgentSessionRuntimeSnapshot> = mutableState.asStateFlow()
     val events: SharedFlow<AgentEvent> = mutableEvents.asSharedFlow()
 
-    suspend fun isDisposable(): Boolean = stateMutex.withLock { machine.execution == null }
+    private var latestBackgroundRecords: List<BackgroundExecutionRecord>? = null
+    private var latestBackground: BackgroundSessionSnapshot? = null
+    private var backgroundInputsInitialized = false
+    private var backgroundInputRequest: AgentRequest? = null
+    private var backgroundInputExecuting = false
+    private var backgroundInputMessages: List<AgentMessage>? = null
+    private var backgroundInputRecords: List<BackgroundExecutionRecord>? = null
+
+    suspend fun isDisposable(): Boolean {
+        val executor = background
+        if (executor != null && executor.hasUnfinishedRecords(sessionId)) return false
+        return stateMutex.withLock { machine.execution == null }
+    }
 
     /** Publish a pure transition; public revisions do not participate in domain decisions. */
     private fun transitionLocked(next: SessionMachine) {
         val current = mutableState.value
-        val projection = next.snapshot(current.revision)
+        if (background != null) {
+            // The projection is pure — re-derive it whenever its inputs moved: execution
+            // state, the request, the message list, or the cached records. A record that
+            // settles after the last turn preparation is therefore noticed when the Run
+            // completes instead of leaving pendingActivation stale.
+            val messages = next.result.state?.messages
+            val records = latestBackgroundRecords
+            if (
+                !backgroundInputsInitialized ||
+                next.result.request !== backgroundInputRequest ||
+                next.isExecuting != backgroundInputExecuting ||
+                messages !== backgroundInputMessages ||
+                records !== backgroundInputRecords
+            ) {
+                latestBackground = deriveBackgroundSessionSnapshot(
+                    records = records.orEmpty(),
+                    request = next.result.request,
+                    state = next.result.state,
+                    isExecuting = next.isExecuting,
+                )
+                backgroundInputRequest = next.result.request
+                backgroundInputExecuting = next.isExecuting
+                backgroundInputMessages = messages
+                backgroundInputRecords = records
+                backgroundInputsInitialized = true
+            }
+        }
+        val projection = next.snapshot(current.revision).copy(background = latestBackground)
         val published = if (projection != current) projection.copy(revision = nextRevision(current)) else current
         machine = next
         mutableState.value = published
+    }
+
+    /** Refreshes the cached background records and republishes when the projection changed. */
+    private suspend fun refreshBackground() {
+        val executor = background ?: return
+        val records = executor.records(sessionId).records
+        stateMutex.withLock {
+            latestBackgroundRecords = records
+            transitionLocked(machine)
+        }
+    }
+
+    suspend fun registerBackground() {
+        val executor = background ?: return
+        executor.register(sessionId, backgroundListener)
+        refreshBackground()
     }
 
     suspend fun start(request: AgentRequest) {
@@ -914,6 +1139,113 @@ private class ManagedAgentSession(
 
     suspend fun resume() {
         startOperation(request = null, resume = true) { runner.resume(sessionId) }
+    }
+
+    suspend fun startContinuation(request: AgentRequest) = commandMutex.withLock {
+        machine.requireOpen()
+        val executor = background
+        fun reject(): Nothing = throw AgentSessionException(
+            AgentSessionErrorCode.INVALID_STATE,
+            "The request is not an admissible background continuation",
+        )
+        if (executor == null || machine.isExecuting) reject()
+        if (request.sessionId != sessionId || request.activation != null) reject()
+        val current = stateMutex.withLock { machine.result }
+        if (current.state?.messages != request.messages) reject()
+        val config = request.engine.runtime.background ?: reject()
+        val records = executor.records(sessionId).records
+        val pendingRecords = pendingBackgroundRecords(
+            records = records,
+            config = config,
+            messages = checkNotNull(current.state).messages,
+        )
+        if (pendingRecords.isEmpty()) reject()
+        val entries = pendingRecords.map { record ->
+            RuntimeNoticeEntry(
+                handle = record.handle,
+                toolName = record.toolName,
+                callId = record.originCallId,
+                outcome = checkNotNull(record.outcome),
+                resultVersion = record.resultVersion,
+            )
+        }
+        val notice = AgentMessage(
+            role = MessageRole.RUNTIME,
+            parts = listOf(
+                RuntimeNoticePart(
+                    entries = entries,
+                    delivery = RuntimeNoticeDelivery.CONTINUATION,
+                    text = renderRuntimeNotice(
+                        entries,
+                        RuntimeNoticeDelivery.CONTINUATION,
+                        config.consumptionPolicy,
+                        config.allowBusinessToolsInContinuations,
+                        awaitDeclared = BackgroundToolInstructions.awaitDeclared(config),
+                    ),
+                ),
+            ),
+        )
+        val effective = request.copy(
+            messages = request.messages + notice,
+            activation = RunActivation(
+                source = RunActivationSource.BACKGROUND_RESULTS,
+                anchorMessageId = notice.id,
+                sourceIds = pendingRecords.mapTo(linkedSetOf()) { it.sourceId }.toList(),
+            ),
+        )
+        mutableEvents.tryEmit(AgentEvent.MessageEmitted(sessionId, notice))
+        startOperationLocked(effective, resume = false) { runner.run(effective) }
+    }
+
+    suspend fun stopAll() = commandMutex.withLock {
+        if (stateMutex.withLock { machine.lifecycle } != SessionLifecycle.OPEN) {
+            return@withLock
+        }
+        val executor = background
+        if (executor != null) {
+            val messages = stateMutex.withLock { machine.result.state?.messages }.orEmpty()
+            val suppress = executor.records(sessionId).records
+                .filter {
+                    it.state == BackgroundExecutionState.TERMINAL &&
+                        !it.activationSuppressed &&
+                        !isBackgroundRecordAcknowledged(it, messages)
+                }
+                .mapTo(linkedSetOf()) { it.executionId }
+            executor.stopSession(sessionId, suppress)
+        }
+        if (stateMutex.withLock { machine.isExecuting }) {
+            runner.cancel(sessionId)
+        }
+        refreshBackground()
+    }
+
+    suspend fun cancelBackground(handles: List<String>): BackgroundCancellationResult =
+        commandMutex.withLock {
+            val executor = background ?: throw AgentSessionException(
+                AgentSessionErrorCode.INVALID_STATE,
+                "Background controls are not supported by this session",
+            )
+            val result = executor.cancel(sessionId, handles)
+            refreshBackground()
+            result
+        }
+
+    suspend fun suspendBackground() = commandMutex.withLock {
+        val executor = background ?: throw AgentSessionException(
+            AgentSessionErrorCode.INVALID_STATE,
+            "Suspending background work is not supported by this session",
+        )
+        executor.suspendSession(sessionId)
+        refreshBackground()
+    }
+
+    suspend fun resumeBackground() = commandMutex.withLock {
+        val executor = background ?: throw AgentSessionException(
+            AgentSessionErrorCode.INVALID_STATE,
+            "Resuming background work is not supported by this session",
+        )
+        executor.resumeSession(sessionId)
+        refreshBackground()
     }
 
     suspend fun interrupt(): AgentRecoveryInfo = commandMutex.withLock {
@@ -1079,6 +1411,7 @@ private class ManagedAgentSession(
                 val failures = CleanupFailureAccumulator()
                 controlFailure?.let(failures::record)
                 failures.capture { sessionJob.cancelAndJoin() }
+                failures.capture { background?.unregister(sessionId, backgroundListener) }
                 failures.failureOrNull()?.let { failure -> throw failure }
             }
         }
@@ -1090,12 +1423,38 @@ private class ManagedAgentSession(
         source: suspend () -> Flow<AgentEvent>,
     ) {
         commandMutex.withLock {
-            val execution = stateMutex.withLock {
-                transitionLocked(machine.begin(request, resume))
-                checkNotNull(machine.execution)
-            }
-            scope.launch(start = CoroutineStart.UNDISPATCHED) { execute(execution, source) }
+            startOperationLocked(request, resume, source)
         }
+    }
+
+    /** Begins execution while [commandMutex] is already held. */
+    private suspend fun startOperationLocked(
+        request: AgentRequest?,
+        resume: Boolean,
+        source: suspend () -> Flow<AgentEvent>,
+    ) {
+        stateMutex.withLock { machine.requireCanBegin(request, resume) }
+        // Regeneration fence: records whose receipt no longer exists in the history are
+        // cancelled and deleted; unreferenced origins are removed with them.
+        if (!resume && request != null) {
+            background?.let { executor ->
+                val referencedExecutionIds = request.messages
+                    .flatMap { message -> message.parts.filterIsInstance<ToolResultPart>() }
+                    .mapNotNullTo(linkedSetOf<String>()) { it.backgroundReceipt?.executionId }
+                val stale = executor.records(sessionId).records
+                    .filter { it.executionId !in referencedExecutionIds }
+                    .map { it.executionId }
+                if (stale.isNotEmpty()) {
+                    executor.deleteRecords(sessionId, stale)
+                    refreshBackground()
+                }
+            }
+        }
+        val execution = stateMutex.withLock {
+            transitionLocked(machine.begin(request, resume))
+            checkNotNull(machine.execution)
+        }
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { execute(execution, source) }
     }
 
     private suspend fun execute(
@@ -1143,6 +1502,7 @@ private class ManagedAgentSession(
                     }
                 }
                 failures.capture { settleExecution(execution, refreshTerminal = terminalSeen) }
+                failures.capture { refreshBackground() }
                 execution.completion.complete(Unit)
                 failures.capture { onDisposable(this@ManagedAgentSession) }
                 failures.failureOrNull()?.let { failure -> throw failure }
@@ -1227,6 +1587,17 @@ private class DefaultAgentSessionLease(
         get() = attached.value
 
     override suspend fun start(request: AgentRequest) = attachedOperation { runtime.start(request) }
+    override suspend fun startContinuation(request: AgentRequest) =
+        attachedOperation { runtime.startContinuation(request) }
+
+    override suspend fun stopAll() = attachedOperation { runtime.stopAll() }
+
+    override suspend fun cancelBackground(handles: List<String>): BackgroundCancellationResult =
+        attachedOperation { runtime.cancelBackground(handles) }
+
+    override suspend fun suspendBackground() = attachedOperation { runtime.suspendBackground() }
+
+    override suspend fun resumeBackground() = attachedOperation { runtime.resumeBackground() }
     override suspend fun resume() = attachedOperation { runtime.resume() }
     override suspend fun interrupt(): AgentRecoveryInfo = attachedOperation { runtime.interrupt() }
     override suspend fun inspectRecovery(): AgentRecoveryInfo =
@@ -1334,6 +1705,8 @@ private fun AgentEvent.sessionId(): AgentSessionId = when (this) {
     is AgentEvent.MessageEmitted -> sessionId
     is AgentEvent.ToolRequested -> sessionId
     is AgentEvent.ToolCompleted -> sessionId
+    is AgentEvent.ToolHandedOff -> sessionId
+    is AgentEvent.BackgroundExecutionSettled -> sessionId
     is AgentEvent.RetryScheduled -> sessionId
     is AgentEvent.CheckpointSaved -> checkpoint.sessionId
     is AgentEvent.Completed -> sessionId

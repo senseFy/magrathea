@@ -14,9 +14,16 @@ import saien.magrathea.core.AgentPersistence
 import saien.magrathea.core.AgentPersistenceRecord
 import saien.magrathea.core.AgentCheckpoint
 import saien.magrathea.core.AgentCheckpointCodec
+import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentSessionSnapshotCodec
+import saien.magrathea.core.BackgroundExecutionRecord
+import saien.magrathea.core.BackgroundExecutionRecordCodec
+import saien.magrathea.core.BackgroundExecutionStore
+import saien.magrathea.core.BackgroundOriginContext
+import saien.magrathea.core.BackgroundOriginContextCodec
+import saien.magrathea.core.BackgroundSessionRecords
 import saien.magrathea.core.StoredEnvelopeDecodeException
 import saien.magrathea.core.StoredEnvelopeDecodeFailure
 import saien.magrathea.core.StoredEnvelopeDecodeResult
@@ -32,6 +39,8 @@ internal fun <T> StoredEnvelopeDecodeResult<T>.toStoredRecord(): DecodedStoredRe
 enum class StoredRecordKind {
     SESSION,
     CHECKPOINT,
+    BACKGROUND_EXECUTION,
+    BACKGROUND_ORIGIN,
 }
 
 enum class StoredRecordCorruptionReason {
@@ -103,6 +112,8 @@ class MagratheaRoomStoreHandle internal constructor(
     json: Json = Json,
 ) {
     val persistence: AgentPersistence = RoomAgentPersistence(database, reporter, json)
+    val backgroundStore: BackgroundExecutionStore =
+        RoomBackgroundExecutionStore(database, reporter, json)
 
     private val closeMutex = Mutex()
     private var closed = false
@@ -131,7 +142,195 @@ internal fun buildMagratheaRoomDatabase(
     return builder
         .setDriver(BundledSQLiteDriver())
         .setQueryCoroutineContext(Dispatchers.Default)
+        .addMigrations(MAGRATHEA_ROOM_MIGRATION_1_2)
         .build()
+}
+
+/** Room-backed [BackgroundExecutionStore]; every write/deletes runs in its own transaction. */
+internal class RoomBackgroundExecutionStore(
+    private val database: MagratheaDatabase,
+    private val reporter: StoredRecordCorruptionReporter,
+    json: Json = Json,
+    private val recordCodec: BackgroundExecutionRecordCodec = BackgroundExecutionRecordCodec(json),
+    private val originCodec: BackgroundOriginContextCodec = BackgroundOriginContextCodec(json),
+    private val recordDecoder: (String) -> DecodedStoredRecord<BackgroundExecutionRecord> =
+        { payload -> recordCodec.decodeResult(payload).toStoredRecord() },
+    private val originDecoder: (String) -> DecodedStoredRecord<BackgroundOriginContext> =
+        { payload -> originCodec.decodeResult(payload).toStoredRecord() },
+) : BackgroundExecutionStore {
+    private val executionsDao = database.backgroundExecutionDao()
+    private val originsDao = database.backgroundOriginDao()
+
+    override suspend fun upsert(record: BackgroundExecutionRecord) {
+        val entity = AgentBackgroundExecutionEntity(
+            sessionId = record.sessionId.value,
+            executionId = record.executionId,
+            envelope = recordCodec.encode(record),
+            updatedAtEpochMs = record.settledAtEpochMs
+                ?: record.startedAtEpochMs
+                ?: record.queuedAtEpochMs,
+        )
+        database.useWriterConnection { connection ->
+            connection.immediateTransaction { executionsDao.upsert(entity) }
+        }
+    }
+
+    override suspend fun putOrigin(origin: BackgroundOriginContext) {
+        val entity = AgentBackgroundOriginEntity(
+            sessionId = origin.sessionId.value,
+            runId = origin.runId.value,
+            envelope = originCodec.encode(origin),
+        )
+        database.useWriterConnection { connection ->
+            connection.immediateTransaction { originsDao.upsert(entity) }
+        }
+    }
+
+    override suspend fun load(sessionId: AgentSessionId): BackgroundSessionRecords {
+        val corruptions = mutableListOf<StoredRecordCorruption>()
+        return try {
+            database.useReaderConnection { connection ->
+                connection.deferredTransaction {
+                    BackgroundSessionRecords(
+                        records = executionsDao.listBySession(sessionId.value)
+                            .mapNotNull { entity ->
+                                try {
+                                    decodeRecord(entity).value
+                                } catch (failure: StoredRecordCorruptionException) {
+                                    corruptions += failure.corruption
+                                    null
+                                }
+                            },
+                        origins = originsDao.listBySession(sessionId.value).mapNotNull { entity ->
+                            try {
+                                decodeOrigin(entity).value
+                            } catch (failure: StoredRecordCorruptionException) {
+                                corruptions += failure.corruption
+                                null
+                            }
+                        },
+                    )
+                }
+            }
+        } finally {
+            corruptions.forEach(::reportCorruption)
+        }
+    }
+
+    override suspend fun delete(sessionId: AgentSessionId, executionId: String) {
+        database.useWriterConnection { connection ->
+            connection.immediateTransaction {
+                executionsDao.deleteById(sessionId.value, executionId)
+            }
+        }
+    }
+
+    override suspend fun deleteOrigin(sessionId: AgentSessionId, runId: AgentRunId) {
+        database.useWriterConnection { connection ->
+            connection.immediateTransaction {
+                originsDao.deleteById(sessionId.value, runId.value)
+            }
+        }
+    }
+
+    override suspend fun deleteSession(sessionId: AgentSessionId) {
+        database.useWriterConnection { connection ->
+            connection.immediateTransaction {
+                originsDao.deleteBySession(sessionId.value)
+                executionsDao.deleteBySession(sessionId.value)
+            }
+        }
+    }
+
+    override suspend fun clear() {
+        database.useWriterConnection { connection ->
+            connection.immediateTransaction {
+                originsDao.deleteAll()
+                executionsDao.deleteAll()
+            }
+        }
+    }
+
+    private fun decodeRecord(
+        entity: AgentBackgroundExecutionEntity,
+    ): DecodedStoredRecord<BackgroundExecutionRecord> {
+        val decoded = try {
+            recordDecoder(entity.envelope)
+        } catch (failure: StoredEnvelopeDecodeException) {
+            throw decodeFailure(
+                StoredRecordKind.BACKGROUND_EXECUTION,
+                entity.sessionId,
+                failure,
+            )
+        }
+        if (
+            decoded.value.sessionId.value != entity.sessionId ||
+            decoded.value.executionId != entity.executionId
+        ) {
+            throw corruption(
+                StoredRecordKind.BACKGROUND_EXECUTION,
+                entity.sessionId,
+                StoredRecordCorruptionReason.INDEX_MISMATCH,
+            )
+        }
+        return decoded
+    }
+
+    private fun decodeOrigin(
+        entity: AgentBackgroundOriginEntity,
+    ): DecodedStoredRecord<BackgroundOriginContext> {
+        val decoded = try {
+            originDecoder(entity.envelope)
+        } catch (failure: StoredEnvelopeDecodeException) {
+            throw decodeFailure(StoredRecordKind.BACKGROUND_ORIGIN, entity.sessionId, failure)
+        }
+        if (
+            decoded.value.sessionId.value != entity.sessionId ||
+            decoded.value.runId.value != entity.runId
+        ) {
+            throw corruption(
+                StoredRecordKind.BACKGROUND_ORIGIN,
+                entity.sessionId,
+                StoredRecordCorruptionReason.INDEX_MISMATCH,
+            )
+        }
+        return decoded
+    }
+
+    private fun decodeFailure(
+        kind: StoredRecordKind,
+        sessionId: String,
+        failure: StoredEnvelopeDecodeException,
+    ): IllegalStateException = if (failure.failure == StoredEnvelopeDecodeFailure.CORRUPT) {
+        corruption(kind, sessionId, StoredRecordCorruptionReason.INVALID_PAYLOAD)
+    } else {
+        StoredRecordSchemaException(
+            StoredRecordSchemaIssue(
+                kind = kind,
+                sessionId = sessionId.takeIf(String::isSafeRecordIdentifier),
+                failure = failure.failure,
+                storedSchemaVersion = requireNotNull(failure.storedSchemaVersion),
+                currentSchemaVersion = failure.currentSchemaVersion,
+            ),
+        )
+    }
+
+    private fun corruption(
+        kind: StoredRecordKind,
+        sessionId: String,
+        reason: StoredRecordCorruptionReason,
+    ): StoredRecordCorruptionException = StoredRecordCorruptionException(
+        StoredRecordCorruption(kind, sessionId, reason),
+    )
+
+    /** Never invoke a host callback while a Room connection or transaction is held. */
+    private fun reportCorruption(corruption: StoredRecordCorruption) {
+        try {
+            reporter.report(corruption)
+        } catch (_: Throwable) {
+            // Diagnostics must not replace the stable storage failure.
+        }
+    }
 }
 
 internal class RoomAgentPersistence(

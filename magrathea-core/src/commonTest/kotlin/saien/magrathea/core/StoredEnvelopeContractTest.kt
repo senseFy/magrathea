@@ -33,7 +33,7 @@ class StoredEnvelopeContractTest {
         val encoded = sessionCodec.encode(expected)
         val envelope = json.parseToJsonElement(encoded).jsonObject
 
-        assertEquals(STORAGE_SCHEMA_V8_VERSION, CURRENT_STORAGE_SCHEMA_VERSION)
+        assertEquals(STORAGE_SCHEMA_V9_VERSION, CURRENT_STORAGE_SCHEMA_VERSION)
         assertEquals(CURRENT_STORAGE_SCHEMA_VERSION, envelope.getValue("schemaVersion").jsonPrimitive.content.toInt())
         assertEquals("test-sdk", envelope.getValue("sdkVersion").jsonPrimitive.content)
         assertEquals(expected, sessionCodec.decode(encoded))
@@ -116,7 +116,7 @@ class StoredEnvelopeContractTest {
     @Test
     fun schemaV7MigrationRejectsAPrematureSchemaV8TargetField() {
         val mislabeled = sessionCodec.encode(snapshot())
-            .replaceFirst("\"schemaVersion\":8", "\"schemaVersion\":7")
+            .replaceFirst("\"schemaVersion\":$CURRENT_STORAGE_SCHEMA_VERSION", "\"schemaVersion\":7")
 
         val failure = assertFailsWith<StoredEnvelopeDecodeException> {
             sessionCodec.decode(mislabeled)
@@ -166,9 +166,88 @@ class StoredEnvelopeContractTest {
     }
 
     @Test
+    fun schemaV8MigrationDefaultsBackgroundToolFields() {
+        val original = backgroundToolSnapshot()
+        val v8 = sessionCodec.encode(original).downgradedToSchema8()
+
+        val migrated = sessionCodec.decodeResult(v8)
+
+        assertEquals(8, migrated.sourceSchemaVersion)
+        val expected = original.copy(
+            request = original.request.copy(activation = null).copy(
+                engine = original.request.engine.copy(
+                    runtime = original.request.engine.runtime.copy(background = null),
+                ),
+                messages = original.request.messages.map { it.withoutBackgroundReceipt() },
+            ),
+            state = original.state.copy(
+                messages = original.state.messages.map { it.withoutBackgroundReceipt() },
+            ).copy(foregroundToolWaitMillis = 0, explicitWaitMillis = 0),
+        )
+        assertEquals(expected, migrated.value)
+        val rewrite = requireNotNull(migrated.rewritePayload)
+        assertTrue(rewrite.contains("\"backgroundReceipt\":null"))
+        assertTrue(rewrite.contains("\"activation\":null"))
+        assertTrue(rewrite.contains("\"foregroundToolWaitMillis\":0"))
+    }
+
+    @Test
+    fun schemaV8MigrationRejectsAPrematureSchemaV9TargetField() {
+        val mislabeled = sessionCodec.encode(snapshot())
+            .replaceFirst("\"schemaVersion\":$CURRENT_STORAGE_SCHEMA_VERSION", "\"schemaVersion\":8")
+
+        val failure = assertFailsWith<StoredEnvelopeDecodeException> {
+            sessionCodec.decode(mislabeled)
+        }
+
+        assertEquals(StoredEnvelopeDecodeFailure.MIGRATION_FAILED, failure.failure)
+        assertEquals(8, failure.storedSchemaVersion)
+    }
+
+    @Test
+    fun schemaV8CheckpointMigrationDefaultsJournalReceiptMarkersAndWaitCounters() {
+        val snapshot = snapshot()
+        val result = ToolExecutionResult(
+            toolCallId = "call-contract",
+            toolName = "lookup",
+            result = JsonPrimitive("found"),
+            backgroundReceipt = ToolBackgroundReceipt(
+                handle = "bg_contract1",
+                executionId = "execution-contract",
+                state = BackgroundExecutionState.RUNNING,
+            ),
+        )
+        val checkpoint = checkpoint(snapshot, turn = 2).copy(
+            state = snapshot.state.copy(
+                turn = 2,
+                foregroundToolWaitMillis = 500,
+                explicitWaitMillis = 100,
+            ),
+            toolExecutions = listOf(
+                ToolExecutionRecord(
+                    executionId = "execution-contract",
+                    toolCallId = "call-contract",
+                    toolName = "lookup",
+                    callOrdinal = 1,
+                    state = ToolExecutionState.COMPLETED,
+                    result = result,
+                ),
+            ),
+        )
+        val v8 = checkpointCodec.encode(checkpoint).downgradedToSchema8()
+
+        val migrated = checkpointCodec.decodeResult(v8)
+
+        assertEquals(8, migrated.sourceSchemaVersion)
+        assertEquals(null, migrated.value.toolExecutions.single().result?.backgroundReceipt)
+        assertEquals(0L, migrated.value.state.foregroundToolWaitMillis)
+        assertEquals(0L, migrated.value.state.explicitWaitMillis)
+    }
+
+    @Test
     fun schemaV6MigrationRejectsAPrematureSchemaV7TargetField() {
         val mislabeled = sessionCodec.encode(snapshot())
-            .replaceFirst("\"schemaVersion\":8", "\"schemaVersion\":6")
+            .replaceFirst("\"schemaVersion\":$CURRENT_STORAGE_SCHEMA_VERSION", "\"schemaVersion\":6")
 
         val failure = assertFailsWith<StoredEnvelopeDecodeException> {
             sessionCodec.decode(mislabeled)
@@ -629,6 +708,74 @@ class StoredEnvelopeContractTest {
         parts = parts.map { part -> if (part is ToolResultPart) part.copy(contextHints = null) else part },
     )
 
+    private fun AgentMessage.withoutBackgroundReceipt(): AgentMessage = copy(
+        parts = parts.map { part -> if (part is ToolResultPart) part.copy(backgroundReceipt = null) else part },
+    )
+
+    private fun backgroundToolSnapshot(): AgentSessionSnapshot {
+        val base = snapshot()
+        val call = AgentMessage(
+            id = "assistant-contract",
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                ToolCallPart(
+                    toolCallId = "call-contract",
+                    toolName = "lookup",
+                    arguments = JsonObject(mapOf("query" to JsonPrimitive("kmp"))),
+                ),
+            ),
+            createdAtEpochMs = 3L,
+        )
+        val receipt = ToolBackgroundReceipt(
+            handle = "bg_contract1",
+            executionId = "execution-contract",
+            state = BackgroundExecutionState.QUEUED,
+        )
+        val result = AgentMessage(
+            id = "tool-contract",
+            role = MessageRole.TOOL,
+            parts = listOf(
+                ToolResultPart(
+                    toolCallId = "call-contract",
+                    toolName = "lookup",
+                    result = JsonPrimitive("found"),
+                    backgroundReceipt = receipt,
+                ),
+            ),
+            createdAtEpochMs = 4L,
+        )
+        val messages = base.state.messages + call + result
+        return base.copy(
+            request = base.request.copy(
+                messages = messages,
+                activation = RunActivation(
+                    source = RunActivationSource.USER_INPUT,
+                ),
+            ),
+            state = base.state.copy(
+                messages = messages,
+            ).copy(
+                foregroundToolWaitMillis = 1_000,
+                explicitWaitMillis = 250,
+            ),
+        ).let { snapshot ->
+            snapshot.copy(
+                request = snapshot.request.copy(
+                    engine = snapshot.request.engine.copy(
+                        runtime = snapshot.request.engine.runtime.copy(
+                            background = BackgroundExecutionConfig(
+                                handoffWaitMillis = 5_000,
+                                explicitWaitAllowanceMillis = 10_000,
+                                maxAutomaticActivationsPerSource = 2,
+                                maxQueuedLifetimeMillis = 60_000,
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        }
+    }
+
     private fun snapshot(
         requestSessionId: AgentSessionId = AgentSessionId("session-contract"),
         contextManagement: ContextManagementConfig = ContextManagementConfig(),
@@ -672,25 +819,61 @@ private val MIGRATED_CONTEXT_MANAGEMENT = ContextManagementConfig(
     estimationUnit = ContextEstimationUnit.UTF16_CHARS,
 )
 
-/** Rebuilds the schema-7 shape of a current envelope by removing every schema-8 field. */
-private fun String.downgradedToSchema7(): String {
+/** Rebuilds the schema-8 shape of a current envelope by removing every schema-9 field. */
+private fun String.downgradedToSchema8(): String {
     val envelope = Json.parseToJsonElement(this).jsonObject
-    require(envelope.getValue("schemaVersion").jsonPrimitive.content == "8")
+    require(envelope.getValue("schemaVersion").jsonPrimitive.content == "9")
     val payload = envelope.getValue("payload").jsonObject
         .mapIfPresent("request") { request ->
             request.jsonObject
-                .mapIfPresent("messages") { it.withoutToolResultHints() }
+                .without("activation")
+                .mapIfPresent("messages") { it.withoutReceiptMarkers() }
                 .mapIfPresent("engine") { engine ->
                     engine.jsonObject.mapIfPresent("runtime") { runtime ->
-                        runtime.jsonObject.mapIfPresent("contextManagement") {
-                            it.jsonObject.without("toolResults", "estimationUnit")
-                        }
+                        runtime.jsonObject.without("background")
                     }
                 }
         }
         .mapIfPresent("state") { state ->
             state.jsonObject
-                .mapIfPresent("messages") { it.withoutToolResultHints() }
+                .without("foregroundToolWaitMillis", "explicitWaitMillis")
+                .mapIfPresent("messages") { it.withoutReceiptMarkers() }
+        }
+        .mapIfPresent("toolExecutions") { records ->
+            JsonArray(
+                records.jsonArray.map { record ->
+                    record.jsonObject.mapIfPresent("result") { result ->
+                        (result as? JsonObject)?.without("backgroundReceipt") ?: result
+                    }
+                },
+            )
+        }
+    return JsonObject(envelope + mapOf("schemaVersion" to JsonPrimitive(8), "payload" to payload)).toString()
+}
+
+/** Rebuilds the schema-7 shape of a current envelope by removing every schema-8 and schema-9 field. */
+private fun String.downgradedToSchema7(): String {
+    val envelope = Json.parseToJsonElement(this).jsonObject
+    require(envelope.getValue("schemaVersion").jsonPrimitive.content == "9")
+    val payload = envelope.getValue("payload").jsonObject
+        .mapIfPresent("request") { request ->
+            request.jsonObject
+                .without("activation")
+                .mapIfPresent("messages") { it.withoutNewerResultFields() }
+                .mapIfPresent("engine") { engine ->
+                    engine.jsonObject.mapIfPresent("runtime") { runtime ->
+                        runtime.jsonObject
+                            .without("background")
+                            .mapIfPresent("contextManagement") {
+                                it.jsonObject.without("toolResults", "estimationUnit")
+                            }
+                    }
+                }
+        }
+        .mapIfPresent("state") { state ->
+            state.jsonObject
+                .without("foregroundToolWaitMillis", "explicitWaitMillis")
+                .mapIfPresent("messages") { it.withoutNewerResultFields() }
                 .mapIfPresent("contextManagement") { contextManagement ->
                     contextManagement.jsonObject
                         .without("toolResultClearing")
@@ -704,7 +887,7 @@ private fun String.downgradedToSchema7(): String {
             JsonArray(
                 records.jsonArray.map { record ->
                     record.jsonObject.mapIfPresent("result") { result ->
-                        (result as? JsonObject)?.without("contextHints") ?: result
+                        (result as? JsonObject)?.without("contextHints", "backgroundReceipt") ?: result
                     }
                 },
             )
@@ -716,13 +899,34 @@ private fun String.downgradedToSchema6(): String =
     replaceFirst("\"schemaVersion\":7", "\"schemaVersion\":6")
         .replace(",\"maxOutputTokens\":null", "")
 
-private fun JsonElement.withoutToolResultHints(): JsonElement = JsonArray(
+private fun JsonElement.withoutNewerResultFields(): JsonElement = JsonArray(
     jsonArray.map { message ->
         message.jsonObject.mapIfPresent("parts") { parts ->
             JsonArray(
                 parts.jsonArray.map { part ->
                     val value = part.jsonObject
-                    if (value["type"]?.jsonPrimitive?.content == "tool_result") value.without("contextHints") else value
+                    if (value["type"]?.jsonPrimitive?.content == "tool_result") {
+                        value.without("contextHints", "backgroundReceipt")
+                    } else {
+                        value
+                    }
+                },
+            )
+        }
+    },
+)
+
+private fun JsonElement.withoutReceiptMarkers(): JsonElement = JsonArray(
+    jsonArray.map { message ->
+        message.jsonObject.mapIfPresent("parts") { parts ->
+            JsonArray(
+                parts.jsonArray.map { part ->
+                    val value = part.jsonObject
+                    if (value["type"]?.jsonPrimitive?.content == "tool_result") {
+                        value.without("backgroundReceipt")
+                    } else {
+                        value
+                    }
                 },
             )
         }

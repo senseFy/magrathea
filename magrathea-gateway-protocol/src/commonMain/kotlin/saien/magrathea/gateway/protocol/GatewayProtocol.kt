@@ -16,6 +16,7 @@ import saien.magrathea.core.JsonPart
 import saien.magrathea.core.MessagePart
 import saien.magrathea.core.ReasoningPart
 import saien.magrathea.core.ReasoningPreference
+import saien.magrathea.core.RuntimeNoticePart
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolCallPart
@@ -616,6 +617,7 @@ private fun MessagePart.textWeight(): Long = when (this) {
                 }
             }
     }
+    is RuntimeNoticePart -> text.length.toLong()
     else -> 0L
 }
 
@@ -671,6 +673,9 @@ private fun MessagePart.validateWireFields(limits: GatewayProtocolLimits) {
             }
         }
         is AttachmentPart -> protocolCheck(MEDIA_TYPE.matches(mimeType)) { "attachment mediaType is invalid" }
+        is RuntimeNoticePart -> protocolCheck(text.length <= limits.maxRequestTextChars) {
+            "Runtime notice text exceeds configured limit"
+        }
     }
 }
 

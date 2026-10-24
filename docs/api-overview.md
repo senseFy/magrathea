@@ -69,6 +69,17 @@ Capability contracts:
 - [Web Search](web-search.md)
 - [Image Search](image-search.md)
 - [X Search](x-search.md)
+- [Background Tools](background-tools.md)
+
+Session-owned background execution (ADR-019) adds `BackgroundExecutionConfig` on
+`RuntimeConfig.background`, `ToolBackgroundPolicy`/`ToolRecoveryPolicy` on `ToolExecutor`,
+a `BackgroundToolExecutor` (backed by a `BackgroundExecutionStore`) shared by
+`DefaultAgentRunner` and `DefaultAgentSessionManager`, `BackgroundSessionSnapshot` on the lease
+snapshot, the lease's
+`startContinuation`/`stopAll`/`cancelBackground`/`suspendBackground`/`resumeBackground` commands,
+and the `ToolHandedOff`/`BackgroundExecutionSettled` events. Chatbot facades expose the same
+projection through `ChatbotSnapshot.background` and
+`ChatbotSession.continueWithBackgroundResults()`/`stopAll()`/`cancelBackground(...)`.
 
 ## MCP
 

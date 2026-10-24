@@ -131,6 +131,13 @@ The built-in Web Search, Image Search, and X Search tools default to `REPLAY_SAF
 their durable completed results after interruption instead of executing the same search again.
 Other tools default to `FAIL_CLOSED`.
 
+Session-owned background executions (see [Background Tools](background-tools.md)) recover on their
+own path: a QUEUED or RUNNING record found without a live job is treated as host loss —
+`REPLAY_SAFE` records return to QUEUED and `FAIL_CLOSED` records settle as interrupted. Nothing
+executes until the host calls `AgentSessionLease.resumeBackground()`; resumption re-admits queued
+work and deduplicates by `executionId`, so a call that was persisted as STARTED but never returned
+a receipt is not executed twice.
+
 ## Persistence
 
 `DefaultAgentRunner` and its `DefaultAgentSessionManager` must use the same `AgentPersistence`.

@@ -241,6 +241,47 @@ class DefaultReplayPolicyTest {
         assertTrue((unfinished.parts.last() as ToolCallPart).partial)
     }
 
+    @Test
+    fun `runtime notice after an unanswered tool call flushes the orphan like a user message`() = runBlocking {
+        val policy = DefaultReplayPolicy()
+        val assistant = assistantMessage(
+            provider = "openai",
+            model = "gpt-5",
+            parts = listOf(ToolCallPart("call-1", "search", JsonPrimitive("{}"))),
+        )
+        val runtime = AgentMessage(
+            role = MessageRole.RUNTIME,
+            parts = listOf(
+                saien.magrathea.core.RuntimeNoticePart(
+                    entries = listOf(
+                        saien.magrathea.core.RuntimeNoticeEntry(
+                            handle = "bg_1",
+                            toolName = "search",
+                            callId = "call-2",
+                            outcome = saien.magrathea.core.BackgroundOutcome.SUCCEEDED,
+                            resultVersion = 0,
+                        ),
+                    ),
+                    delivery = saien.magrathea.core.RuntimeNoticeDelivery.COALESCED,
+                    text = "<runtime_notice>\nA background result is available.\n</runtime_notice>",
+                ),
+            ),
+        )
+        val user = AgentMessage(role = MessageRole.USER, parts = listOf(TextPart("next")))
+
+        val withRuntime = policy.transform(listOf(assistant, runtime), model)
+        val withUser = policy.transform(listOf(assistant, user), model)
+
+        assertEquals(withUser.size, withRuntime.size)
+        assertEquals(withUser[0], withRuntime[0])
+        // The flushed orphan is identical except for its generated message id.
+        assertEquals(withUser[1].role, withRuntime[1].role)
+        assertEquals(withUser[1].parts, withRuntime[1].parts)
+        assertTrue(withRuntime[1].parts.single() is ToolResultPart)
+        assertTrue((withRuntime[1].parts.single() as ToolResultPart).isError)
+        assertEquals(runtime, withRuntime[2])
+    }
+
     private fun assistantMessage(provider: String, model: String, parts: List<MessagePart>): AgentMessage {
         return AgentMessage(
             role = MessageRole.ASSISTANT,

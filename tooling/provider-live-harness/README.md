@@ -13,14 +13,14 @@ MAGRATHEA_GEMINI_API_KEY=... \
   ./gradlew :provider-live-harness:run --args="provider=gemini scenario=chat streaming=true model=gemini-2.5-flash"
 ```
 
-Supported scenarios are `chat`, `file`, `mixed-tools`, `resume`, and `x-search`. `prompt=...`
-overrides the short default prompt. The process fails on Provider failure, cancellation, missing
-terminal completion, or an invalid scenario, and it closes Provider transports and temporary Room
-resources before exiting. Paid runs default to `maxTokens=128` for `chat`, `maxTokens=256` for
-client-managed tool scenarios, `maxTokens=8192` for the reasoning-heavy `x-search` scenario, and
-`maxProviderRetries=0`. These can be set explicitly or through `MAGRATHEA_MAX_TOKENS` and
-`MAGRATHEA_MAX_PROVIDER_RETRIES`. Terminal output reports only aggregate input, output, and
-reasoning-token usage.
+Supported scenarios are `chat`, `file`, `mixed-tools`, `resume`, `x-search`, and
+`background-pull`. `prompt=...` overrides the short default prompt. The process fails on Provider
+failure, cancellation, missing terminal completion, or an invalid scenario, and it closes Provider
+transports and temporary Room resources before exiting. Paid runs default to `maxTokens=128` for
+`chat`, `maxTokens=256` for client-managed tool scenarios, `maxTokens=2048` for `background-pull`,
+`maxTokens=8192` for the reasoning-heavy `x-search` scenario, and `maxProviderRetries=0`. These
+can be set explicitly or through `MAGRATHEA_MAX_TOKENS` and `MAGRATHEA_MAX_PROVIDER_RETRIES`.
+Terminal output reports only aggregate input, output, and reasoning-token usage.
 
 `file` sends one explicitly selected PDF, CSV, JSON, or plain-text file through the Provider's
 canonical attachment request mapping. It requires an absolute `file=/path/to/document.pdf` argument
@@ -60,6 +60,19 @@ The corresponding environment settings are `MAGRATHEA_ENDPOINT` and
 `MAGRATHEA_AUTHENTICATION`. An authentication override requires an explicit HTTPS endpoint. The
 configured service must implement the exact selected Responses, Chat Completions, or Messages
 contract, including its streaming and Tool behavior.
+
+`background-pull` validates the ADR-019 receipt, Runtime notice, and read protocol across two Runs:
+a Tool returns a pending receipt, the model answers, and a later notice asks it to read the stored
+result. `variant=continuation` sends the notice alone, `coalesced` sends it after a new user
+message, and `tool-loop` delivers it at the next turn of a Tool loop. `reasoning=low|medium|high`
+requests a reasoning effort. The scenario reports only counts and booleans and exits with a failure
+when a check fails:
+
+```bash
+MAGRATHEA_OPENROUTER_API_KEY=... \
+  ./gradlew :provider-live-harness:run \
+  --args="provider=openrouter scenario=background-pull variant=coalesced model=openai/gpt-4o-mini"
+```
 
 Harness output contains only status, counts, lengths, and metadata keys. It does not print API
 keys, prompts, model output, reasoning content, tool payloads, or Provider signatures.

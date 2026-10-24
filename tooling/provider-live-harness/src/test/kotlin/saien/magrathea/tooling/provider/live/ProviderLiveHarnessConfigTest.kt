@@ -41,6 +41,29 @@ class ProviderLiveHarnessConfigTest {
     }
 
     @Test
+    fun backgroundPullScenarioParsesVariantAndReasoning() {
+        val defaults = ProviderLiveHarnessConfig.from(arrayOf("scenario=background-pull"), emptyMap())
+        assertEquals("continuation", defaults.variant)
+        assertNull(defaults.reasoning)
+        assertEquals(2_048, defaults.maxTokens)
+
+        val config = ProviderLiveHarnessConfig.from(
+            arrayOf("scenario=background-pull", "variant=tool-loop", "reasoning=high"),
+            emptyMap(),
+        )
+        assertEquals("tool-loop", config.variant)
+        assertEquals(saien.magrathea.core.ReasoningEffort.HIGH, config.reasoning)
+        assertTrue(config.toString().contains("variant=tool-loop"))
+
+        assertThrows(IllegalArgumentException::class.java) {
+            ProviderLiveHarnessConfig.from(arrayOf("scenario=background-pull", "variant=unknown"), emptyMap())
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ProviderLiveHarnessConfig.from(arrayOf("scenario=background-pull", "reasoning=extreme"), emptyMap())
+        }
+    }
+
+    @Test
     fun rejectsUnknownProviderKey() {
         assertThrows(IllegalArgumentException::class.java) {
             ProviderLiveHarnessConfig.from(arrayOf("provider=unknown"), emptyMap())

@@ -366,6 +366,10 @@ interface ToolExecutor {
     fun executionPermit(request: ToolExecutionRequest): ToolExecutionPermit =
         UnlimitedToolExecutionPermit
 
+    /** Whether this Tool may continue as Session-owned background work after a Run-local handoff. */
+    val backgroundPolicy: ToolBackgroundPolicy
+        get() = ToolBackgroundPolicy.BLOCKING
+
     suspend fun execute(request: ToolExecutionRequest): ToolExecutionResult
 }
 
@@ -398,7 +402,7 @@ data class AgentSessionSnapshot(
     }
 }
 
-const val CURRENT_STORAGE_SCHEMA_VERSION: Int = 8
+const val CURRENT_STORAGE_SCHEMA_VERSION: Int = 9
 
 /** The first schema covered by the SDK-owned migration chain; older schemas are a clean break. */
 const val MINIMUM_READABLE_STORAGE_SCHEMA_VERSION: Int = 6
@@ -416,6 +420,11 @@ private val storageSchemaEvolution = StorageSchemaEvolution(
             id = "agent-storage-v7-to-v8-tool-result-context",
             fromVersion = 7,
             migration = StorageSchemaV7ToV8Migration,
+        ),
+        RegisteredStorageSchemaMigration(
+            id = "agent-storage-v8-to-v9-background-tools",
+            fromVersion = 8,
+            migration = StorageSchemaV8ToV9Migration,
         ),
     ),
 )
@@ -466,7 +475,7 @@ class AgentSessionSnapshotCodec(
 
     fun encode(snapshot: AgentSessionSnapshot): String {
         validateSessionIdentity(snapshot)
-        return StorageSchemaV8Adapter.encodeSession(json, sdkVersion, snapshot)
+        return StorageSchemaV9Adapter.encodeSession(json, sdkVersion, snapshot)
     }
 
     fun decode(payload: String): AgentSessionSnapshot {
@@ -477,7 +486,7 @@ class AgentSessionSnapshotCodec(
     fun decodeResult(payload: String): StoredEnvelopeDecodeResult<AgentSessionSnapshot> {
         val evolved = storageSchemaEvolution.evolve(payload, json)
         return evolved.decodeCurrentResult {
-            val envelope = StorageSchemaV8Adapter.decodeSession(json, evolved.document)
+            val envelope = StorageSchemaV9Adapter.decodeSession(json, evolved.document)
             validateEnvelope(envelope.schemaVersion, envelope.sdkVersion)
             validateSessionIdentity(envelope.payload)
             validateCanonicalEnvelope(
@@ -501,7 +510,7 @@ class AgentCheckpointCodec(
 
     fun encode(checkpoint: AgentCheckpoint): String {
         validateCheckpointIdentity(checkpoint)
-        return StorageSchemaV8Adapter.encodeCheckpoint(json, sdkVersion, checkpoint)
+        return StorageSchemaV9Adapter.encodeCheckpoint(json, sdkVersion, checkpoint)
     }
 
     fun decode(payload: String): AgentCheckpoint {
@@ -512,9 +521,81 @@ class AgentCheckpointCodec(
     fun decodeResult(payload: String): StoredEnvelopeDecodeResult<AgentCheckpoint> {
         val evolved = storageSchemaEvolution.evolve(payload, json)
         return evolved.decodeCurrentResult {
-            val envelope = StorageSchemaV8Adapter.decodeCheckpoint(json, evolved.document)
+            val envelope = StorageSchemaV9Adapter.decodeCheckpoint(json, evolved.document)
             validateEnvelope(envelope.schemaVersion, envelope.sdkVersion)
             validateCheckpointIdentity(envelope.payload)
+            validateCanonicalEnvelope(
+                encoded = evolved.document,
+                canonical = envelope.canonicalDocument,
+            )
+            ValidatedCurrentStoredEnvelope(envelope.payload, envelope.canonicalPayload)
+        }
+    }
+}
+
+/** Durable codec for one Session-owned background execution record (ADR-019). */
+class BackgroundExecutionRecordCodec(
+    json: Json = Json,
+    private val sdkVersion: String = MAGRATHEA_CORE_SDK_VERSION,
+) {
+    private val json = fixedStorageJson(json)
+
+    init {
+        require(sdkVersion.isNotBlank()) { "sdkVersion must not be blank" }
+    }
+
+    fun encode(record: BackgroundExecutionRecord): String {
+        validateBackgroundExecutionIdentity(record)
+        return StorageSchemaV9Adapter.encodeBackgroundExecution(json, sdkVersion, record)
+    }
+
+    fun decode(payload: String): BackgroundExecutionRecord {
+        return decodeResult(payload).value
+    }
+
+    /** Decodes completely and reports a canonical payload when an adjacent migration was applied. */
+    fun decodeResult(payload: String): StoredEnvelopeDecodeResult<BackgroundExecutionRecord> {
+        val evolved = storageSchemaEvolution.evolve(payload, json)
+        return evolved.decodeCurrentResult {
+            val envelope = StorageSchemaV9Adapter.decodeBackgroundExecution(json, evolved.document)
+            validateEnvelope(envelope.schemaVersion, envelope.sdkVersion)
+            validateBackgroundExecutionIdentity(envelope.payload)
+            validateCanonicalEnvelope(
+                encoded = evolved.document,
+                canonical = envelope.canonicalDocument,
+            )
+            ValidatedCurrentStoredEnvelope(envelope.payload, envelope.canonicalPayload)
+        }
+    }
+}
+
+/** Durable codec for the originating request context of a handed-off Run (ADR-019). */
+class BackgroundOriginContextCodec(
+    json: Json = Json,
+    private val sdkVersion: String = MAGRATHEA_CORE_SDK_VERSION,
+) {
+    private val json = fixedStorageJson(json)
+
+    init {
+        require(sdkVersion.isNotBlank()) { "sdkVersion must not be blank" }
+    }
+
+    fun encode(origin: BackgroundOriginContext): String {
+        validateBackgroundOriginIdentity(origin)
+        return StorageSchemaV9Adapter.encodeBackgroundOrigin(json, sdkVersion, origin)
+    }
+
+    fun decode(payload: String): BackgroundOriginContext {
+        return decodeResult(payload).value
+    }
+
+    /** Decodes completely and reports a canonical payload when an adjacent migration was applied. */
+    fun decodeResult(payload: String): StoredEnvelopeDecodeResult<BackgroundOriginContext> {
+        val evolved = storageSchemaEvolution.evolve(payload, json)
+        return evolved.decodeCurrentResult {
+            val envelope = StorageSchemaV9Adapter.decodeBackgroundOrigin(json, evolved.document)
+            validateEnvelope(envelope.schemaVersion, envelope.sdkVersion)
+            validateBackgroundOriginIdentity(envelope.payload)
             validateCanonicalEnvelope(
                 encoded = evolved.document,
                 canonical = envelope.canonicalDocument,
@@ -568,6 +649,33 @@ private fun validateCheckpointIdentity(checkpoint: AgentCheckpoint) {
     }
     if (checkpoint.turn < 0 || checkpoint.state.turn != checkpoint.turn) {
         throw SerializationException("Stored checkpoint turn does not match state.turn")
+    }
+}
+
+private fun validateBackgroundExecutionIdentity(record: BackgroundExecutionRecord) {
+    if (record.sessionId.value.isBlank()) {
+        throw SerializationException("Stored background sessionId must not be blank")
+    }
+    if (record.executionId.isBlank()) {
+        throw SerializationException("Stored background executionId must not be blank")
+    }
+    if (record.handle.isBlank()) {
+        throw SerializationException("Stored background handle must not be blank")
+    }
+    if (record.originRunId.value.isBlank()) {
+        throw SerializationException("Stored background originRunId must not be blank")
+    }
+    if (record.originCallId.isBlank()) {
+        throw SerializationException("Stored background originCallId must not be blank")
+    }
+}
+
+private fun validateBackgroundOriginIdentity(origin: BackgroundOriginContext) {
+    if (origin.sessionId.value.isBlank()) {
+        throw SerializationException("Stored background origin sessionId must not be blank")
+    }
+    if (origin.runId.value.isBlank()) {
+        throw SerializationException("Stored background origin runId must not be blank")
     }
 }
 
@@ -632,6 +740,26 @@ sealed interface AgentEvent {
     @Serializable
     @SerialName("tool_completed")
     data class ToolCompleted(val sessionId: AgentSessionId, val result: ToolExecutionResult) : AgentEvent
+
+    /** A finalized Tool call received a receipt and continues as Session-owned background work. */
+    @Serializable
+    @SerialName("tool_handed_off")
+    data class ToolHandedOff(
+        val sessionId: AgentSessionId,
+        val toolCallId: String,
+        val toolName: String,
+        val receipt: ToolBackgroundReceipt,
+    ) : AgentEvent
+
+    /** A Session-owned background execution reached a terminal outcome. */
+    @Serializable
+    @SerialName("background_execution_settled")
+    data class BackgroundExecutionSettled(
+        val sessionId: AgentSessionId,
+        val executionId: String,
+        val handle: String,
+        val outcome: BackgroundOutcome,
+    ) : AgentEvent
 
     @Serializable
     @SerialName("retry_scheduled")

@@ -24,6 +24,7 @@ import saien.magrathea.core.ModelDescriptor
 import saien.magrathea.core.ProviderConfig
 import saien.magrathea.core.ProviderCredential
 import saien.magrathea.core.ReasoningCapabilities
+import saien.magrathea.core.ReasoningEffort
 import saien.magrathea.core.RuntimeConfig
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolDefinition
@@ -105,6 +106,7 @@ fun main(args: Array<String>) = runBlocking {
             "mixed-tools" -> runScenario(runner, scenarioRequest(config, providerKey, mixedToolsPrompt(config), toolDefinitions(tools)))
             "resume" -> runResumeScenario(runner, persistence, config, providerKey, tools)
             "x-search" -> runScenario(runner, scenarioRequest(config, providerKey, xSearchPrompt(config)))
+            "background-pull" -> runBackgroundPullScenario(config, providerKey, providerRegistry, credentialProvider)
             else -> error("Unknown scenario: ${config.scenario}")
         }
     } finally {
@@ -308,7 +310,7 @@ private fun ProviderLiveHarnessConfig.createProviderAdapter() = when (provider) 
     else -> error("Unknown provider key: $provider")
 }
 
-private fun providerOptions(config: ProviderLiveHarnessConfig) = when (config.provider) {
+internal fun providerOptions(config: ProviderLiveHarnessConfig) = when (config.provider) {
     "gemini" -> GeminiTransportConfig(thinkingSummaries = "auto").toProviderOptions()
     "openai", "openrouter", "xai" -> OpenAiTransportConfig(
         protocol = requireNotNull(config.openAiProtocol).wireProtocol,
@@ -371,6 +373,12 @@ internal fun formatProviderLiveEvent(event: AgentEvent): List<String> = when (ev
     )
     is AgentEvent.ToolCompleted -> listOf(
         "[event] tool-complete name=${event.result.toolName} error=${event.result.isError} resultChars=${event.result.result.toString().length}",
+    )
+    is AgentEvent.ToolHandedOff -> listOf(
+        "[event] tool-handed-off call=${event.toolCallId} name=${event.toolName} handle=${event.receipt.handle} state=${event.receipt.state.name}",
+    )
+    is AgentEvent.BackgroundExecutionSettled -> listOf(
+        "[event] background-settled execution=${event.executionId} handle=${event.handle} outcome=${event.outcome.name}",
     )
     is AgentEvent.RetryScheduled -> listOf("[event] retry attempt=${event.attempt} code=${event.code.name}")
     is AgentEvent.CheckpointSaved -> listOf(
@@ -436,6 +444,8 @@ data class ProviderLiveHarnessConfig(
     val openAiProtocol: ProviderLiveOpenAiProtocol?,
     val filePath: String?,
     val env: Map<String, String>,
+    val variant: String = VARIANT_CONTINUATION,
+    val reasoning: ReasoningEffort? = null,
 ) {
     fun apiKeyFor(provider: String): String? =
         HARNESS_PROVIDER_SPECS[provider.lowercase()]?.let { spec -> env[spec.environmentVariable] }
@@ -445,7 +455,7 @@ data class ProviderLiveHarnessConfig(
             "streaming=$streaming, promptConfigured=${prompt != null}, endpointConfigured=${endpoint != null}, " +
             "fileConfigured=${filePath != null}, " +
             "maxTokens=$maxTokens, maxProviderRetries=$maxProviderRetries, authentication=$authentication, " +
-            "openAiProtocol=$openAiProtocol, " +
+            "openAiProtocol=$openAiProtocol, variant=$variant, reasoning=$reasoning, " +
             "environmentKeys=${env.keys.sorted()})"
 
     companion object {
@@ -465,6 +475,7 @@ data class ProviderLiveHarnessConfig(
                 default = when (scenario) {
                     "chat" -> 128
                     "x-search" -> 8_192
+                    "background-pull" -> 2_048
                     else -> 256
                 },
                 allowZero = false,
@@ -501,6 +512,12 @@ data class ProviderLiveHarnessConfig(
             if (scenario == "file") require(!filePath.isNullOrBlank()) {
                 "The file scenario requires file=/absolute/path"
             }
+            val variant = (values["variant"] ?: env["MAGRATHEA_VARIANT"] ?: VARIANT_CONTINUATION).lowercase()
+            require(variant in BACKGROUND_PULL_VARIANTS) { "Unknown background-pull variant: $variant" }
+            val reasoning = (values["reasoning"] ?: env["MAGRATHEA_REASONING"])?.let { value ->
+                ReasoningEffort.entries.singleOrNull { it.name.equals(value, ignoreCase = true) }
+                    ?: throw IllegalArgumentException("Unknown reasoning effort: $value")
+            }
             validateAuthentication(provider, endpoint, authentication)
             return ProviderLiveHarnessConfig(
                 scenario = scenario,
@@ -515,6 +532,8 @@ data class ProviderLiveHarnessConfig(
                 openAiProtocol = openAiProtocol,
                 filePath = filePath,
                 env = env,
+                variant = variant,
+                reasoning = reasoning,
             )
         }
 
@@ -636,7 +655,7 @@ private val HARNESS_PROVIDER_SPECS = mapOf(
     "anthropic" to ProviderLiveSpec("MAGRATHEA_ANTHROPIC_API_KEY", "claude-3-5-sonnet-latest"),
 )
 private val OPENAI_FAMILY_PROVIDERS = setOf("openai", "openrouter", "xai")
-private val HARNESS_SCENARIOS = setOf("chat", "file", "mixed-tools", "resume", "x-search")
+private val HARNESS_SCENARIOS = setOf("chat", "file", "mixed-tools", "resume", "x-search", "background-pull")
 private const val HARNESS_TIMEOUT_MS = 120_000L
 private const val MAX_LIVE_FILE_BYTES = 10L * 1_024L * 1_024L
 

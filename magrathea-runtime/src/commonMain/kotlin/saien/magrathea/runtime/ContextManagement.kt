@@ -32,6 +32,7 @@ import saien.magrathea.core.ModelInputModality
 import saien.magrathea.core.ProviderOptions
 import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.core.ReasoningPart
+import saien.magrathea.core.RuntimeNoticePart
 import saien.magrathea.core.SystemEpochClock
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.TokenUsage
@@ -489,6 +490,7 @@ internal fun estimateMessages(
                     estimator = estimator,
                 )
                 is AttachmentPart -> estimateAttachmentTokens(part, estimator)
+                is RuntimeNoticePart -> estimator.tokens(part.text)
             }
         }
     }
@@ -594,6 +596,7 @@ internal fun serializeContextConversation(
                 MessageRole.USER -> "[User]"
                 MessageRole.ASSISTANT -> "[Assistant]"
                 MessageRole.TOOL -> "[Tool]"
+                MessageRole.RUNTIME -> "[runtime notice]"
             },
         )
         appendLine()
@@ -639,6 +642,7 @@ internal fun serializeContextConversation(
                     append(") ")
                     appendLine(if (part.dataUrlPayload() == null) part.uri else "[inline data omitted]")
                 }
+                is RuntimeNoticePart -> appendLine(part.text)
             }
         }
         appendLine()

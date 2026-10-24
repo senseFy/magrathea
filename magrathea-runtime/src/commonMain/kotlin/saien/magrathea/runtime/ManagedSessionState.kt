@@ -114,11 +114,16 @@ internal class SessionMachine private constructor(
         }
     }
 
-    fun begin(request: AgentRequest?, resume: Boolean): SessionMachine {
+    fun requireCanBegin(request: AgentRequest?, resume: Boolean) {
         requireAdmission(resume)
         val effectiveRequest = request ?: result.request ?: throw AgentSessionException(AgentSessionErrorCode.NOT_FOUND)
         check(effectiveRequest.sessionId == sessionId)
         check(generation != Long.MAX_VALUE) { "Agent session execution tokens are exhausted" }
+    }
+
+    fun begin(request: AgentRequest?, resume: Boolean): SessionMachine {
+        requireCanBegin(request, resume)
+        val effectiveRequest = request ?: result.request ?: throw AgentSessionException(AgentSessionErrorCode.NOT_FOUND)
         val attempt = ActiveExecution(generation + 1, CompletableDeferred(), result)
         val previous = result.state
         val provisional = if (resume && previous != null) {
@@ -144,6 +149,10 @@ internal class SessionMachine private constructor(
             ),
         )
     }
+
+    /** Events raised outside any execution (for example, background settlements). */
+    fun recordExternalEvent(event: AgentEvent): SessionMachine =
+        update(result = result.copy(lastEvent = event))
 
     /** Null means the event was rejected, not that the result is unknown. */
     fun recordEvent(attempt: ActiveExecution, event: AgentEvent): SessionMachine? {
@@ -542,6 +551,18 @@ private fun reduceSessionState(
                 AgentStatus.RUNNING
             },
         )
+        is AgentEvent.ToolHandedOff -> state?.copy(
+            pendingToolCalls = state.pendingToolCalls
+                .filterNot { call -> call.toolCallId == event.toolCallId },
+            status = if (
+                state.pendingToolCalls.any { call -> call.toolCallId != event.toolCallId }
+            ) {
+                AgentStatus.WAITING_FOR_TOOLS
+            } else {
+                AgentStatus.RUNNING
+            },
+        )
+        is AgentEvent.BackgroundExecutionSettled -> state
         is AgentEvent.RetryScheduled -> state?.copy(
             retryCount = if (state.retryCount == Int.MAX_VALUE) Int.MAX_VALUE else state.retryCount + 1,
         )

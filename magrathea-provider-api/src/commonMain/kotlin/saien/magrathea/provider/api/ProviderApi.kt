@@ -834,7 +834,8 @@ class DefaultReplayPolicy(
         val toolCallIdMap = linkedMapOf<String, String>()
         val transformed = messages.mapNotNull { message ->
             when (message.role) {
-                MessageRole.USER, MessageRole.SYSTEM, MessageRole.TOOL -> transformToolResultMessage(message, toolCallIdMap)
+                MessageRole.USER, MessageRole.SYSTEM, MessageRole.TOOL, MessageRole.RUNTIME ->
+                    transformToolResultMessage(message, toolCallIdMap)
                 MessageRole.ASSISTANT -> if (message.stopReason == StopReason.MAX_TOKENS &&
                     message.parts.any { it is ToolCallPart && it.partial }
                 ) {
@@ -869,7 +870,7 @@ class DefaultReplayPolicy(
                     message.parts.filterIsInstance<ToolResultPart>().forEach { existingToolResultIds += it.toolCallId }
                     result += message
                 }
-                MessageRole.USER, MessageRole.SYSTEM -> {
+                MessageRole.USER, MessageRole.SYSTEM, MessageRole.RUNTIME -> {
                     flushOrphanedToolCalls(result, pendingToolCalls, existingToolResultIds)
                     pendingToolCalls = emptyList()
                     existingToolResultIds.clear()

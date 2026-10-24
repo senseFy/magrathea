@@ -15,6 +15,7 @@ import saien.magrathea.core.InlineToolImageSource
 import saien.magrathea.core.JsonPart
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.RemoteToolImageSource
+import saien.magrathea.core.RuntimeNoticePart
 import saien.magrathea.core.TextPart
 import saien.magrathea.core.ToolImageAttachmentReference
 import saien.magrathea.core.ToolResultImageContent
@@ -55,6 +56,7 @@ internal class GeminiInteractionsRequestBuilder(
             when (message.role) {
                 MessageRole.SYSTEM -> Unit
                 MessageRole.USER -> add(userInputStep(message))
+                MessageRole.RUNTIME -> add(userInputStep(message.runtimeNoticeAsUser()))
                 MessageRole.ASSISTANT -> {
                     val steps = message.metadata[GEMINI_INTERACTION_STEPS_METADATA] as? JsonArray
                         ?: throw ProviderProtocolException(
@@ -71,6 +73,15 @@ internal class GeminiInteractionsRequestBuilder(
             }
         }
     }
+
+    private fun AgentMessage.runtimeNoticeAsUser(): AgentMessage = copy(
+        parts = parts.map { part ->
+            (part as? RuntimeNoticePart)?.let { TextPart(it.text) }
+                ?: throw ProviderProtocolException(
+                    "Gemini Runtime notice messages must contain only Runtime notices",
+                )
+        },
+    )
 
     private fun userInputStep(message: AgentMessage): JsonObject = buildJsonObject {
         put("type", "user_input")
