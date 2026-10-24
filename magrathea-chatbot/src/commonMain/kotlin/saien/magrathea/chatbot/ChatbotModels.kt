@@ -561,22 +561,16 @@ class ChatbotException(
 internal fun List<AgentMessage>.toChatbotMessageSnapshots(
     backgroundEnabled: Boolean = false,
 ): List<ChatbotMessageSnapshot> {
-    val markedCallKeys = markedControlCallKeys()
+    val callIndex = chatbotCallIndex(backgroundEnabled)
     return filter { it.role != MessageRole.RUNTIME }
         .map { message ->
-            message to message.toChatbotMessageSnapshot(markedCallKeys, backgroundEnabled)
+            message to message.toChatbotMessageSnapshot(callIndex)
         }
         .filter { (original, snapshot) ->
             // Runtime control calls never surface; drop only messages the filtering emptied.
             original.parts.filterIsInstance<ToolCallPart>()
                 .withIndex()
-                .none { (ordinal, call) ->
-                    call.isHiddenBackgroundControl(
-                        ChatbotToolActivityKey(original.id, ordinal),
-                        markedCallKeys,
-                        backgroundEnabled,
-                    )
-                } &&
+                .none { (ordinal, _) -> callIndex.isHidden(original.id, ordinal) } &&
                 original.parts.none { it is ToolResultPart && it.isBackgroundControlResult() } ||
                 snapshot.text.isNotBlank() ||
                 snapshot.textBlocks.isNotEmpty() ||
@@ -588,23 +582,87 @@ internal fun List<AgentMessage>.toChatbotMessageSnapshots(
         .map { it.second }
 }
 
-private fun List<AgentMessage>.markedControlCallKeys(): Set<ChatbotToolActivityKey> {
-    val calls = mutableListOf<Pair<ChatbotToolActivityKey, ToolCallPart>>()
-    val marked = mutableSetOf<ChatbotToolActivityKey>()
+/**
+ * One pass over canonical history that decides every call's visibility and identity: results
+ * pair with the most recent preceding same-ID-and-name call, a call is hidden when its paired
+ * result is runtime control traffic or it is an unanswered reserved-name call under
+ * [backgroundEnabled], and visible calls get their activity key (message + visible ordinal).
+ */
+internal class ChatbotCallIndex(
+    val calls: List<ChatbotCallIndexEntry>,
+    val resultBindings: List<ResultBinding>,
+) {
+    class ChatbotCallIndexEntry(
+        val call: ToolCallPart,
+        val messageId: String,
+        val rawOrdinal: Int,
+        val hidden: Boolean,
+        val key: ChatbotToolActivityKey?,
+    )
+
+    class ResultBinding(
+        val result: ToolResultPart,
+        val call: ChatbotCallIndexEntry?,
+    )
+
+    private val hiddenCalls = calls.mapNotNullTo(mutableSetOf()) {
+        if (it.hidden) it.messageId to it.rawOrdinal else null
+    }
+
+    fun isHidden(messageId: String, callOrdinal: Int): Boolean =
+        (messageId to callOrdinal) in hiddenCalls
+
+    fun lastKeyFor(toolCallId: String, toolName: String): ChatbotToolActivityKey? =
+        calls.indexOfLast {
+            it.call.toolCallId == toolCallId && it.call.toolName == toolName
+        }.takeIf { it >= 0 }?.let { calls[it].key }
+}
+
+internal fun List<AgentMessage>.chatbotCallIndex(
+    backgroundEnabled: Boolean,
+): ChatbotCallIndex {
+    val calls = mutableListOf<Triple<String, Int, ToolCallPart>>()
+    val resultScan = mutableListOf<Pair<ToolResultPart, Int>>()
+    val pairedCalls = mutableSetOf<Int>()
+    val markedCalls = mutableSetOf<Int>()
     forEach { message ->
         message.parts.filterIsInstance<ToolCallPart>().forEachIndexed { ordinal, call ->
-            calls += ChatbotToolActivityKey(message.id, ordinal) to call
+            calls += Triple(message.id, ordinal, call)
         }
         message.parts.filterIsInstance<ToolResultPart>().forEach { part ->
-            if (part.isBackgroundControlResult()) {
-                calls.indexOfLast {
-                    it.second.toolCallId == part.toolCallId &&
-                        it.second.toolName == part.toolName
-                }.takeIf { it >= 0 }?.let { marked += calls[it].first }
+            val callIdx = calls.indexOfLast {
+                it.third.toolCallId == part.toolCallId && it.third.toolName == part.toolName
             }
+            if (callIdx >= 0) {
+                pairedCalls += callIdx
+                if (part.isBackgroundControlResult()) markedCalls += callIdx
+            }
+            resultScan += part to callIdx
         }
     }
-    return marked
+    val visibleOrdinals = mutableMapOf<String, Int>()
+    val entries = calls.mapIndexed { idx, (messageId, rawOrdinal, call) ->
+        val hidden = idx in markedCalls ||
+            (
+                idx !in pairedCalls && backgroundEnabled &&
+                    isBackgroundControlTool(call.toolName)
+                )
+        val key = if (hidden) {
+            null
+        } else {
+            val ordinal = visibleOrdinals[messageId] ?: 0
+            visibleOrdinals[messageId] = ordinal + 1
+            ChatbotToolActivityKey(messageId, ordinal)
+        }
+        ChatbotCallIndex.ChatbotCallIndexEntry(call, messageId, rawOrdinal, hidden, key)
+    }
+    val bindings = resultScan.map { (result, callIdx) ->
+        ChatbotCallIndex.ResultBinding(
+            result,
+            callIdx.takeIf { it >= 0 }?.let(entries::get),
+        )
+    }
+    return ChatbotCallIndex(entries, bindings)
 }
 
 internal fun isBackgroundControlTool(toolName: String): Boolean =
@@ -620,55 +678,40 @@ internal fun ToolExecutionResult.isBackgroundControlResult(): Boolean =
     metadata[BackgroundToolInstructions.CONTROL_RESULT_METADATA_KEY]
         ?.jsonPrimitive?.booleanOrNull == true
 
-/**
- * A call is hidden when its paired result was runtime control traffic, or when it is still
- * unanswered and its name is reserved under an enabled request.
- */
-internal fun ToolCallPart.isHiddenBackgroundControl(
-    key: ChatbotToolActivityKey,
-    markedCallKeys: Set<ChatbotToolActivityKey>,
-    backgroundEnabled: Boolean,
-): Boolean =
-    key in markedCallKeys ||
-        (backgroundEnabled && isBackgroundControlTool(toolName))
-
 internal fun AgentMessage.toChatbotMessageSnapshot(
-    markedCallKeys: Set<ChatbotToolActivityKey> = emptySet(),
+    callIndex: ChatbotCallIndex? = null,
     backgroundEnabled: Boolean = false,
-): ChatbotMessageSnapshot = ChatbotMessageSnapshot(
-    id = id,
-    role = role.toChatbotRole(),
-    text = text(),
-    textBlocks = parts.filterIsInstance<TextPart>().map {
-        ChatbotTextBlock(text = it.text, phase = it.phase?.toChatbotPhase())
-    },
-    reasoning = parts.filterIsInstance<ReasoningPart>().map {
-        ChatbotReasoningBlock(
-            text = it.text,
-            redacted = it.redacted,
-            kind = it.kind.toChatbotReasoningKind(),
-            phase = it.phase?.toChatbotPhase(),
-        )
-    },
-    attachments = parts.filterIsInstance<AttachmentPart>().map {
-        ChatbotAttachment(uri = it.uri, mimeType = it.mimeType, fileName = it.fileName)
-    },
-    toolCalls = parts.filterIsInstance<ToolCallPart>()
-        .withIndex()
-        .filterNot { (ordinal, call) ->
-            call.isHiddenBackgroundControl(
-                ChatbotToolActivityKey(id, ordinal),
-                markedCallKeys,
-                backgroundEnabled,
+): ChatbotMessageSnapshot {
+    val index = callIndex ?: listOf(this).chatbotCallIndex(backgroundEnabled)
+    return ChatbotMessageSnapshot(
+        id = id,
+        role = role.toChatbotRole(),
+        text = text(),
+        textBlocks = parts.filterIsInstance<TextPart>().map {
+            ChatbotTextBlock(text = it.text, phase = it.phase?.toChatbotPhase())
+        },
+        reasoning = parts.filterIsInstance<ReasoningPart>().map {
+            ChatbotReasoningBlock(
+                text = it.text,
+                redacted = it.redacted,
+                kind = it.kind.toChatbotReasoningKind(),
+                phase = it.phase?.toChatbotPhase(),
             )
-        }
-        .map { it.value.toChatbotToolCall() },
-    toolResults = parts.filterIsInstance<ToolResultPart>()
-        .filterNot { it.isBackgroundControlResult() }
-        .map(ToolResultPart::toChatbotToolResult),
-    createdAtEpochMs = createdAtEpochMs,
-    stopReason = stopReason?.toChatbotStopReason(),
-)
+        },
+        attachments = parts.filterIsInstance<AttachmentPart>().map {
+            ChatbotAttachment(uri = it.uri, mimeType = it.mimeType, fileName = it.fileName)
+        },
+        toolCalls = parts.filterIsInstance<ToolCallPart>()
+            .withIndex()
+            .filterNot { (ordinal, _) -> index.isHidden(id, ordinal) }
+            .map { it.value.toChatbotToolCall() },
+        toolResults = parts.filterIsInstance<ToolResultPart>()
+            .filterNot { it.isBackgroundControlResult() }
+            .map(ToolResultPart::toChatbotToolResult),
+        createdAtEpochMs = createdAtEpochMs,
+        stopReason = stopReason?.toChatbotStopReason(),
+    )
+}
 
 internal fun ToolResultPart.toChatbotToolResult(): ChatbotToolResult = ChatbotToolResult(
     id = toolCallId,

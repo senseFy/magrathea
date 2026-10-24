@@ -114,11 +114,16 @@ internal class SessionMachine private constructor(
         }
     }
 
-    fun begin(request: AgentRequest?, resume: Boolean): SessionMachine {
+    fun requireCanBegin(request: AgentRequest?, resume: Boolean) {
         requireAdmission(resume)
         val effectiveRequest = request ?: result.request ?: throw AgentSessionException(AgentSessionErrorCode.NOT_FOUND)
         check(effectiveRequest.sessionId == sessionId)
         check(generation != Long.MAX_VALUE) { "Agent session execution tokens are exhausted" }
+    }
+
+    fun begin(request: AgentRequest?, resume: Boolean): SessionMachine {
+        requireCanBegin(request, resume)
+        val effectiveRequest = request ?: result.request ?: throw AgentSessionException(AgentSessionErrorCode.NOT_FOUND)
         val attempt = ActiveExecution(generation + 1, CompletableDeferred(), result)
         val previous = result.state
         val provisional = if (resume && previous != null) {

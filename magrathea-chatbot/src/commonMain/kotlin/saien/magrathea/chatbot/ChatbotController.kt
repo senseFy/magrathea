@@ -300,6 +300,7 @@ private fun projectRuntime(
             background = runtime.background,
             messages = runtime.authoritativeMessages(),
             toolExecutions = runtime.toolExecutions,
+            backgroundEnabled = backgroundEnabled,
         ),
     )
 

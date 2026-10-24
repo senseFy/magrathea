@@ -238,8 +238,10 @@ class DefaultAgentRunner(
             override suspend fun toolFor(record: BackgroundExecutionRecord): ToolExecutor? =
                 toolRegistry.find(record.toolName)
 
-            override suspend fun specFor(record: BackgroundExecutionRecord): AdmittedSpec =
-                AdmittedSpec(
+            override suspend fun specFor(record: BackgroundExecutionRecord): AdmittedSpec {
+                val origin = background.origins(record.sessionId)
+                    .firstOrNull { it.runId == record.originRunId }
+                return AdmittedSpec(
                     sessionId = record.sessionId,
                     runId = record.originRunId,
                     toolCallId = record.originCallId,
@@ -247,6 +249,8 @@ class DefaultAgentRunner(
                     executor = checkNotNull(toolFor(record)),
                     executionRequest = record.executionRequest,
                     effectiveTimeoutMillis = record.effectiveTimeoutMillis,
+                    maxQueuedLifetimeMillis =
+                        origin?.request?.engine?.runtime?.background?.maxQueuedLifetimeMillis,
                     queuedAtEpochMs = record.queuedAtEpochMs,
                     onExecutionStarted = {},
                     spanFactory = {
@@ -271,6 +275,7 @@ class DefaultAgentRunner(
                         )
                     },
                 )
+            }
         }
     }
     private val sessionStopOperations = LinkedHashMap<String, CompletableDeferred<Unit>>()
@@ -1002,6 +1007,7 @@ class DefaultAgentRunner(
         require(initialCheckpoint.sessionId == request.sessionId)
         require(initialCheckpoint.runId == runId)
         val runState = RunState(initialCheckpoint.state)
+        val waitAccounting = RunWaitAccounting(timeSource)
         var activeRequest = request.copy(messages = initialCheckpoint.state.messages)
         // The run's own input starts at its last user message; projection strategies protect it.
         // A BACKGROUND_RESULTS activation anchors to its opening Runtime notice instead.
@@ -1168,6 +1174,7 @@ class DefaultAgentRunner(
                                 state = runState.value,
                                 priorMessageIds = priorMessageIds,
                                 emit = ::send,
+                                waitAccounting = waitAccounting,
                             )
                             val toolResults = toolBatch.results
                             runState.value = runState.value.copy(
@@ -1703,6 +1710,10 @@ class DefaultAgentRunner(
                             runState.value,
                         ).copy(
                             status = AgentStatus.INTERRUPTED,
+                            foregroundToolWaitMillis = runState.value.foregroundToolWaitMillis +
+                                waitAccounting.handoffMillis(),
+                            explicitWaitMillis = runState.value.explicitWaitMillis +
+                                waitAccounting.explicitMillis(),
                             retryCount = maxOf(
                                 safeCheckpoint.state.retryCount,
                                 runState.value.retryCount,
@@ -1750,6 +1761,10 @@ class DefaultAgentRunner(
                 // Preserve observed output for presentation while the checkpoint stays replay-safe.
                 val interruptedState = runState.value.copy(
                     status = AgentStatus.INTERRUPTED,
+                    foregroundToolWaitMillis = runState.value.foregroundToolWaitMillis +
+                        waitAccounting.handoffMillis(),
+                    explicitWaitMillis = runState.value.explicitWaitMillis +
+                        waitAccounting.explicitMillis(),
                     stopReason = StopReason.INTERRUPTED,
                 )
                 withContext(NonCancellable) {
@@ -2281,6 +2296,7 @@ class DefaultAgentRunner(
         state: AgentStateSnapshot,
         priorMessageIds: Set<String>,
         emit: suspend (AgentEvent) -> Unit,
+        waitAccounting: RunWaitAccounting,
     ): ToolBatchOutcome {
         if (toolCalls.isEmpty()) {
             return ToolBatchOutcome(emptyList(), 0L, 0L, finishWithoutReply = false)
@@ -2307,6 +2323,7 @@ class DefaultAgentRunner(
         val results = arrayOfNulls<ToolExecutionResult>(executions.size)
         val pendingResults = arrayOfNulls<CallResolution.EligiblePending>(executions.size)
         val explicitWaitTracker = ExplicitWaitTracker(timeSource)
+        waitAccounting.attachExplicitTracker(explicitWaitTracker)
         var sequentialHandoffWaitMillis = 0L
         var finishRequested = false
 
@@ -2531,7 +2548,12 @@ class DefaultAgentRunner(
                     results[index] = resolution.result
                     emit(AgentEvent.ToolCompleted(request.sessionId, resolution.result))
                 }
-                is CallResolution.EligiblePending -> pendingResults[index] = resolution
+                is CallResolution.EligiblePending -> {
+                    pendingResults[index] = resolution
+                    if (request.engine.runtime.toolExecutionMode == ToolExecutionMode.PARALLEL) {
+                        waitAccounting.beginBatchWindow(batchMark)
+                    }
+                }
             }
         }
 
@@ -2590,8 +2612,13 @@ class DefaultAgentRunner(
                 ?: batchMark.elapsedNow().inWholeMilliseconds
             val waitLeft = (remaining - waitSpent).coerceAtLeast(0L)
             val waitMark = timeSource.markNow()
-            if (waitLeft > 0 && !execution.foreground.isCompleted) {
-                withTimeoutOrNull(waitLeft) { execution.foreground.await() }
+            waitAccounting.beginHandoffWait(waitMark)
+            try {
+                if (waitLeft > 0 && !execution.foreground.isCompleted) {
+                    withTimeoutOrNull(waitLeft) { execution.foreground.await() }
+                }
+            } finally {
+                waitAccounting.endHandoffWait()
             }
             val waitedMillis = waitMark.elapsedNow().inWholeMilliseconds
             if (execution.foreground.isCompleted) {
@@ -2691,7 +2718,11 @@ class DefaultAgentRunner(
             } else {
                 sequentialHandoffWaitMillis
             },
-            explicitWaitMillis = explicitWaitTracker.spent(),
+            explicitWaitMillis = explicitWaitTracker.spent()
+                .also {
+                    waitAccounting.detachExplicitTracker(explicitWaitTracker)
+                    waitAccounting.finishBatch()
+                },
             finishWithoutReply = finishRequested,
         )
     }
@@ -4582,6 +4613,54 @@ private class ToolBatchOutcome(
     val explicitWaitMillis: Long,
     val finishWithoutReply: Boolean,
 )
+
+/**
+ * In-flight handoff and explicit waits of the Run's current tool batch, folded into an
+ * interrupted checkpoint so a resumed Run keeps its spent budget.
+ */
+private class RunWaitAccounting(
+    private val timeSource: TimeSource.WithComparableMarks,
+) {
+    private var handoffWaitMillis = 0L
+    private var openHandoffMark: ComparableTimeMark? = null
+    private var openBatchMark: ComparableTimeMark? = null
+    private var explicitTracker: ExplicitWaitTracker? = null
+
+    fun attachExplicitTracker(tracker: ExplicitWaitTracker) {
+        explicitTracker = tracker
+    }
+
+    fun detachExplicitTracker(tracker: ExplicitWaitTracker) {
+        if (explicitTracker === tracker) explicitTracker = null
+    }
+
+    fun beginHandoffWait(mark: ComparableTimeMark) {
+        openHandoffMark = mark
+    }
+
+    fun endHandoffWait() {
+        openHandoffMark?.let { handoffWaitMillis += it.elapsedNow().inWholeMilliseconds }
+        openHandoffMark = null
+    }
+
+    fun beginBatchWindow(mark: ComparableTimeMark) {
+        openBatchMark = openBatchMark ?: mark
+    }
+
+    fun finishBatch() {
+        handoffWaitMillis = 0L
+        openHandoffMark = null
+        openBatchMark = null
+    }
+
+    suspend fun handoffMillis(): Long {
+        openBatchMark?.let { return it.elapsedNow().inWholeMilliseconds }
+        return handoffWaitMillis +
+            (openHandoffMark?.elapsedNow()?.inWholeMilliseconds ?: 0L)
+    }
+
+    suspend fun explicitMillis(): Long = explicitTracker?.spent() ?: 0L
+}
 
 /**
  * The union of active explicit-wait intervals inside one tool batch: concurrent awaits share

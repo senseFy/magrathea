@@ -4295,6 +4295,151 @@ class BackgroundToolRuntimeContractTest {
         executor.close()
     }
 
+
+    // RF-10: an interrupt during a model await persists the explicit wait already spent,
+    // so the resumed Run does not regain a fresh allowance.
+    @Test
+    fun interruptDuringAwaitPreservesExplicitWait() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("interrupt-await")
+        executor.register(sessionId, NoopListener)
+        val tool = GatedTool(
+            "deep_lookup",
+            ToolBackgroundPolicy.ELIGIBLE,
+            recoveryPolicy = ToolRecoveryPolicy.REPLAY_SAFE,
+        )
+        val provider = object : ProviderAdapter {
+            override val key = "interrupt-await"
+            private var calls = 0
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                calls += 1
+                when (calls) {
+                    1 -> emit(
+                        providerChunk(
+                            toolCalls = listOf(toolCall("call-1", "deep_lookup")),
+                            completed = true,
+                        ),
+                    )
+                    2 -> {
+                        val handle = request.messages
+                            .flatMap { it.parts }
+                            .filterIsInstance<ToolResultPart>()
+                            .firstNotNullOf { it.backgroundReceipt?.handle }
+                        emit(
+                            providerChunk(
+                                toolCalls = listOf(
+                                    toolCall(
+                                        "await-1",
+                                        "await_background_results",
+                                        """{"handles":["$handle"],"max_wait_ms":5000}""",
+                                    ),
+                                ),
+                                completed = true,
+                            ),
+                        )
+                    }
+                    else -> emit(providerChunk(text = "done", completed = true))
+                }
+            }
+        }
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(
+            provider = provider,
+            tools = listOf(tool),
+            background = executor,
+            persistence = persistence,
+        )
+        val collected = async {
+            runner.run(
+                request(
+                    "interrupt-await",
+                    sessionId,
+                    config = backgroundConfig(
+                        handoffWait = 100,
+                        explicitAllowance = 10_000,
+                    ),
+                ),
+            ).toList()
+        }
+        runCurrent()
+        advanceTimeBy(200)
+        runCurrent()
+
+        val interruptJob = async { runner.interrupt(sessionId) }
+        runCurrent()
+        interruptJob.await()
+        runCatching { collected.await() }
+        runCurrent()
+
+        // The batch waited 100 in the handoff window, then about 100 more inside the await.
+        val state = persistence.load(sessionId)!!.snapshot.state
+        assertEquals(100L, state.foregroundToolWaitMillis)
+        val explicitWait = state.explicitWaitMillis
+        assertTrue(
+            explicitWait in 1..300,
+            "Explicit wait spent before the interrupt must be preserved, was $explicitWait",
+        )
+        executor.close()
+    }
+
+
+    // RF-11: a PARALLEL batch interrupted while a blocking call still runs charges the whole
+    // batch window, mirroring the batchMark-based normal fold.
+    @Test
+    fun interruptDuringBlockingCallPreservesParallelBatchWindow() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("interrupt-parallel-window")
+        executor.register(sessionId, NoopListener)
+        val eligible = GatedTool(
+            "deep_lookup",
+            ToolBackgroundPolicy.ELIGIBLE,
+            recoveryPolicy = ToolRecoveryPolicy.REPLAY_SAFE,
+        )
+        val blocking = GatedTool(
+            "blocking_lookup",
+            ToolBackgroundPolicy.BLOCKING,
+            recoveryPolicy = ToolRecoveryPolicy.REPLAY_SAFE,
+        )
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(
+            provider = scriptedProvider(
+                "interrupt-parallel-window",
+                toolCall("call-1", "deep_lookup"),
+                toolCall("call-2", "blocking_lookup"),
+            ),
+            tools = listOf(eligible, blocking),
+            background = executor,
+            persistence = persistence,
+        )
+        val collected = async {
+            runner.run(
+                request(
+                    "interrupt-parallel-window",
+                    sessionId,
+                    config = backgroundConfig(handoffWait = 1_000),
+                ),
+            ).toList()
+        }
+        runCurrent()
+        advanceTimeBy(300)
+        runCurrent()
+
+        val interrupt = async { runner.interrupt(sessionId) }
+        runCurrent()
+        interrupt.await()
+        runCatching { collected.await() }
+        runCurrent()
+
+        assertEquals(
+            300L,
+            persistence.load(sessionId)!!.snapshot.state.foregroundToolWaitMillis,
+            "The elapsed parallel batch window must be preserved on interrupt",
+        )
+        executor.close()
+    }
+
     // ---- harness ----
 
     private fun TestScope.executor(store: BackgroundExecutionStore): BackgroundToolExecutor =

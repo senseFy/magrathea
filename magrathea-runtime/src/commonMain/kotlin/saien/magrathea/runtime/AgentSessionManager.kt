@@ -50,6 +50,7 @@ import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.AgentStatus
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolExecutionRecord
+import saien.magrathea.core.ToolResultPart
 
 /** Process-local lifecycle of one canonical live Agent session runtime. */
 enum class AgentSessionPhase {
@@ -1431,25 +1432,26 @@ private class ManagedAgentSession(
         resume: Boolean,
         source: suspend () -> Flow<AgentEvent>,
     ) {
-        val execution = stateMutex.withLock {
-            transitionLocked(machine.begin(request, resume))
-            checkNotNull(machine.execution)
-        }
-        // Regeneration fence: records whose origin call no longer exists in the history are
+        stateMutex.withLock { machine.requireCanBegin(request, resume) }
+        // Regeneration fence: records whose receipt no longer exists in the history are
         // cancelled and deleted; unreferenced origins are removed with them.
         if (!resume && request != null) {
             background?.let { executor ->
-                val callIds = request.messages
-                    .flatMap { message -> message.parts.filterIsInstance<ToolCallPart>() }
-                    .mapTo(linkedSetOf()) { it.toolCallId }
+                val referencedExecutionIds = request.messages
+                    .flatMap { message -> message.parts.filterIsInstance<ToolResultPart>() }
+                    .mapNotNullTo(linkedSetOf<String>()) { it.backgroundReceipt?.executionId }
                 val stale = executor.records(sessionId).records
-                    .filter { it.originCallId !in callIds }
+                    .filter { it.executionId !in referencedExecutionIds }
                     .map { it.executionId }
                 if (stale.isNotEmpty()) {
                     executor.deleteRecords(sessionId, stale)
                     refreshBackground()
                 }
             }
+        }
+        val execution = stateMutex.withLock {
+            transitionLocked(machine.begin(request, resume))
+            checkNotNull(machine.execution)
         }
         scope.launch(start = CoroutineStart.UNDISPATCHED) { execute(execution, source) }
     }

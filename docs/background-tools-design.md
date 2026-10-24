@@ -46,7 +46,7 @@ v1 excludes:
 ```text
 Application composition root
 ├─ BackgroundExecutionStore   new optional port; storage-room implements it
-├─ BackgroundToolExecutor     new; owns Session-scoped jobs, records, and the admission queue
+├─ BackgroundToolExecutor     new; owns Session-scoped jobs and records
 ├─ DefaultAgentRunner(..., background = executor)
 │    hands off eligible calls, executes controls, closes calls on preemption
 ├─ AgentSessionManager(runner, persistence, background = executor)
@@ -252,16 +252,16 @@ of `ToolCompleted`. Calls that settle in the foreground never get a record. A ha
 journal record becomes `COMPLETED` with the receipt as its result, so Run recovery reuses the
 receipt and never re-executes the call.
 
-When background is enabled, the Runner's own permit acquisitions for blocking calls also go through
-the executor's admission queue, so one queue orders every Runtime-owned acquisition of a permit
-instance. v1 admits background work FIFO: the Runner's own permit acquisitions and background
-executions are not priority-ordered. Foreground-first admission with bounded aging is deferred
+There is no Runtime-side admission queue: the Runner acquires a blocking call's permit directly,
+and the executor acquires an eligible execution's permit when its job starts. A shared permit is a
+FIFO-fair `SharedToolExecutionPermit` (`Semaphore`), so waiters are admitted in acquisition order
+and a held permit is never preempted. Foreground-first admission with bounded aging is deferred
 until contention is measured (section 11).
 
 ### 5.2 Execution and settlement
 
-The executor admits contenders per permit instance FIFO and never preempts a held permit.
-It acquires the Tool's permit, writes `RUNNING`, and runs `execute` under `effectiveTimeoutMillis`. Settlement applies `afterToolCall` interceptors with the
+The executor acquires the Tool's permit when the job starts; `SharedToolExecutionPermit` admits
+waiters FIFO and never preempts a held permit. It writes `RUNNING`, and runs `execute` under `effectiveTimeoutMillis`. Settlement applies `afterToolCall` interceptors with the
 origin context, normalization, and runtime limits, then writes `TERMINAL` with the result and emits
 `AgentEvent.BackgroundExecutionSettled` on the manager's event stream. A late callback for a record
 that is already terminal, fenced, or deleted is discarded.

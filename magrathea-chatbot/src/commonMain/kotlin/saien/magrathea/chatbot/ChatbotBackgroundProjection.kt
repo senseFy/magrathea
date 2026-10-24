@@ -90,48 +90,39 @@ internal class ChatbotBackgroundProjection(
  */
 private fun ToolResultPart.toBackgroundToolResult(
     activity: ChatbotToolActivitySnapshot,
-): ChatbotToolResult = toChatbotToolResult().copy(
+): ChatbotToolResult = copy(
+    isError = metadata[RESULT_IS_ERROR_METADATA]?.jsonPrimitive?.booleanOrNull == true,
+    userErrorCode = (metadata[RESULT_ERROR_CODE_METADATA] as? JsonPrimitive)?.content
+        ?: userErrorCode,
+).toChatbotToolResult().copy(
     id = activity.call.id,
     name = activity.call.name,
-    isError = metadata[RESULT_IS_ERROR_METADATA]?.jsonPrimitive?.booleanOrNull == true,
-    errorCode = (metadata[RESULT_ERROR_CODE_METADATA] as? JsonPrimitive)?.content,
 )
 
 internal fun buildBackgroundProjection(
     background: BackgroundSessionSnapshot?,
     messages: List<AgentMessage>,
     toolExecutions: List<ToolExecutionRecord>,
+    backgroundEnabled: Boolean = false,
 ): ChatbotBackgroundProjection {
     val receipts = mutableMapOf<ChatbotToolActivityKey, ToolBackgroundReceipt>()
     val preempted = mutableSetOf<ChatbotToolActivityKey>()
     val readResults = mutableMapOf<String, ToolResultPart>()
-    val calls = mutableListOf<Pair<ChatbotToolActivityKey, ToolCallPart>>()
+    val callIndex = messages.chatbotCallIndex(backgroundEnabled)
 
-    fun callKeyFor(toolCallId: String, toolName: String): ChatbotToolActivityKey? =
-        calls.indexOfLast {
-            it.second.toolCallId == toolCallId && it.second.toolName == toolName
-        }.takeIf { it >= 0 }?.let { calls[it].first }
-
-    messages.forEach { message ->
-        var callOrdinal = 0
-        message.parts.filterIsInstance<ToolCallPart>().forEach { call ->
-            calls += ChatbotToolActivityKey(message.id, callOrdinal) to call
-            callOrdinal += 1
+    callIndex.resultBindings.forEach { binding ->
+        binding.call?.key?.let { key ->
+            binding.result.backgroundReceipt?.let { receipts[key] = it }
+            if (binding.result.metadata[PREEMPTED_METADATA] != null) {
+                preempted += key
+            }
         }
-        message.parts.filterIsInstance<ToolResultPart>().forEach { part ->
-            callKeyFor(part.toolCallId, part.toolName)?.let { key ->
-                part.backgroundReceipt?.let { receipts[key] = it }
-                if (part.metadata[PREEMPTED_METADATA] != null) {
-                    preempted += key
-                }
-            }
-            part.retrievalResults().forEach { (handle, result) ->
-                readResults[handle] = result
-            }
+        binding.result.retrievalResults().forEach { (handle, result) ->
+            readResults[handle] = result
         }
     }
     toolExecutions.forEach { record ->
-        val key = callKeyFor(record.toolCallId, record.toolName)
+        val key = callIndex.lastKeyFor(record.toolCallId, record.toolName)
         record.result?.backgroundReceipt?.let { receipt ->
             if (key != null) receipts[key] = receipt
         }

@@ -226,24 +226,26 @@ or read response was sent to that invocation. Admission/delivery records must co
 replay-safe checkpoints and lifetime fencing. New input can consume the retained event without
 starting an additional concurrent or duplicate supplement.
 
-Foreground demand should also take priority at Tool admission, not just model activation. v1
-admits contenders per permit instance FIFO: an issued receipt never demotes an unstarted request,
-and a priority order with bounded fairness to keep background work from starving forever is
-deferred until contention is measured (S4).
+Foreground demand should also take priority at Tool admission, not just model activation; v1
+defers this to S4. There is no Runtime admission queue today: the Runner acquires a blocking
+call's permit directly, and the executor acquires an eligible execution's permit when its job
+starts. `SharedToolExecutionPermit` admits waiters FIFO (`Semaphore` fairness), so an issued
+receipt never demotes an unstarted request, and a priority order with bounded fairness to keep
+background work from starving forever is deferred until contention is measured.
 
-Priority does not preempt an executor already holding a permit. The executor retains that permit
-until actual settlement; no false release or overcommit is allowed. With capacity one, foreground
-work can still wait for a running background operation's remaining hard deadline. Each enabled
-backend needs a measured admission policy: safe capacity/reservation within real upstream limits,
-a bounded acceptable wait, or continued blocking-mode operation. A priority queue alone is not a
+No ordering preempts an executor already holding a permit: it retains that permit until actual
+settlement; no false release or overcommit is allowed. With capacity one, foreground work can
+still wait for a running background operation's remaining hard deadline. Each enabled backend
+needs a measured admission policy: safe capacity/reservation within real upstream limits, a
+bounded acceptable wait, or continued blocking-mode operation. A priority queue alone is not a
 claim of low foreground latency. Do not cancel running work based on inferred user intent.
 
-`ToolExecutionPermit` exposes only `acquire()` and `release()`, so priority needs an explicit
-mechanism. The v1 proposal orders contenders in a Runtime-side admission queue per permit instance
-before calling `acquire()`, leaving that public interface unchanged. This covers permits that only
-Runtime acquires, such as an aggregate backend's outer permit. Permits that Tool code acquires
-internally, such as a child-source permit shared with direct integrations, remain first-come
-first-served; a backend that needs priority there must expose it explicitly.
+`ToolExecutionPermit` exposes only `acquire()` and `release()`, so the deferred priority design
+needs an explicit mechanism: order contenders in a Runtime-side admission queue per permit
+instance before calling `acquire()`, leaving that public interface unchanged. This covers permits
+that only Runtime acquires, such as an aggregate backend's outer permit. Permits that Tool code
+acquires internally, such as a child-source permit shared with direct integrations, remain
+first-come first-served; a backend that needs priority there must expose it explicitly.
 
 ## Events and Chatbot projection
 
@@ -332,7 +334,7 @@ These scenarios are requirements, not existing test claims.
 | BG-005 | An await issued after a receipt in the same Run actually waits; it returns settled payloads or pending statuses, is preemptible by Send, and leaves no durable wake condition |
 | BG-006 | Latest-context, origin-directed, and passive policies use the same storage/controls; only eligible causes activate a single main Run |
 | BG-007 | Cancellation/failure during notice, read, or streaming reply does not irreversibly consume an event; valid replay pairs are retained and excluded pairs are not treated as available context |
-| BG-008 | Foreground admission and cross-Session contention have bounded fairness; capacity-one nonpreemption and queued-work priority are tested |
+| BG-008 | Deferred with admission priority (S4): v1 admits FIFO through `SharedToolExecutionPermit` and never preempts a held permit; capacity-one nonpreemption is tested, queued-work priority waits for contention measurement |
 | BG-009 | Four reference wire paths validate receipt/notice/read pairing, actual model reasoning/interaction replay, and untrusted-content isolation |
 | BG-010 | Stable enabled Tool definitions survive activation-mode changes; runtime rejects forbidden calls with paired errors while retrieval/control still works |
 | BG-011 | Stop, targeted cancellation, regeneration, deletion, restart, and root close reject stale activation in the correct scope |

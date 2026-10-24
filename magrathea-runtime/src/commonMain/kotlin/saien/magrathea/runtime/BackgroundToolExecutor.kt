@@ -146,6 +146,9 @@ class BackgroundToolExecutor(
     internal suspend fun records(sessionId: AgentSessionId): BackgroundSessionRecords =
         store.load(sessionId)
 
+    internal suspend fun origins(sessionId: AgentSessionId): List<BackgroundOriginContext> =
+        store.load(sessionId).origins
+
     internal suspend fun hasUnfinishedRecords(sessionId: AgentSessionId): Boolean =
         store.load(sessionId).records.any { it.state != BackgroundExecutionState.TERMINAL }
 
@@ -566,7 +569,8 @@ class BackgroundToolExecutor(
 
     private suspend fun runExecution(execution: AdmittedExecution, sessionMutex: Mutex) {
         val spec = execution.spec
-        val backgroundSpan = spec.spanFactory()
+        val backgroundSpan = runCatching { spec.spanFactory() }
+            .getOrDefault(RuntimeTraceSpan.noop())
         val jobMark = timeSource.markNow()
         try {
             val permit = try {
@@ -575,10 +579,23 @@ class BackgroundToolExecutor(
                 settle(execution, sessionMutex, Result.failure(failure))
                 return
             }
-            try {
-                permit.acquire()
+            val remainingLifetime = spec.maxQueuedLifetimeMillis
+                ?.let { it - (epochClock() - execution.queuedAtEpochMs) }
+            val acquired = try {
+                when {
+                    remainingLifetime == null -> {
+                        permit.acquire()
+                        true
+                    }
+                    remainingLifetime <= 0 -> false
+                    else -> withTimeoutOrNull(remainingLifetime) { permit.acquire() } != null
+                }
             } catch (failure: Throwable) {
                 settle(execution, sessionMutex, Result.failure(failure))
+                return
+            }
+            if (!acquired) {
+                settleInterrupted(execution, sessionMutex)
                 return
             }
             val executionOutcome = runCatching {
@@ -738,28 +755,23 @@ class BackgroundToolExecutor(
             if (completedForeground) return@withContext
         }
         // Finalize outside the Session mutex so interceptors cannot block other Session writes.
-        val record = execution.record ?: return@withContext cleanup(execution)
-        val (settleOutcome, result) = try {
-            val origin = store.load(execution.sessionId).origins
-                .firstOrNull { it.runId == record.originRunId }
-            execution.spec.lateFinalize(outcome, record, origin)
-        } catch (cancelled: CancellationException) {
-            cancelled.rethrowFatalError()
-            throw cancelled
-        } catch (failure: Throwable) {
-            failure.rethrowFatalError()
-            BackgroundOutcome.ERROR to ToolExecutionResult(
-                toolCallId = record.originCallId,
-                toolName = record.toolName,
-                result = JsonPrimitive(
-                    "Tool result finalization failed",
-                ),
-                isError = true,
-                displayText = "Tool result finalization failed",
-            )
-        }
-        var settled: BackgroundExecutionRecord? = null
         try {
+            val record = execution.record ?: return@withContext
+            val (settleOutcome, result) = try {
+                val origin = store.load(execution.sessionId).origins
+                    .firstOrNull { it.runId == record.originRunId }
+                execution.spec.lateFinalize(outcome, record, origin)
+            } catch (failure: Throwable) {
+                failure.rethrowFatalError()
+                BackgroundOutcome.ERROR to ToolExecutionResult(
+                    toolCallId = record.originCallId,
+                    toolName = record.toolName,
+                    result = JsonPrimitive("Tool result finalization failed"),
+                    isError = true,
+                    displayText = "Tool result finalization failed",
+                )
+            }
+            var settled: BackgroundExecutionRecord? = null
             sessionMutex.withLock {
                 val current = execution.record
                 if (current != null && current.state != BackgroundExecutionState.TERMINAL) {
@@ -791,11 +803,19 @@ class BackgroundToolExecutor(
     }
 
     private suspend fun notifyRecordChanged(sessionId: AgentSessionId, record: BackgroundExecutionRecord) {
-        guard.withLock { listeners[sessionId.value] }?.onRecordChanged(sessionId, record)
+        try {
+            guard.withLock { listeners[sessionId.value] }?.onRecordChanged(sessionId, record)
+        } catch (failure: Throwable) {
+            failure.rethrowFatalError()
+        }
     }
 
     private suspend fun notifySettled(sessionId: AgentSessionId, record: BackgroundExecutionRecord) {
-        guard.withLock { listeners[sessionId.value] }?.onSettled(sessionId, record)
+        try {
+            guard.withLock { listeners[sessionId.value] }?.onSettled(sessionId, record)
+        } catch (failure: Throwable) {
+            failure.rethrowFatalError()
+        }
     }
 }
 
