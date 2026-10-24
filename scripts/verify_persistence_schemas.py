@@ -484,7 +484,9 @@ def validate_ledger(
         domain_label = f"{label}.domains[{domain_index}]"
         domain = expect_object(raw_domain, domain_label)
         expect_exact_keys(
-            domain,
+            # Informational notes were absent from earlier format-v1 ledgers. All
+            # structural keys remain mandatory and unknown keys are still rejected.
+            {key: value for key, value in domain.items() if key != "notes"},
             {
                 "id",
                 "owner",
@@ -497,7 +499,6 @@ def validate_ledger(
                 "migrationProbe",
                 "versions",
                 "transitions",
-                "notes",
             },
             domain_label,
         )
@@ -763,10 +764,40 @@ def verify_append_only(baseline: dict[str, Any], current: dict[str, Any]) -> Non
 
 
 def run_contract_self_test(root: Path, ledger: dict[str, Any]) -> None:
+    legacy = copy.deepcopy(ledger)
+    for domain in legacy["domains"]:
+        domain.pop("notes", None)
+    validate_ledger(root, legacy, "self-test legacy ledger", verify_sources_and_files=False)
+    verify_append_only(legacy, ledger)
+
+    for notes in (None, "not an array", [42], [" "]):
+        invalid = copy.deepcopy(ledger)
+        invalid["domains"][0]["notes"] = notes
+        try:
+            validate_ledger(root, invalid, "self-test invalid notes", verify_sources_and_files=False)
+        except VerificationError:
+            pass
+        else:
+            fail("self-test: schema gate accepted invalid domain notes")
+
+    for base in (legacy, ledger):
+        for mutation in ("unknown-key", "missing-required-key"):
+            invalid = copy.deepcopy(base)
+            if mutation == "unknown-key":
+                invalid["domains"][0]["unexpected"] = True
+            else:
+                del invalid["domains"][0]["owner"]
+            try:
+                validate_ledger(root, invalid, "self-test domain keys", verify_sources_and_files=False)
+            except VerificationError:
+                pass
+            else:
+                fail(f"self-test: schema gate accepted {mutation} in a domain")
+
     changed_fixture = copy.deepcopy(ledger)
     changed_fixture["domains"][0]["versions"][-1]["fixtures"][0]["sha256"] = "0" * 64
     try:
-        verify_append_only(ledger, changed_fixture)
+        verify_append_only(legacy, changed_fixture)
     except VerificationError:
         pass
     else:
@@ -775,7 +806,7 @@ def run_contract_self_test(root: Path, ledger: dict[str, Any]) -> None:
     changed_adapter = copy.deepcopy(ledger)
     changed_adapter["domains"][0]["versions"][-1]["adapter"]["sha256"] = "0" * 64
     try:
-        verify_append_only(ledger, changed_adapter)
+        verify_append_only(legacy, changed_adapter)
     except VerificationError:
         pass
     else:
