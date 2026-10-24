@@ -1,10 +1,10 @@
 # ADR-019: Session-Owned Background Tools and Model-Directed Continuation
 
-- Status: Proposed
-- Date: 2026-10-23
-- Implementation: Implemented on branch `feat/background-tools` (unreleased); O-03, O-04, and
-  Gemini live evidence remain open (technical design, section 11)
-- Technical design: [Background Tools: Technical Design](../background-tools-design.md) (draft)
+- Status: Accepted
+- Date: 2026-10-23 (accepted 2026-10-24)
+- Implementation: SDK v1 implemented for the first release after 0.1.0-alpha.18. Host enablement
+  remains gated by O-03, O-04, and Gemini live evidence (technical design, section 11)
+- Technical design: [Background Tools: Technical Design](../background-tools-design.md)
 - Extends: [ADR-005](ADR-005-persistence-contracts.md),
   [ADR-008](ADR-008-runtime-tool-and-chatbot-contracts.md),
   [ADR-017](ADR-017-managed-session-ownership.md), and
@@ -26,10 +26,12 @@ mechanism concrete without claiming that the implementation or Provider validati
 - The same background execution mechanism supports latest-context judgment, origin-directed
   follow-up, and passive availability. Enjoy selects the first as its default.
 
-The previous draft called the entire design Accepted while deferring result projection. This
-revision keeps the principles above and marks the complete contract Proposed until its open gates
-are resolved. O-01 was decided on 2026-10-23: v1 replaces the earlier durable-wait design with a
-Run-local await whose limit is independent of the foreground handoff allowance.
+An earlier draft called the design Accepted while deferring result projection, so the contract
+stayed Proposed until its scope and protocol gates closed. O-01 was decided on 2026-10-23: v1
+replaces the earlier durable-wait design with a Run-local await whose limit is independent of the
+foreground handoff allowance. O-02 closed with the S0 protocol evidence and the S1 implementation,
+and the contract was accepted on 2026-10-24. O-03 and O-04 now gate enabling the feature in a
+host, not the SDK contract.
 
 ## Current implementation and gaps
 
@@ -44,7 +46,7 @@ preemption and delivery accounting, not just presentation details. The new path 
 Tool calls before new input and cannot assume that sending a result to a cancelled invocation made
 it durable model context.
 
-## Proposed v1 result protocol: receipt, notice, pull
+## v1 result protocol: receipt, notice, pull
 
 A background execution has a Session-scoped, non-guessable opaque handle such as `bg_7f3kq9`.
 Handles are never sequential, so text injected into Tool content cannot address other executions by
@@ -77,13 +79,13 @@ protocols without a Runtime role; only trusted runtime metadata enters that enve
 payloads appear exclusively in real Tool-result blocks. Notices never use `MessageRole.SYSTEM`,
 which current Anthropic/Gemini adapters hoist into their top-level instructions.
 
-This specifies the proposed projection route. The canonical notice representation and adapter
-fixtures still need a prototype; current adapters do not already implement this new input kind.
+The reference request builders implement this projection; offline wire fixtures cover all four
+of them (technical design, section 9).
 
 ### Provider wire fragments
 
-These are proposed text-only request fragments using the current adapter wire formats, not
-complete runnable requests or evidence of a live test. `R` is the serialized pending receipt,
+These are illustrative text-only request fragments in the adapter wire formats, not complete
+runnable requests. `R` is the serialized pending receipt,
 `N` the fixed Runtime notice, and `D` the bounded external payload. `c1` and `r1` are IDs from
 actual model calls to the business Tool and retrieval control respectively. Every historical
 assistant output is replayed from its authoritative response, including required reasoning,
@@ -150,7 +152,7 @@ replay. Never conflate the two when recovering, prioritizing, or cancelling.
 
 ## Model controls and waiting
 
-The proposed v1 exposes a stable control capability set while background support is enabled:
+v1 exposes a stable control capability set while background support is enabled:
 
 | Control | Semantics |
 |---|---|
@@ -367,7 +369,7 @@ documentation change.
 | Fabricate assistant Tool calls to carry later data | Violates authoritative model output; particularly incompatible with Gemini interaction-step replay and some thinking modes |
 | Put payload/notifications in SYSTEM | Current Anthropic/Gemini adapters hoist SYSTEM content; wrong chronology/authority and unnecessary prefix changes |
 | Put external payload in plain USER text | Loses Tool-result provenance/trust; rejected. A metadata-only Runtime notice is different |
-| Receipt + notice + real model read | Proposed v1; clean call pairing and Tool-data boundary, at the cost of retrieval turns and evaluation requirements |
+| Receipt + notice + real model read | Chosen for v1; clean call pairing and Tool-data boundary, at the cost of retrieval turns and evaluation requirements |
 | Session-persistent explicit waits | Deferred for v1 by O-01 to avoid an additional durable trigger and capability policy; revisit when a minutes-long Tool needs a wait that survives the Run |
 | Run-local bounded await | Chosen for v1 by O-01; ordinary cancellation, its own per-Run allowance, no wakeup after the Run ends |
 | Await sharing the foreground handoff allowance | Rejected: the model sees receipts only after that allowance is exhausted, so every await after a receipt would return immediately |
@@ -388,17 +390,18 @@ Primary references checked during review:
 
 Claude Code behavior is not a normative dependency or a verified implementation precedent here.
 
-## Open decisions and promotion gates
+## Decisions and enablement gates
 
-| ID | Item | Proposed direction / evidence needed |
+| ID | Item | Status / evidence |
 |---|---|---|
 | O-01 | Scope change from persistent waits | **Decided 2026-10-23.** v1 uses Run-local await with its own per-Run allowance, independent of the foreground handoff allowance; passive mode has no wakeup after the Run ends; durable waits are deferred until a minutes-long Tool needs them |
-| O-02 | Canonical Runtime notice and Provider prototype | Implement the specified metadata-only projection in an isolated prototype; verify all four wire paths, enabled thinking modes, call closure on Send, mixed-batch handoff, stable Tools, receipt projection in events and Chatbot snapshots, and await returning payloads versus status-only before freezing public shapes |
-| O-03 | Quantitative limits and fair admission | Fix handoff-wait, explicit-wait, queued-lifetime, and activation allowances and deterministic source attribution; measure capacity-one contention and choose a backend rollout policy |
-| O-04 | Real-model release criteria | Fix evaluation matrix, case denominators, acceptable error/cost/latency thresholds, then record observed results |
-| O-05 | Enjoy product decisions | Resolve draft-activity deferral, notification behavior, and unread/discoverability choices in the downstream document. Decided 2026-10-23: streaming Send follows one application-level feature flag, not per-conversation capability |
+| O-02 | Canonical Runtime notice and Provider prototype | **Decided 2026-10-24.** S0 verified the Chat Completions, Responses, and Anthropic Messages wire paths live and all four builders with offline fixtures; await returns payloads; receipts project in events and Chatbot snapshots. Gemini Interactions still lacks live evidence (technical design, section 11) |
+| O-03 | Quantitative limits and fair admission | **Open; gates host enablement.** Fix handoff-wait, explicit-wait, queued-lifetime, and activation allowances and deterministic source attribution; measure capacity-one contention and choose a backend rollout policy |
+| O-04 | Real-model release criteria | **Open; gates host enablement.** Fix evaluation matrix, case denominators, acceptable error/cost/latency thresholds, then record observed results |
+| O-05 | Enjoy product decisions | **Enjoy-owned.** Resolve draft-activity deferral, notification behavior, and unread/discoverability choices in the downstream document. Decided 2026-10-23: streaming Send follows one application-level feature flag, not per-conversation capability |
 
-Acceptance of this ADR requires the open scope choices above and recorded protocol evidence; release
-additionally requires the deterministic, model-behavior, persistence-migration, and product gates.
-No schema number, release version, exact public type, or existing ADR governance rule is changed
-by this proposal. Existing Run recovery and blocking consumers remain the implementation baseline.
+The contract was accepted once O-01 and O-02 closed. A host enables the feature for users only
+after O-03 and O-04 pass for its configuration, together with its own persistence-migration and
+product checks. The concrete storage schema (9), Room database version (2), and the public types
+this contract ships are recorded in the technical design. Existing Run recovery and blocking
+consumers remain the implementation baseline.

@@ -1,14 +1,14 @@
 # Background Tools: Technical Design
 
-- Status: Implemented on branch `feat/background-tools` (unreleased); see section 11
+- Status: Implemented for the first SDK release after 0.1.0-alpha.18; see section 11
 - Date: 2026-10-24
-- Implements: [ADR-019](adr/ADR-019-session-owned-background-tools.md) (Proposed)
+- Implements: [ADR-019](adr/ADR-019-session-owned-background-tools.md) (Accepted)
 - Consumer integration: Enjoy `docs/architecture/background-tools-integration-design.md`
 
 This document turns ADR-019 into concrete SDK seams: components, data shapes, persistence, flows,
-public API impact, and an implementation order. Type and member names are proposals. ADR-019
-remains the behavioral contract; where this design narrows it, the ADR is updated in the same
-change.
+public API impact, and an implementation order. Type and member names match the implementation.
+ADR-019 remains the behavioral contract; where this design narrows it, the ADR is updated in the
+same change.
 
 ## 1. Scope
 
@@ -461,6 +461,32 @@ to wait, and every model above then answers first once the allowance runs out. A
 a stress configuration in which some models poll; per ADR-019, such model configurations do not pass
 the evaluation gate.
 
+### DeepSeek and X Search (2026-10-24)
+
+- **Real Enjoy desktop app**, DeepSeek's direct API (deepseek-chat, served as V4.1 Flash, and
+  Deepseek V4 Pro in thinking mode), with DeepSeek Search and Free Search. Exercised:
+  - completion within the handoff;
+  - handoff followed by await;
+  - answer first, then one or two supplements, the second correcting the first;
+  - a new user message while results were pending;
+  - per-search cancel;
+  - Stop cancelling running and queued work;
+  - Send preemption, after which the model cancelled the obsolete searches and started a new one;
+  - V4 Pro reasoning across multiple sub-requests.
+- **OpenRouter harness**: `deepseek/deepseek-v4.1-flash-1017` passed 4/4.
+  `deepseek/deepseek-v4-pro` passed 3/4: one run hit a Free Search outage, and on rerun the model
+  re-issued the search after an exhausted await instead of answering first.
+- **X Search through Enjoy** (real xAI, `deepseek/deepseek-v4.1-flash-1017`):
+  - 12 s allowance: the model awaited and answered with 9 citations;
+  - zero allowance: it answered first, then supplemented;
+  - each X search took about 12 s.
+- **Fixes from these runs**:
+  - a multi-handle await records per-handle result slices, so Chatbot attaches each search's own
+    citations;
+  - overlapping awaits are charged once, and the tool batch's shared counters and pending list are
+    race-free;
+  - an await that uses up the allowance reports exhaustion.
+
 ## 11. Implementation status and remaining gates
 
 As of 2026-10-24 the design is implemented on `feat/background-tools` in Magrathea and Enjoy, with
@@ -487,3 +513,14 @@ Gates that remain before enabling the feature for users (ADR-019 promotion):
 - O-04: agree on the evaluation matrix and thresholds; section 10 is initial evidence, not a gate.
 - Gemini Interactions live evidence from a supported network location.
 - Browser builds stay blocking until `magrathea-storage-web` implements the store.
+
+### Known follow-ups (non-breaking)
+
+- **Record retention.** Terminal records stay for the Session's lifetime with their full stored
+  result, and the snapshot and wait paths load every record of a Session. Follow-up: prune
+  delivered records and derive terminal state from canonical history.
+- **Coalescing duplicates.** An identical pending call (same Tool, same canonical arguments,
+  REPLAY_SAFE) could join the existing execution instead of starting a duplicate.
+- **Runtime instruction tuning from O-04 observations:** a duplicate search after an exhausted
+  await; an await on an already delivered handle; supplements that tell the user about
+  continuation Tool limits.

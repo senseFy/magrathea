@@ -25,13 +25,8 @@ dependency direction. Platform limitations and external validation gaps are trac
 | [016](ADR-016-debug-recording-contract.md) | Typed, host-owned debug recording outside the agent event stream |
 | [017](ADR-017-managed-session-ownership.md) | Process-local canonical sessions, leases, and lifecycle ownership |
 | [018](ADR-018-tool-result-context-lifecycle.md) | Layered Tool-result context management: per-result budgets, restorable clearing, then compaction |
+| [019](ADR-019-session-owned-background-tools.md) | Session-owned background Tools, pull-based result retrieval, and model-directed continuation |
 
 Changes to an accepted decision require an explicit update to the affected record, public docs,
 and executable contract tests. A new record is preferred when a decision introduces a distinct
 security boundary or public protocol.
-
-## Proposed records
-
-| ADR | Proposal |
-|---|---|
-| [019](ADR-019-session-owned-background-tools.md) | Session-owned background Tools, pull-based result retrieval, and model-directed continuation; scope/protocol gates remain open |

@@ -114,6 +114,22 @@ an independent host scope. Synchronously awaiting `acquire`, `delete`, `clear`, 
 `listSessions` from a manager-invoked adapter would wait on the operation fence that owns the
 adapter call. State/event observers run in independent coroutines and do not have this restriction.
 
+## Session-owned background work
+
+When the manager and its Runner are constructed with the same `BackgroundToolExecutor`, the
+manager's leases own background Tool executions beyond the Run that started them. The lease
+commands for that work are:
+
+- `startContinuation(request)` opens a Run that delivers pending background results.
+- `stopAll()` cancels every live execution and suppresses unacknowledged records.
+- `cancelBackground(handles)` targets specific executions.
+- `suspendBackground()` stops live jobs on host loss; `resumeBackground()` re-admits queued
+  replay-safe work.
+
+`AgentSessionRuntimeSnapshot.background` reports the Session's `BackgroundSessionSnapshot` —
+its execution views, `pendingActivation`, and `requiresExecutionHost`. See
+[Background Tools](background-tools.md) for the full enabling conditions and host contract.
+
 ## Recovery
 
 Acquisition reads a complete persistence record, inspects runner recovery, and verifies the record

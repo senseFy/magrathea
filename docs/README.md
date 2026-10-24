@@ -25,16 +25,10 @@
 | [Web Search](web-search.md) | Portable search Tool contract and citation boundary |
 | [Image Search](image-search.md) | Portable image discovery, typed media results, and chatbot projection |
 | [X Search](x-search.md) | Cross-model X Search Tool and xAI hosted wire |
+| [Background Tools](background-tools.md) | Session-owned background Tool execution: handoff, receipts, waiting, and recovery |
+| [Session-owned background Tools](adr/ADR-019-session-owned-background-tools.md) | Receipt/notice/pull protocol, Run-local waits, continuation policies, and enablement gates |
+| [Background Tools technical design](background-tools-design.md) | SDK seams for ADR-019 v1: components, data model, persistence, flows, API impact, and status |
 | [Behavior contracts](behavior-contracts.md) | Executable invariants and their nearest verification boundary |
-
-## Proposed extensions
-
-These proposals require the validation and scope decisions recorded in each document.
-
-| Document | Purpose |
-|---|---|
-| [Session-owned background Tools](adr/ADR-019-session-owned-background-tools.md) | Proposed receipt/notice/pull protocol, Run-local waits, continuation policies, and validation gates |
-| [Background Tools technical design](background-tools-design.md) | Draft SDK seams for ADR-019 v1: components, data model, persistence, flows, API impact, and slices |
 
 ## Platforms and release
 

@@ -59,6 +59,12 @@ Magrathea is Alpha. Its APIs and persisted formats may change before the stable 
   socket-observed cancellation, Room latency, PSS, and heap on one device. OS-initiated process death,
   reboot/backup, iOS ARC, device breadth, statistically controlled performance, penetration review,
   and production security sign-off remain external gates.
+- Session-owned background Tools (ADR-019) are strictly opt-in: a Session without a background
+  configuration, an eligible Tool, a managed session, and a `BackgroundExecutionStore` keeps
+  every Tool blocking, and direct `AgentRunner` use is always blocking. Gemini Interactions has
+  only offline fixture evidence for the receipt/notice/read projection, `magrathea-storage-web`
+  ships no background store so browser sessions stay blocking, admission is FIFO rather than
+  priority-ordered, and terminal records are retained for the Session's lifetime.
 
 ## Distribution gaps
 
