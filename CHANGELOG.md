@@ -5,6 +5,17 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## [0.1.0-alpha.19](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.18...v0.1.0-alpha.19) (2026-10-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* MessageRole gains RUNTIME and AgentEvent gains ToolHandedOff and BackgroundExecutionSettled, so exhaustive when expressions must handle them. Room and Web stores write sessions and checkpoints with storage schema 9 (schema 6 to 8 data migrates on load), and the Room database moves to version 2; earlier SDK versions cannot read either, so downgrades are not supported.
+
+### Features
+
+* run eligible Tools as session-owned background work ([#27](https://github.com/senseFy/magrathea/issues/27)) ([86489b6](https://github.com/senseFy/magrathea/commit/86489b683e201a693e07943e3b16c6c01697db45))
+
 ## [0.1.0-alpha.18](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.17...v0.1.0-alpha.18) (2026-10-19)
 
 
