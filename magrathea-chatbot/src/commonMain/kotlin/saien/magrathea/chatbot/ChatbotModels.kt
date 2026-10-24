@@ -556,7 +556,7 @@ class ChatbotException(
  * Runtime notices are not conversation content; request-building lists keep them, snapshots skip
  * them. Control traffic hides by marker, not by name: a result disappears only when the Runtime
  * marked it, a persisted call only when its paired result was marked, and an unanswered call only
- * while the Session's request reserves control names ([backgroundEnabled]).
+ * while the Session's request reserves control names (the `backgroundEnabled` flag).
  */
 internal fun List<AgentMessage>.toChatbotMessageSnapshots(
     backgroundEnabled: Boolean = false,
@@ -586,7 +586,7 @@ internal fun List<AgentMessage>.toChatbotMessageSnapshots(
  * One pass over canonical history that decides every call's visibility and identity: results
  * pair with the most recent preceding same-ID-and-name call, a call is hidden when its paired
  * result is runtime control traffic or it is an unanswered reserved-name call under
- * [backgroundEnabled], and visible calls get their activity key (message + visible ordinal).
+ * `backgroundEnabled`, and visible calls get their activity key (message + visible ordinal).
  */
 internal class ChatbotCallIndex(
     val calls: List<ChatbotCallIndexEntry>,

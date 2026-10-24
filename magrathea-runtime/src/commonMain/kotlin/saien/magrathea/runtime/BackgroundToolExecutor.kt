@@ -95,7 +95,17 @@ class BackgroundToolExecutor(
             existing
         }
         if (!alreadyRegistered) {
-            sweepRestoredRecords(sessionId)
+            try {
+                sweepRestoredRecords(sessionId)
+            } catch (failure: Throwable) {
+                rethrowWithCleanup(failure) {
+                    guard.withLock {
+                        if (listeners[sessionId.value] === listener) {
+                            listeners.remove(sessionId.value)
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -136,8 +146,12 @@ class BackgroundToolExecutor(
         changed.forEach { notifyRecordChanged(sessionId, it) }
     }
 
-    internal suspend fun unregister(sessionId: AgentSessionId) {
-        guard.withLock { listeners.remove(sessionId.value) }
+    internal suspend fun unregister(sessionId: AgentSessionId, listener: SessionListener) {
+        guard.withLock {
+            if (listeners[sessionId.value] === listener) {
+                listeners.remove(sessionId.value)
+            }
+        }
     }
 
     internal suspend fun isManaged(sessionId: AgentSessionId): Boolean =

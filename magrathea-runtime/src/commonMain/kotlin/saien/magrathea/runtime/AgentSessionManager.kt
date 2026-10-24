@@ -698,11 +698,16 @@ class DefaultAgentSessionManager(
                 runtime.registerBackground()
             } catch (failure: Throwable) {
                 rethrowWithCleanup(failure) {
-                    mutex.withLock {
-                        if (slots[sessionId.value] === claimed) slots.remove(sessionId.value)
+                    try {
+                        runtime.shutdown(SessionShutdown.NONE)
+                    } finally {
+                        mutex.withLock {
+                            if (slots[sessionId.value] === claimed) {
+                                slots.remove(sessionId.value)
+                            }
+                        }
+                        claimed.settled.complete(Unit)
                     }
-                    claimed.settled.complete(Unit)
-                    runtime.shutdown(SessionShutdown.NONE)
                 }
             }
 
@@ -1406,7 +1411,7 @@ private class ManagedAgentSession(
                 val failures = CleanupFailureAccumulator()
                 controlFailure?.let(failures::record)
                 failures.capture { sessionJob.cancelAndJoin() }
-                failures.capture { background?.unregister(sessionId) }
+                failures.capture { background?.unregister(sessionId, backgroundListener) }
                 failures.failureOrNull()?.let { failure -> throw failure }
             }
         }
