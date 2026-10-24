@@ -30,6 +30,9 @@ object BackgroundToolInstructions {
     internal const val CANCEL_TOOL = "cancel_background_executions"
     internal const val FINISH_TOOL = "finish_without_reply"
 
+    /** Per-handle result slices carried in `await_background_results` metadata. */
+    internal const val AWAIT_RESULTS_METADATA_KEY = "magrathea.background.results"
+
     /** Model-facing names of the four runtime control Tools, in Provider-projection order. */
     val CONTROL_TOOL_NAMES: Set<String> = setOf(READ_TOOL, AWAIT_TOOL, CANCEL_TOOL, FINISH_TOOL)
 

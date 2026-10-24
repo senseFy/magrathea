@@ -28,6 +28,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -37,6 +38,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import saien.magrathea.core.AgentEngineConfig
 import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentInterceptor
@@ -85,6 +87,8 @@ import saien.magrathea.core.ToolResultAudience
 import saien.magrathea.core.ToolResultPart
 import saien.magrathea.core.ToolResultRetention
 import saien.magrathea.core.ToolResultTextContent
+import saien.magrathea.core.ToolResultImageContent
+import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.provider.api.InMemoryProviderRegistry
 import saien.magrathea.provider.api.ProviderAdapter
 import saien.magrathea.provider.api.ProviderChunk
@@ -2724,10 +2728,132 @@ class BackgroundToolRuntimeContractTest {
         assertEquals(stored.content, awaitPart.content)
         assertEquals(stored.origin, awaitPart.origin)
         assertEquals(stored.contextHints, awaitPart.contextHints)
-        assertEquals(readPart.metadata, awaitPart.metadata)
+        // The single-handle await keeps the read result's identity metadata and adds its
+        // settled-results slice.
+        assertEquals(
+            JsonObject(
+                readPart.metadata.toMap() + (
+                    "magrathea.background.results" to
+                        awaitPart.metadata.getValue("magrathea.background.results")
+                    ),
+            ),
+            awaitPart.metadata,
+        )
+        val singleEntry = awaitPart.metadata
+            .getValue("magrathea.background.results").jsonArray.single().jsonObject
+        assertEquals("bg_settled", singleEntry["handle"]?.jsonPrimitive?.content)
+        assertEquals(0, singleEntry["content_offset"]?.jsonPrimitive?.long)
+        assertEquals(
+            stored.content.size.toLong(),
+            singleEntry["content_count"]?.jsonPrimitive?.long,
+        )
         val json = awaitPart.result.jsonObject
         assertNotNull(json["results"])
         assertNotNull(json["waited_ms"])
+        executor.close()
+    }
+
+    // A multi-handle await attributes each settled record's slice in handle order: every
+    // entry carries its own citations/origin/display text, while the top-level metadata
+    // stays without citations.
+    @Test
+    fun multiHandleAwaitAttributesEachSettledResult() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("await-multi")
+        executor.register(sessionId, NoopListener)
+        val firstResult = seededResult().copy(
+            content = listOf(
+                ToolResultTextContent("first text", setOf(ToolResultAudience.MODEL)),
+            ),
+            origin = ToolOrigin("src-1", "source one", "tool-1", "tool one"),
+            metadata = buildJsonObject {
+                putJsonArray("citations") {
+                    add(
+                        buildJsonObject {
+                            put("title", JsonPrimitive("Atlas"))
+                            put("url", JsonPrimitive("https://atlas"))
+                            put("snippet", JsonPrimitive("atlas note"))
+                        },
+                    )
+                }
+            },
+        )
+        val secondResult = seededResult().copy(
+            content = listOf(
+                ToolResultTextContent("second text", setOf(ToolResultAudience.MODEL)),
+                ToolResultImageContent(
+                    source = RemoteToolImageSource("https://images.example.com/beta.jpg"),
+                    mimeType = "image/jpeg",
+                    title = "Beta image",
+                    audiences = setOf(ToolResultAudience.USER),
+                ),
+            ),
+            displayText = "9 results",
+            metadata = buildJsonObject {
+                putJsonArray("citations") {
+                    add(
+                        buildJsonObject {
+                            put("title", JsonPrimitive("Beta"))
+                            put("url", JsonPrimitive("https://beta"))
+                            put("snippet", JsonPrimitive("beta note"))
+                        },
+                    )
+                }
+            },
+        )
+        store.upsert(
+            seededRecord(sessionId, "bg_first", outcome = BackgroundOutcome.SUCCEEDED)
+                .copy(result = firstResult),
+        )
+        store.upsert(
+            seededRecord(sessionId, "bg_second", outcome = BackgroundOutcome.SUCCEEDED)
+                .copy(result = secondResult),
+        )
+        val provider = scriptedProvider(
+            "await-multi",
+            toolCall(
+                "await-1",
+                "await_background_results",
+                """{"handles":["bg_first","bg_second"],"max_wait_ms":50}""",
+            ),
+        )
+        val runner = runner(provider = provider, tools = emptyList(), background = executor)
+        val events = runner.run(
+            request("await-multi", sessionId, config = backgroundConfig()),
+        ).toList()
+
+        val awaitPart = events.filterIsInstance<AgentEvent.Completed>().single().state.messages
+            .single { it.role == MessageRole.TOOL }.parts.filterIsInstance<ToolResultPart>()
+            .single { it.toolCallId == "await-1" }
+        assertEquals(firstResult.content + secondResult.content, awaitPart.content)
+        assertNull(awaitPart.metadata["citations"])
+        val entries = awaitPart.metadata
+            .getValue("magrathea.background.results").jsonArray
+        assertEquals(2, entries.size)
+
+        entries[0].jsonObject.let { entry ->
+            assertEquals("bg_first", entry["handle"]?.jsonPrimitive?.content)
+            assertEquals("exec-bg_first", entry["execution_id"]?.jsonPrimitive?.content)
+            assertEquals("deep_lookup", entry["tool_name"]?.jsonPrimitive?.content)
+            assertEquals(0, entry["content_offset"]?.jsonPrimitive?.long)
+            assertEquals(1, entry["content_count"]?.jsonPrimitive?.long)
+            assertEquals(firstResult.metadata, entry["metadata"]?.jsonObject)
+            assertEquals(
+                Json.encodeToJsonElement(ToolOrigin.serializer(), checkNotNull(firstResult.origin)),
+                entry["origin"],
+            )
+            assertNull(entry["display_text"])
+        }
+        entries[1].jsonObject.let { entry ->
+            assertEquals("bg_second", entry["handle"]?.jsonPrimitive?.content)
+            assertEquals("exec-bg_second", entry["execution_id"]?.jsonPrimitive?.content)
+            assertEquals(1, entry["content_offset"]?.jsonPrimitive?.long)
+            assertEquals(2, entry["content_count"]?.jsonPrimitive?.long)
+            assertEquals(secondResult.metadata, entry["metadata"]?.jsonObject)
+            assertEquals("9 results", entry["display_text"]?.jsonPrimitive?.content)
+            assertNull(entry["origin"])
+        }
         executor.close()
     }
 

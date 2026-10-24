@@ -33,6 +33,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -2810,11 +2811,38 @@ class DefaultAgentRunner(
                         }
                     }
                 }
+                // Every settled record contributes its content slice and a metadata entry
+                // with its slice coordinates, so projections can attribute citations and
+                // images back to the correct handle.
+                var contentOffset = 0
+                val settledEntries = mutableListOf<JsonObject>()
                 val content = handles.mapNotNull { handle ->
                     records.firstOrNull {
                         it.handle == handle && it.state == BackgroundExecutionState.TERMINAL
                     }
-                }.flatMap { it.result?.content ?: emptyList() }
+                }.flatMap { record ->
+                    val slice = record.result?.content ?: emptyList()
+                    settledEntries += buildJsonObject {
+                        put("handle", record.handle)
+                        put("execution_id", record.executionId)
+                        put("tool_name", record.toolName)
+                        put("content_offset", contentOffset)
+                        put("content_count", slice.size)
+                        record.result?.displayText?.let { put("display_text", it) }
+                        record.result?.origin?.let { origin ->
+                            put(
+                                "origin",
+                                Json.encodeToJsonElement(ToolOrigin.serializer(), origin),
+                            )
+                        }
+                        put(
+                            "metadata",
+                            record.result?.metadata ?: JsonObject(emptyMap()),
+                        )
+                    }
+                    contentOffset += slice.size
+                    slice
+                }
                 // A single-handle settled await carries the record's stored result fields
                 // (content/origin/contextHints/metadata) exactly like a direct read, so
                 // downstream projections see the same citations and identity.
@@ -2830,8 +2858,8 @@ class DefaultAgentRunner(
                         content = content,
                         origin = single?.result?.origin,
                         contextHints = single?.result?.contextHints,
-                        metadata = single?.let { record ->
-                            buildJsonObject {
+                        metadata = buildJsonObject {
+                            single?.let { record ->
                                 record.result?.metadata?.forEach { (key, value) ->
                                     put(key, value)
                                 }
@@ -2839,7 +2867,10 @@ class DefaultAgentRunner(
                                 put("magrathea.background.execution_id", record.executionId)
                                 put("magrathea.background.tool_name", record.toolName)
                             }
-                        } ?: JsonObject(emptyMap()),
+                            putJsonArray(BackgroundToolInstructions.AWAIT_RESULTS_METADATA_KEY) {
+                                settledEntries.forEach { add(it) }
+                            }
+                        },
                     ),
                     explicitWaitMillis = waited,
                     finishRequested = false,

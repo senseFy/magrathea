@@ -23,6 +23,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -30,16 +31,28 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import saien.magrathea.core.AgentEngineConfig
+import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.BackgroundConsumptionPolicy
 import saien.magrathea.core.BackgroundExecutionConfig
+import saien.magrathea.core.BackgroundExecutionState
+import saien.magrathea.core.BackgroundOutcome
+import saien.magrathea.core.MessageRole
+import saien.magrathea.core.RemoteToolImageSource
 import saien.magrathea.core.RuntimeConfig
 import saien.magrathea.core.StopReason
 import saien.magrathea.core.ToolBackgroundPolicy
+import saien.magrathea.core.ToolBackgroundReceipt
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolDefinition
 import saien.magrathea.core.ToolExecutionRequest
 import saien.magrathea.core.ToolExecutionResult
+import saien.magrathea.core.ToolOrigin
+import saien.magrathea.core.ToolResultAudience
+import saien.magrathea.core.ToolResultImageContent
 import saien.magrathea.core.ToolResultPart
+import saien.magrathea.core.ToolResultTextContent
+import saien.magrathea.runtime.BackgroundExecutionView
+import saien.magrathea.runtime.BackgroundSessionSnapshot
 import saien.magrathea.provider.api.InMemoryProviderRegistry
 import saien.magrathea.provider.api.ProviderAdapter
 import saien.magrathea.provider.api.ProviderChunk
@@ -189,6 +202,230 @@ class ChatbotBackgroundContractTest {
 
         client.close()
         executor.close()
+    }
+
+    // A multi-handle await attributes each settled slice to its own origin activity — each
+    // search keeps its own citations and images instead of losing them to the await part.
+    @Test
+    fun multiHandleAwaitAttachesEachResultToItsOriginActivity() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val lookup = CitingTool("deep_lookup", "Atlas", "https://atlas", "note-a")
+        val images = CitingTool("slow_lookup", "Beta", "https://beta", "note-b", withImage = true)
+        val provider = ScriptedProvider("test")
+        provider.script += {
+            chunk(
+                toolCalls = listOf(
+                    toolCall("call-1", "deep_lookup"),
+                    toolCall("call-2", "slow_lookup"),
+                ),
+            )
+        }
+        provider.script += { request ->
+            val handles = request.messages
+                .flatMap { it.parts }
+                .filterIsInstance<ToolResultPart>()
+                .mapNotNull { it.backgroundReceipt?.handle }
+            chunk(
+                toolCalls = listOf(
+                    toolCall(
+                        "await-1",
+                        "await_background_results",
+                        handles.joinToString(
+                            ",",
+                            prefix = """{"handles":[""",
+                            postfix = """],"max_wait_ms":5000}""",
+                        ) { "\"$it\"" },
+                    ),
+                ),
+            )
+        }
+        provider.script += { chunk(text = "answer") }
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(provider, listOf(lookup, images), executor, persistence)
+        val client = client(runner, persistence, executor, backgroundConfig())
+        val session = client.createSession(testChatbotConfiguration(provider = "test"))
+
+        session.send("search text and images")
+        advanceTimeBy(50)
+        runCurrent()
+        lookup.gate.complete(Unit)
+        images.gate.complete(Unit)
+        advanceUntilIdle()
+
+        val snapshot = session.snapshot()
+        assertEquals(ChatbotStatus.COMPLETED, snapshot.status)
+        val first = snapshot.toolActivities.single { it.call.id == "call-1" }
+        assertEquals(ChatbotToolActivityStatus.SUCCEEDED, first.status)
+        val firstResult = assertNotNull(first.result)
+        assertEquals("call-1", firstResult.id)
+        assertEquals("deep_lookup", firstResult.name)
+        assertEquals(
+            listOf(ChatbotCitation("Atlas", "https://atlas", "note-a")),
+            firstResult.citations,
+        )
+        assertTrue(firstResult.images.isEmpty())
+        val second = snapshot.toolActivities.single { it.call.id == "call-2" }
+        assertEquals(ChatbotToolActivityStatus.SUCCEEDED, second.status)
+        val secondResult = assertNotNull(second.result)
+        assertEquals("call-2", secondResult.id)
+        assertEquals(
+            listOf(ChatbotCitation("Beta", "https://beta", "note-b")),
+            secondResult.citations,
+        )
+        assertEquals(1, secondResult.images.size)
+        assertEquals("Beta image", secondResult.images.single().title)
+        assertTrue(snapshot.toolActivities.none { it.call.id == "await-1" })
+
+        client.close()
+        executor.close()
+    }
+
+    // Retrieval attribution stays safe on hand-built history: a legacy single-handle await
+    // without the slices array still attaches, the read path is unchanged, and an
+    // out-of-range slice reports empty content instead of failing.
+    @Test
+    fun retrievalProjectionKeepsLegacyAndReadPaths() {
+        val receipt = { callId: String, handle: String ->
+            ToolResultPart(
+                toolCallId = callId,
+                toolName = "web_search",
+                result = JsonPrimitive(""),
+                backgroundReceipt = ToolBackgroundReceipt(
+                    handle,
+                    "exec-$handle",
+                    BackgroundExecutionState.RUNNING,
+                ),
+            )
+        }
+        val text = ToolResultTextContent("body", setOf(ToolResultAudience.USER))
+        val origin = ToolOrigin("src", "source", "tool", "tool label")
+        val legacyAwait = ToolResultPart(
+            toolCallId = "await-legacy",
+            toolName = "await_background_results",
+            result = buildJsonObject {
+                putJsonArray("results") {
+                    addJsonObject {
+                        put("handle", "bg_legacy")
+                        put("status", "succeeded")
+                    }
+                }
+            },
+            content = listOf(text),
+            metadata = buildJsonObject {
+                put("magrathea.background.handle", "bg_legacy")
+                putJsonArray("citations") {
+                    addJsonObject {
+                        put("title", "Legacy")
+                        put("url", "https://legacy")
+                        put("snippet", "old")
+                    }
+                }
+            },
+        )
+        val outOfRangeAwait = ToolResultPart(
+            toolCallId = "await-slices",
+            toolName = "await_background_results",
+            result = buildJsonObject {
+                putJsonArray("results") {
+                    addJsonObject {
+                        put("handle", "bg_slice")
+                        put("status", "succeeded")
+                    }
+                }
+            },
+            content = listOf(text),
+            metadata = buildJsonObject {
+                putJsonArray("magrathea.background.results") {
+                    addJsonObject {
+                        put("handle", "bg_slice")
+                        put("execution_id", "exec-bg_slice")
+                        put("tool_name", "web_search")
+                        put("content_offset", 99)
+                        put("content_count", 5)
+                        put("display_text", "9 results")
+                        put(
+                            "origin",
+                            Json.encodeToJsonElement(ToolOrigin.serializer(), origin),
+                        )
+                        put("metadata", buildJsonObject {
+                            putJsonArray("citations") {
+                                addJsonObject {
+                                    put("title", "Sliced")
+                                    put("url", "https://sliced")
+                                    put("snippet", "slice")
+                                }
+                            }
+                        })
+                    }
+                }
+            },
+        )
+        val read = ToolResultPart(
+            toolCallId = "read-1",
+            toolName = "read_background_result",
+            result = JsonPrimitive("read body"),
+            content = listOf(text),
+            metadata = buildJsonObject {
+                put("magrathea.background.handle", "bg_read")
+                putJsonArray("citations") {
+                    addJsonObject {
+                        put("title", "Read")
+                        put("url", "https://read")
+                        put("snippet", "read note")
+                    }
+                }
+            },
+        )
+        val messages = listOf(
+            AgentMessage(role = MessageRole.TOOL, parts = listOf(receipt("call-legacy", "bg_legacy"))),
+            AgentMessage(role = MessageRole.TOOL, parts = listOf(receipt("call-slice", "bg_slice"))),
+            AgentMessage(role = MessageRole.TOOL, parts = listOf(receipt("call-read", "bg_read"))),
+            AgentMessage(role = MessageRole.TOOL, parts = listOf(legacyAwait)),
+            AgentMessage(role = MessageRole.TOOL, parts = listOf(outOfRangeAwait)),
+            AgentMessage(role = MessageRole.TOOL, parts = listOf(read)),
+        )
+        val view = { handle: String, callId: String ->
+            BackgroundExecutionView(
+                handle = handle,
+                executionId = "exec-$handle",
+                toolName = "web_search",
+                originCallId = callId,
+                sourceId = "src-$handle",
+                state = BackgroundExecutionState.TERMINAL,
+                outcome = BackgroundOutcome.SUCCEEDED,
+            )
+        }
+        val projection = buildBackgroundProjection(
+            background = BackgroundSessionSnapshot(
+                executions = listOf(
+                    view("bg_legacy", "call-legacy"),
+                    view("bg_slice", "call-slice"),
+                    view("bg_read", "call-read"),
+                ),
+                pendingActivation = null,
+                requiresExecutionHost = false,
+            ),
+            messages = messages,
+            toolExecutions = emptyList(),
+        )
+        val projected = listOf(
+            activity("call-legacy", "web_search"),
+            activity("call-slice", "web_search"),
+            activity("call-read", "web_search"),
+        ).applyBackgroundProjection(projection)
+
+        val legacy = assertNotNull(projected[0].result)
+        assertEquals("call-legacy", legacy.id)
+        assertEquals(listOf(ChatbotCitation("Legacy", "https://legacy", "old")), legacy.citations)
+        val sliced = assertNotNull(projected[1].result)
+        assertEquals("call-slice", sliced.id)
+        assertEquals(listOf(ChatbotCitation("Sliced", "https://sliced", "slice")), sliced.citations)
+        assertEquals("9 results", sliced.text)
+        assertNotNull(sliced.origin)
+        val readResult = assertNotNull(projected[2].result)
+        assertEquals("call-read", readResult.id)
+        assertEquals(listOf(ChatbotCitation("Read", "https://read", "read note")), readResult.citations)
     }
 
     // 1c. The record settles while the final answer streams — too late for a COALESCED
@@ -548,6 +785,64 @@ class ChatbotBackgroundContractTest {
                             ProviderEvent.Completed("COMPLETED", StopReason.COMPLETED, null),
                         ),
                     ),
+            )
+        }
+    }
+
+    private fun activity(callId: String, toolName: String) = ChatbotToolActivitySnapshot(
+        key = ChatbotToolActivityKey("msg-1", 0),
+        call = ChatbotToolCall(callId, toolName, "{}", partial = false),
+        status = ChatbotToolActivityStatus.RUNNING,
+    )
+
+    private class CitingTool(
+        name: String,
+        private val citationTitle: String,
+        private val citationUrl: String,
+        private val citationSnippet: String,
+        private val withImage: Boolean = false,
+    ) : ToolExecutor {
+        override val definition = ToolDefinition(
+            name = name,
+            description = "citing",
+            schema = buildJsonObject { put("type", "object") },
+        )
+        override val backgroundPolicy = ToolBackgroundPolicy.ELIGIBLE
+        val gate = CompletableDeferred<Unit>()
+
+        override suspend fun execute(request: ToolExecutionRequest): ToolExecutionResult {
+            gate.await()
+            return ToolExecutionResult(
+                toolCallId = request.toolCall.toolCallId,
+                toolName = request.toolCall.toolName,
+                result = JsonPrimitive("result-${request.toolCall.toolName}"),
+                content = buildList {
+                    add(
+                        ToolResultTextContent(
+                            "body-${request.toolCall.toolName}",
+                            setOf(ToolResultAudience.USER),
+                        ),
+                    )
+                    if (withImage) {
+                        add(
+                            ToolResultImageContent(
+                                source = RemoteToolImageSource("https://img.example.com/beta.jpg"),
+                                mimeType = "image/jpeg",
+                                title = "Beta image",
+                                audiences = setOf(ToolResultAudience.USER),
+                            ),
+                        )
+                    }
+                },
+                metadata = buildJsonObject {
+                    putJsonArray("citations") {
+                        addJsonObject {
+                            put("title", citationTitle)
+                            put("url", citationUrl)
+                            put("snippet", citationSnippet)
+                        }
+                    }
+                },
             )
         }
     }

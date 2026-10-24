@@ -1,8 +1,15 @@
 package saien.magrathea.chatbot
 
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import saien.magrathea.core.ToolOrigin
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.BackgroundExecutionState
 import saien.magrathea.core.BackgroundOutcome
@@ -15,6 +22,7 @@ import saien.magrathea.runtime.BackgroundToolInstructions
 
 internal const val PREEMPTED_METADATA = "magrathea.tool.preempted"
 private const val HANDLE_METADATA = "magrathea.background.handle"
+private const val AWAIT_RESULTS_METADATA = "magrathea.background.results"
 
 /**
  * Authoritative evidence for the background projection: receipts and runtime-authored closes in
@@ -84,8 +92,8 @@ internal fun buildBackgroundProjection(
             if (part.metadata[PREEMPTED_METADATA] != null) {
                 preempted += part.toolCallId
             }
-            part.readRetrievalHandle()?.let { handle ->
-                readResults[handle] = part
+            part.retrievalResults().forEach { (handle, result) ->
+                readResults[handle] = result
             }
         }
     }
@@ -109,17 +117,62 @@ internal fun List<ChatbotToolActivitySnapshot>.applyBackgroundProjection(
     projection: ChatbotBackgroundProjection,
 ): List<ChatbotToolActivitySnapshot> = map { projection.apply(it) }
 
-/** The retrieval payload for [handle], from the latest read or single-handle await result. */
-private fun ToolResultPart.readRetrievalHandle(): String? {
+/**
+ * The retrieval payloads a part carries: one handle → result pair per settled handle, so a
+ * multi-handle await attributes each slice to its own background execution. Later messages
+ * overwrite earlier pairs of the same handle.
+ */
+private fun ToolResultPart.retrievalResults(): List<Pair<String, ToolResultPart>> {
     if (toolName == "read_background_result") {
         return metadata[HANDLE_METADATA]?.jsonPrimitive?.content
+            ?.let { listOf(it to this) }
+            .orEmpty()
     }
     if (toolName == "await_background_results") {
-        val results = (result as? JsonObject)?.get("results") as? JsonArray ?: return null
-        val single = (results.singleOrNull() as? JsonObject) ?: return null
-        return single["handle"]?.jsonPrimitive?.content
+        val entries = metadata[AWAIT_RESULTS_METADATA] as? JsonArray
+        if (entries != null) {
+            return entries.mapNotNull { entry ->
+                (entry as? JsonObject)?.let(::awaitSliceResult)
+            }
+        }
+        val results = (result as? JsonObject)?.get("results") as? JsonArray ?: return emptyList()
+        val single = (results.singleOrNull() as? JsonObject) ?: return emptyList()
+        val handle = single["handle"]?.jsonPrimitive?.content ?: return emptyList()
+        return listOf(handle to this)
     }
-    return null
+    return emptyList()
+}
+
+/**
+ * Rebuilds the result one awaited handle delivered: its own content slice, metadata (with the
+ * runtime's handle/execution/Tool identity), origin, and display text. An out-of-range slice
+ * yields empty content rather than a failure.
+ */
+private fun ToolResultPart.awaitSliceResult(entry: JsonObject): Pair<String, ToolResultPart>? {
+    val handle = entry["handle"]?.jsonPrimitive?.content ?: return null
+    val offset = entry["content_offset"]?.jsonPrimitive?.intOrNull ?: 0
+    val count = entry["content_count"]?.jsonPrimitive?.intOrNull ?: 0
+    val slice = if (offset >= 0 && count >= 0 && offset + count <= content.size) {
+        content.subList(offset, offset + count)
+    } else {
+        emptyList()
+    }
+    val origin = (entry["origin"] as? JsonObject)?.let { encoded ->
+        runCatching {
+            Json.decodeFromJsonElement(ToolOrigin.serializer(), encoded)
+        }.getOrNull()
+    }
+    return handle to copy(
+        metadata = buildJsonObject {
+            (entry["metadata"] as? JsonObject)?.forEach { (key, value) -> put(key, value) }
+            put("magrathea.background.handle", handle)
+            entry["execution_id"]?.let { put("magrathea.background.execution_id", it) }
+            entry["tool_name"]?.let { put("magrathea.background.tool_name", it) }
+        },
+        origin = origin,
+        displayText = (entry["display_text"] as? JsonPrimitive)?.content,
+        content = slice,
+    )
 }
 
 internal fun BackgroundExecutionView.toChatbotBackgroundExecution(): ChatbotBackgroundExecution =
