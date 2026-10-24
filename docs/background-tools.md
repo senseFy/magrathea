@@ -59,6 +59,8 @@ use always stays blocking because there is no managed Session to own the work.
   allowance is non-zero.
 - Runtime-owned instruction text is appended automatically when the feature is enabled; hosts
   add no prompt text.
+- Waiting allowances and repeated-poll checks belong to one Run: a new Run resets them, while
+  resuming an interrupted Run retains them.
 - The four names are reserved while a request enables background execution: declaring a business
   Tool under one fails request validation. A stored `isError` result settles the record as failed
   and keeps its error code on retrieval.

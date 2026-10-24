@@ -2392,7 +2392,7 @@ class DefaultAgentRunner(
                                     entry.indexed.toolCall.toolName,
                                 )
                             ) {
-                                decision.result.withBackgroundControlMarker()
+                                decision.result.withBackgroundControlMarker(runId)
                             } else {
                                 decision.result
                             }
@@ -2405,11 +2405,12 @@ class DefaultAgentRunner(
                                 arguments = decision.arguments,
                                 toolCall = entry.indexed.toolCall,
                                 request = request,
+                                runId = runId,
                                 state = state,
                                 explicitWaitTracker = explicitWaitTracker,
                                 runtimeNoticeAdded = runtimeNoticeAdded,
                             )
-                            val result = outcome.result.withBackgroundControlMarker()
+                            val result = outcome.result.withBackgroundControlMarker(runId)
                             if (outcome.finishRequested) finishRequested = true
                             persistCompleted(entry, result)
                             CallResolution.Final(result)
@@ -2743,6 +2744,7 @@ class DefaultAgentRunner(
         arguments: JsonObject,
         toolCall: ToolCallPart,
         request: AgentRequest,
+        runId: AgentRunId,
         state: AgentStateSnapshot,
         explicitWaitTracker: ExplicitWaitTracker,
         runtimeNoticeAdded: Boolean,
@@ -2766,7 +2768,7 @@ class DefaultAgentRunner(
                     )
                 } else if (
                     record.state != BackgroundExecutionState.TERMINAL &&
-                    state.messages.pendingReadResultCount(handle) > 0
+                    state.messages.pendingReadResultCount(handle, runId) > 0
                 ) {
                     ControlOutcome(
                         result = backgroundControlError(
@@ -2805,7 +2807,7 @@ class DefaultAgentRunner(
                 }
             }
             BackgroundToolInstructions.AWAIT_TOOL -> {
-                if (state.messages.awaitAllowanceExhaustedEarlier()) {
+                if (state.messages.awaitAllowanceExhaustedEarlier(runId)) {
                     return ControlOutcome(
                         result = backgroundControlError(
                             toolCall,
@@ -3347,12 +3349,13 @@ class DefaultAgentRunner(
         isError = true,
     )
 
-    /** Marks a runtime-authored control result so projections hide it without name matching. */
-    private fun ToolExecutionResult.withBackgroundControlMarker(): ToolExecutionResult =
+    /** Identifies runtime control traffic and its owning Run, including after resume. */
+    private fun ToolExecutionResult.withBackgroundControlMarker(runId: AgentRunId): ToolExecutionResult =
         copy(
             metadata = buildJsonObject {
                 metadata.forEach { (key, value) -> put(key, value) }
                 put(BackgroundToolInstructions.CONTROL_RESULT_METADATA_KEY, JsonPrimitive(true))
+                put(BackgroundToolInstructions.CONTROL_RUN_ID_METADATA_KEY, JsonPrimitive(runId.value))
             },
         )
 

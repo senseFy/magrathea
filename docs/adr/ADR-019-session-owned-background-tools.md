@@ -12,8 +12,8 @@
 
 ## Scope and settled principles
 
-The discussion established these architectural boundaries; this proposal makes their delivery
-mechanism concrete without claiming that the implementation or Provider validation exists:
+These architectural boundaries define the delivery mechanism implemented in SDK v1. Provider
+validation evidence and the remaining host-enablement gates are recorded in the technical design:
 
 - The model judges answer sufficiency, relevance, user-request satisfaction, and obsolete work.
   Runtime does not infer those judgments from prose or add a business Task/Goal completion layer.
@@ -33,16 +33,17 @@ foreground handoff allowance. O-02 closed with the S0 protocol evidence and the 
 and the contract was accepted on 2026-10-24. O-03 and O-04 now gate enabling the feature in a
 host, not the SDK contract.
 
-## Current implementation and gaps
+## Baseline before background Tools
 
-`DefaultAgentRunner` waits for the full Tool batch. Execution timeout cancels the executor and
-returns a Tool error; it does not retain a result channel. `FollowUpMessageProvider` operates only
-inside a live Run. The managed Tool journal belongs to the current Run/checkpoint, and
-`ChatbotSession.send` stops pending execution before admitting a new request.
+Before this feature, `DefaultAgentRunner` waited for the full Tool batch. Execution timeout
+cancelled the executor and returned a Tool error without retaining a result channel.
+`FollowUpMessageProvider` operated only inside a live Run. The managed Tool journal belonged to
+the current Run/checkpoint, and `ChatbotSession.send` stopped pending execution before admitting a
+new request. This remains the baseline for blocking consumers.
 
 `DefaultReplayPolicy` repairs a missing result with `No result provided` and `isError = true`.
 It also excludes cancelled/failed assistant messages. These are important constraints on foreground
-preemption and delivery accounting, not just presentation details. The new path must close real
+preemption and delivery accounting, not just presentation details. The background path must close real
 Tool calls before new input and cannot assume that sending a result to a cancelled invocation made
 it durable model context.
 

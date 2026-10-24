@@ -2,6 +2,7 @@ package saien.magrathea.runtime
 
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.AgentRequest
+import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.BackgroundConsumptionPolicy
 import saien.magrathea.core.BackgroundExecutionConfig
@@ -39,6 +40,9 @@ object BackgroundToolInstructions {
      * the same names without disappearing.
      */
     const val CONTROL_RESULT_METADATA_KEY = "magrathea.background.control"
+
+    /** Owning Run of a control result; survives journal replay and Session persistence. */
+    internal const val CONTROL_RUN_ID_METADATA_KEY = "magrathea.background.control_run_id"
 
     /**
      * Stored-result error semantics carried by read/await retrievals so projections can restore
@@ -342,9 +346,8 @@ private val PENDING_READ_STATUSES = setOf("queued", "running")
  * Non-error `read_background_result` results in [messages] that already told the model this
  * handle is not ready — used to refuse repeated polling inside one Run.
  */
-internal fun List<AgentMessage>.pendingReadResultCount(handle: String): Int =
-    flatMap { it.parts }
-        .filterIsInstance<ToolResultPart>()
+internal fun List<AgentMessage>.pendingReadResultCount(handle: String, runId: AgentRunId): Int =
+    backgroundControlResults(runId)
         .count { part ->
             !part.isError &&
                 part.toolName == BackgroundToolInstructions.READ_TOOL &&
@@ -358,14 +361,26 @@ internal fun List<AgentMessage>.pendingReadResultCount(handle: String): Int =
  * True when an earlier non-error `await_background_results` in this Run already returned
  * `wait_allowance_exhausted` — further awaits are refused instead of returned silently.
  */
-internal fun List<AgentMessage>.awaitAllowanceExhaustedEarlier(): Boolean =
-    flatMap { it.parts }
-        .filterIsInstance<ToolResultPart>()
+internal fun List<AgentMessage>.awaitAllowanceExhaustedEarlier(runId: AgentRunId): Boolean =
+    backgroundControlResults(runId)
         .any { part ->
             !part.isError &&
                 part.toolName == BackgroundToolInstructions.AWAIT_TOOL &&
                 (part.result as? JsonObject)
                     ?.get("wait_allowance_exhausted")?.jsonPrimitive?.booleanOrNull == true
+        }
+
+// A Session history spans multiple Runs. Message positions and the last USER message cannot
+// delimit a Run after resume or steering; use the identity persisted on runtime control results.
+private fun List<AgentMessage>.backgroundControlResults(runId: AgentRunId): Sequence<ToolResultPart> =
+    asSequence()
+        .flatMap { it.parts }
+        .filterIsInstance<ToolResultPart>()
+        .filter { part ->
+            (part.metadata[BackgroundToolInstructions.CONTROL_RESULT_METADATA_KEY] as? JsonPrimitive)
+                ?.booleanOrNull == true &&
+                (part.metadata[BackgroundToolInstructions.CONTROL_RUN_ID_METADATA_KEY] as? JsonPrimitive)
+                    ?.contentOrNull == runId.value
         }
 
 /**
