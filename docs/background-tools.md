@@ -59,13 +59,19 @@ use always stays blocking because there is no managed Session to own the work.
   allowance is non-zero.
 - Runtime-owned instruction text is appended automatically when the feature is enabled; hosts
   add no prompt text.
+- The four names are reserved while a request enables background execution: declaring a business
+  Tool under one fails request validation. A stored `isError` result settles the record as failed
+  and keeps its error code on retrieval.
+- The Chatbot hides control traffic by a runtime-authored result marker
+  (`magrathea.background.control`), never by name, so a feature-off Session may freely use Tools
+  with the same names.
 
 ## Host responsibilities
 
 - Schedule a continuation when the lease snapshot's `background?.pendingActivation` is
   non-null: `AgentSessionLease.startContinuation(request)` builds the Run from the Session's
-  authoritative messages. Chatbot hosts can call
-  `ChatbotController.continueWithBackgroundResults()`, which does the same check internally.
+  authoritative messages. Chatbot hosts call
+  `ChatbotSession.continueWithBackgroundResults()`, which does the same check internally.
 - `stopAll()` cancels every live background execution and suppresses unacknowledged records;
   `cancelBackground(handles)` targets specific executions, the host form of the model's cancel
   control.
@@ -76,7 +82,7 @@ use always stays blocking because there is no managed Session to own the work.
 
 ## Chatbot projection
 
-`ChatbotConversation` projects background work without exposing control calls:
+`ChatbotSnapshot` projects background work without exposing control calls:
 
 - Each Tool activity carries an optional `background` (`ChatbotBackgroundExecution` with the
   handle, Tool name, origin call, and a `ChatbotBackgroundState` of queued, running, succeeded,

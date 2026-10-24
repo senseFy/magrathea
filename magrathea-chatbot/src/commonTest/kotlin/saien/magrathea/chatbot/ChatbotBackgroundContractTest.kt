@@ -6,6 +6,7 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -377,9 +378,18 @@ class ChatbotBackgroundContractTest {
                 }
             },
         )
+        // Each receipt pairs with its assistant call under message-id + call-ordinal binding.
+        fun callMessage(id: String, callId: String) = AgentMessage(
+            id = id,
+            role = MessageRole.ASSISTANT,
+            parts = listOf(toolCall(callId, "web_search")),
+        )
         val messages = listOf(
+            callMessage("msg-legacy", "call-legacy"),
             AgentMessage(role = MessageRole.TOOL, parts = listOf(receipt("call-legacy", "bg_legacy"))),
+            callMessage("msg-slice", "call-slice"),
             AgentMessage(role = MessageRole.TOOL, parts = listOf(receipt("call-slice", "bg_slice"))),
+            callMessage("msg-read", "call-read"),
             AgentMessage(role = MessageRole.TOOL, parts = listOf(receipt("call-read", "bg_read"))),
             AgentMessage(role = MessageRole.TOOL, parts = listOf(legacyAwait)),
             AgentMessage(role = MessageRole.TOOL, parts = listOf(outOfRangeAwait)),
@@ -410,9 +420,12 @@ class ChatbotBackgroundContractTest {
             toolExecutions = emptyList(),
         )
         val projected = listOf(
-            activity("call-legacy", "web_search"),
-            activity("call-slice", "web_search"),
-            activity("call-read", "web_search"),
+            activity("call-legacy", "web_search")
+                .copy(key = ChatbotToolActivityKey("msg-legacy", 0)),
+            activity("call-slice", "web_search")
+                .copy(key = ChatbotToolActivityKey("msg-slice", 0)),
+            activity("call-read", "web_search")
+                .copy(key = ChatbotToolActivityKey("msg-read", 0)),
         ).applyBackgroundProjection(projection)
 
         val legacy = assertNotNull(projected[0].result)
@@ -673,6 +686,244 @@ class ChatbotBackgroundContractTest {
         client.close()
     }
 
+
+    // 8. Reused Provider call IDs across turns: each receipt binds to its own call, so both
+    // activities carry their own background execution and result identity.
+    @Test
+    fun reusedCallIdsBindReceiptsToTheirOwnCalls() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val tool = GatedTool("deep_lookup")
+        val provider = ScriptedProvider("test")
+        provider.script += { chunk(toolCalls = listOf(toolCall("call-1", "deep_lookup"))) }
+        provider.script += { chunk(toolCalls = listOf(toolCall("call-1", "deep_lookup"))) }
+        provider.script += { chunk(text = "done") }
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(provider, listOf(tool), executor, persistence)
+        val client = client(runner, persistence, executor, backgroundConfig())
+        val session = client.createSession(testChatbotConfiguration(provider = "test"))
+
+        session.send("two lookups, same call id")
+        advanceTimeBy(50)
+        runCurrent()
+
+        val snapshot = session.snapshot()
+        val activities = snapshot.toolActivities.filter { it.call.id == "call-1" }
+        assertEquals(2, activities.size)
+        val records = store.load(
+            saien.magrathea.core.AgentSessionId(checkNotNull(snapshot.sessionId)),
+        ).records
+        assertEquals(2, records.size)
+        assertNotEquals(records[0].handle, records[1].handle)
+        assertEquals(records[0].handle, activities[0].background?.handle)
+        assertEquals(records[1].handle, activities[1].background?.handle)
+        client.close()
+        executor.close()
+    }
+
+    // 9. A failed background execution restores its error semantics on the origin activity:
+    // FAILED with the Tool's own isError and errorCode from the read's metadata.
+    @Test
+    fun failedBackgroundResultRestoresErrorSemantics() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val tool = ErrorResultTool("deep_lookup", 100)
+        val provider = ScriptedProvider("test")
+        provider.script += { chunk(toolCalls = listOf(toolCall("call-1", "deep_lookup"))) }
+        provider.script += { chunk(text = "first answer") }
+        // The continuation's model turn reads the settled handle.
+        provider.script += { request ->
+            val handle = request.messages
+                .flatMap { it.parts }
+                .filterIsInstance<ToolResultPart>()
+                .firstNotNullOf { it.backgroundReceipt?.handle }
+            chunk(
+                toolCalls = listOf(
+                    toolCall(
+                        "read-1",
+                        "read_background_result",
+                        """{"handle":"$handle"}""",
+                    ),
+                ),
+            )
+        }
+        provider.script += { chunk(text = "supplement") }
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(provider, listOf(tool), executor, persistence)
+        val client = client(runner, persistence, executor, backgroundConfig())
+        val session = client.createSession(testChatbotConfiguration(provider = "test"))
+
+        session.send("look up project atlas")
+        advanceTimeBy(200)
+        runCurrent()
+        assertTrue(session.continueWithBackgroundResults())
+        advanceUntilIdle()
+
+        val snapshot = session.snapshot()
+        val activity = snapshot.toolActivities.single { it.call.id == "call-1" }
+        assertEquals(ChatbotToolActivityStatus.FAILED, activity.status)
+        val result = assertNotNull(activity.result)
+        assertTrue(result.isError)
+        assertEquals("LOOKUP_FAILED", result.errorCode)
+        assertEquals("call-1", result.id)
+        assertEquals("deep_lookup", result.name)
+        client.close()
+        executor.close()
+    }
+
+    // 10. With background off, a business Tool that happens to share a control name is an
+    // ordinary Tool: its call, result, and activity stay visible.
+    @Test
+    fun featureOffBusinessToolNamedLikeAControlStaysVisible() = runTest {
+        val provider = ScriptedProvider("test")
+        provider.script += {
+            chunk(toolCalls = listOf(toolCall("call-1", "finish_without_reply")))
+        }
+        provider.script += { chunk(text = "done") }
+        val tool = object : ToolExecutor {
+            override val definition = ToolDefinition(
+                name = "finish_without_reply",
+                description = "business tool",
+                schema = buildJsonObject { put("type", "object") },
+            )
+
+            override suspend fun execute(
+                request: ToolExecutionRequest,
+            ): ToolExecutionResult = ToolExecutionResult(
+                toolCallId = request.toolCall.toolCallId,
+                toolName = request.toolCall.toolName,
+                result = JsonPrimitive("business result"),
+                displayText = "Business result",
+            )
+        }
+        val persistence = InMemoryAgentPersistence()
+        val runner = DefaultAgentRunner(
+            providerRegistry = InMemoryProviderRegistry(listOf(provider)),
+            toolRegistry = InMemoryToolRegistry(listOf(tool)),
+            persistence = persistence,
+            dispatcher = StandardTestDispatcher(testScheduler),
+            timeSource = VirtualTimeSource(testScheduler),
+        )
+        val client = createChatbotClient(
+            runner = runner,
+            requestFactory = DefaultChatbotRequestFactory(
+                tools = listOf(tool.definition),
+            ),
+            persistence = persistence,
+            closeResources = {},
+            sessionDispatcher = StandardTestDispatcher(testScheduler),
+        )
+        val session = client.createSession(testChatbotConfiguration(provider = "test"))
+
+        session.send("hi")
+        advanceUntilIdle()
+
+        val snapshot = session.snapshot()
+        assertEquals(ChatbotStatus.COMPLETED, snapshot.status)
+        val activity = snapshot.toolActivities.single { it.call.id == "call-1" }
+        assertEquals("finish_without_reply", activity.call.name)
+        assertEquals(ChatbotToolActivityStatus.SUCCEEDED, activity.status)
+        assertEquals("Business result", activity.result?.text)
+        assertTrue(
+            snapshot.messages.any { message ->
+                message.toolCalls.any { it.id == "call-1" } &&
+                    message.toolCalls.any { it.name == "finish_without_reply" }
+            },
+        )
+        assertTrue(
+            snapshot.messages.any { message ->
+                message.toolResults.any { it.id == "call-1" }
+            },
+        )
+        client.close()
+    }
+
+    // 11. A legacy copy overload keeps the background projection (F5).
+    @Test
+    fun legacyCopyOverloadPreservesTheBackgroundProjection() {
+        val background = ChatbotBackgroundSnapshot(
+            executions = listOf(
+                ChatbotBackgroundExecution(
+                    handle = "bg_1",
+                    toolName = "deep_lookup",
+                    originCallId = "call-1",
+                    state = ChatbotBackgroundState.RUNNING,
+                ),
+            ),
+            hasPendingActivation = true,
+            requiresExecutionHost = true,
+        )
+        val snapshot = ChatbotSnapshot(
+            configuration = testChatbotConfiguration(),
+            background = background,
+        )
+        // Resolves to the shortest legacy copy signature (no stopReason/replay parameters).
+        val copied = snapshot.copy(status = ChatbotStatus.RUNNING)
+        assertEquals(background, copied.background)
+        assertEquals(ChatbotStatus.RUNNING, copied.status)
+        val stopCopied = snapshot.copy(stopReason = ChatbotStopReason.COMPLETED)
+        assertEquals(background, stopCopied.background)
+    }
+
+
+    // 12. A marked control result hides only its own call: a later business call that reuses
+    // the same Provider call ID stays visible with its result (the F9 marker pairs calls and
+    // results by call identity, not by bare ID).
+    @Test
+    fun markedControlResultHidesOnlyItsOwnCall() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val tool = GatedTool("deep_lookup")
+        val provider = ScriptedProvider("test")
+        provider.script += {
+            chunk(
+                toolCalls = listOf(
+                    toolCall("call_0", "read_background_result", """{"handle":"bg_missing"}"""),
+                ),
+            )
+        }
+        provider.script += { chunk(toolCalls = listOf(toolCall("call_0", "deep_lookup"))) }
+        provider.script += { chunk(text = "done") }
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(provider, listOf(tool), executor, persistence)
+        val client = client(runner, persistence, executor, backgroundConfig())
+        val session = client.createSession(testChatbotConfiguration(provider = "test"))
+
+        tool.gate.complete(Unit)
+        session.send("hi")
+        advanceUntilIdle()
+
+        val snapshot = session.snapshot()
+        assertEquals(ChatbotStatus.COMPLETED, snapshot.status)
+        // The business call reusing call_0 stays fully visible.
+        val activity = snapshot.toolActivities.single { it.call.id == "call_0" }
+        assertEquals("deep_lookup", activity.call.name)
+        assertEquals(ChatbotToolActivityStatus.SUCCEEDED, activity.status)
+        assertNotNull(activity.result)
+        assertTrue(
+            snapshot.messages.any { message ->
+                message.toolCalls.any { it.id == "call_0" && it.name == "deep_lookup" }
+            },
+        )
+        assertTrue(
+            snapshot.messages.any { message ->
+                message.toolResults.any { it.id == "call_0" && it.name == "deep_lookup" }
+            },
+        )
+        // The turn-1 control call and its marked result stay hidden.
+        assertTrue(
+            snapshot.messages.none { message ->
+                message.toolCalls.any { it.name == "read_background_result" } ||
+                    message.toolResults.any { it.name == "read_background_result" }
+            },
+        )
+        assertTrue(
+            snapshot.toolActivities.none { it.call.name == "read_background_result" },
+        )
+        client.close()
+        executor.close()
+    }
+
     // ---- harness ----
 
     private fun backgroundConfig(
@@ -873,6 +1124,30 @@ class ChatbotBackgroundContractTest {
                         }
                     }
                 },
+            )
+        }
+    }
+
+    private class ErrorResultTool(
+        name: String,
+        private val delayMillis: Long,
+    ) : ToolExecutor {
+        override val definition = ToolDefinition(
+            name = name,
+            description = "fails upstream",
+            schema = buildJsonObject { put("type", "object") },
+        )
+        override val backgroundPolicy = ToolBackgroundPolicy.ELIGIBLE
+
+        override suspend fun execute(request: ToolExecutionRequest): ToolExecutionResult {
+            kotlinx.coroutines.delay(delayMillis)
+            return ToolExecutionResult(
+                toolCallId = request.toolCall.toolCallId,
+                toolName = request.toolCall.toolName,
+                result = JsonPrimitive("lookup failed upstream"),
+                isError = true,
+                userErrorCode = "LOOKUP_FAILED",
+                displayText = "Lookup failed",
             )
         }
     }

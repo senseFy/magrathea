@@ -78,8 +78,8 @@ a `BackgroundToolExecutor` (backed by a `BackgroundExecutionStore`) shared by
 snapshot, the lease's
 `startContinuation`/`stopAll`/`cancelBackground`/`suspendBackground`/`resumeBackground` commands,
 and the `ToolHandedOff`/`BackgroundExecutionSettled` events. Chatbot facades expose the same
-projection through `ChatbotBackgroundSnapshot` and
-`ChatbotController.continueWithBackgroundResults()`.
+projection through `ChatbotSnapshot.background` and
+`ChatbotSession.continueWithBackgroundResults()`/`stopAll()`/`cancelBackground(...)`.
 
 ## MCP
 

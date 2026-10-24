@@ -253,15 +253,15 @@ journal record becomes `COMPLETED` with the receipt as its result, so Run recove
 receipt and never re-executes the call.
 
 When background is enabled, the Runner's own permit acquisitions for blocking calls also go through
-the executor's admission queue with foreground priority, so one queue orders every Runtime-owned
-acquisition of a permit instance.
+the executor's admission queue, so one queue orders every Runtime-owned acquisition of a permit
+instance. v1 admits background work FIFO: the Runner's own permit acquisitions and background
+executions are not priority-ordered. Foreground-first admission with bounded aging is deferred
+until contention is measured (section 11).
 
 ### 5.2 Execution and settlement
 
-The executor orders contenders per permit instance: foreground demand first (blocking calls and
-eligible calls whose Run is still waiting), then handed-off work with bounded aging, so a receipt
-alone cannot demote work indefinitely. It acquires the Tool's permit, writes `RUNNING`, and runs
-`execute` under `effectiveTimeoutMillis`. Settlement applies `afterToolCall` interceptors with the
+The executor admits contenders per permit instance FIFO and never preempts a held permit.
+It acquires the Tool's permit, writes `RUNNING`, and runs `execute` under `effectiveTimeoutMillis`. Settlement applies `afterToolCall` interceptors with the
 origin context, normalization, and runtime limits, then writes `TERMINAL` with the result and emits
 `AgentEvent.BackgroundExecutionSettled` on the manager's event stream. A late callback for a record
 that is already terminal, fenced, or deleted is discarded.
@@ -304,9 +304,9 @@ The manager then appends a `CONTINUATION` notice for the pending records, sets
 the Run, which uses the notice as its activation anchor. Business Tool calls in that Run receive a
 paired policy error unless `allowBusinessToolsInContinuations` is true.
 
-`magrathea-chatbot` adds `ChatbotController.continueWithBackgroundResults()`, which builds the
+`magrathea-chatbot` adds `ChatbotSession.continueWithBackgroundResults()`, which builds the
 request through the existing `ChatbotRequestFactory` from the current session configuration.
-User input keeps priority: `sendMessage` preempts a continuation like any other Run.
+A new send preempts a continuation like any other Run.
 
 ### 5.5 Acknowledgement and activation counts
 
@@ -340,7 +340,7 @@ toward business call limits. Hosts therefore add no background prompt text of th
 in the last assistant Tool-call message is closed with exactly one result: its real outcome, a
 receipt for admitted eligible work, `cancelled` for started blocking work, or `not_executed` for a
 call that never completed D2's checks or never started. The assistant message keeps stop reason
-`TOOL_CALLS`, so replay keeps it. `ChatbotController.sendMessage` then appends the new user message
+`TOOL_CALLS`, so replay keeps it. `ChatbotSession.send` then appends the new user message
 as it does today.
 
 ### 5.8 Session Stop, targeted cancellation, and host loss
@@ -506,6 +506,17 @@ Decisions made during implementation, beyond sections 2 and 8:
 - Preemption closure applies only in background-enabled Runs; other cancellation is unchanged.
 - Repeated reads of an unfinished handle and awaits after the allowance is exhausted are refused
   within a Run, and await is not declared when the allowance is zero.
+- A Run's failure or interrupt exit cancels and releases every admitted-but-not-handed-off
+  execution; such an admission owns no record and must not linger or block re-admission.
+- A `lateFinalize` failure (store read or interceptor) still settles the record TERMINAL with
+  outcome ERROR and a runtime-authored result, and always frees the admission.
+- A business-Tool result with `isError` settles the record as ERROR; the stored result stays
+  readable through the retrieval controls.
+- The four control names are reserved while a request enables background execution: a business
+  Tool definition using one is rejected at validation, and Chatbot hides control traffic by a
+  runtime-authored result marker rather than by name, so feature-off Tools keep the names free.
+- Activity binding uses the call identity (message and call ordinal), not the bare `toolCallId`,
+  because Providers may reuse call IDs across turns.
 
 Gates that remain before enabling the feature for users (ADR-019 promotion):
 

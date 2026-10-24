@@ -38,7 +38,7 @@ host, not the SDK contract.
 `DefaultAgentRunner` waits for the full Tool batch. Execution timeout cancels the executor and
 returns a Tool error; it does not retain a result channel. `FollowUpMessageProvider` operates only
 inside a live Run. The managed Tool journal belongs to the current Run/checkpoint, and
-`ChatbotController.sendMessage` stops pending execution before admitting a new request.
+`ChatbotSession.send` stops pending execution before admitting a new request.
 
 `DefaultReplayPolicy` repairs a missing result with `No result provided` and `isError = true`.
 It also excludes cancelled/failed assistant messages. These are important constraints on foreground
@@ -156,19 +156,20 @@ v1 exposes a stable control capability set while background support is enabled:
 
 | Control | Semantics |
 |---|---|
-| `read_background_result(id)` | Fetch a retained outcome under a new genuine model call; no business re-execution |
-| `await_background_results(ids, max_wait)` | Wait inside the current Run until the referenced executions settle or the wait limit is reached; return settled outcomes through the read pipeline and runtime statuses for executions still pending |
-| Cancel specified executions | Stop only the referenced executions and return runtime-owned outcomes |
-| Finish without visible reply | Explicitly end this activation without inventing assistant prose |
+| `read_background_result(handle)` | Fetch a retained outcome under a new genuine model call; no business re-execution |
+| `await_background_results(handles, max_wait_ms)` | Wait inside the current Run until the referenced executions settle or the wait limit is reached; return settled outcomes through the read pipeline and runtime statuses for executions still pending |
+| `cancel_background_executions(handles)` | Stop only the referenced executions and return runtime-owned outcomes |
+| `finish_without_reply()` | Explicitly end this activation without inventing assistant prose |
 
-Names and signatures are illustrative until the prototype. The contractual distinctions are
-between control operations and business Tools, between waiting and cancellation, and between
-returning a stored outcome and executing business work again. Returning settled payloads from
-await is not contractual: the v1 proposal does so to avoid an extra model invocation on the
-explicit-wait path, and the prototype compares it with a status-only await followed by read. An
-await that returns a payload advances retrieval state exactly as a read does. Controls remain
-usable when new business Tools are prohibited. They must not need the business executor's scarce
-permit or provide a bypass for launching prohibited operations.
+These are the implemented v1 controls; `await_background_results` is declared only when the
+explicit-wait allowance is non-zero. The contractual distinctions are between control operations
+and business Tools, between waiting and cancellation, and between returning a stored outcome and
+executing business work again. v1 await returns settled payloads through the read pipeline, saving
+a model invocation on the explicit-wait path; an await that returns a payload advances retrieval
+state exactly as a read does. When background is enabled for a request, the four control names are
+reserved and a request whose business Tools use one is rejected. Controls remain usable when new
+business Tools are prohibited. They must not need the business executor's scarce permit or provide
+a bypass for launching prohibited operations.
 
 The foreground Tool-wait allowance decides only when Runtime returns control to the model. An
 explicit await is the model's decision after that handoff and does not draw from that allowance:
@@ -225,10 +226,10 @@ or read response was sent to that invocation. Admission/delivery records must co
 replay-safe checkpoints and lifetime fencing. New input can consume the retained event without
 starting an additional concurrent or duplicate supplement.
 
-Foreground priority also applies to Tool admission, not just model activation. Pending foreground
-demand takes priority over background-only queued work across Sessions sharing a permit. Include
-bounded fairness so background work cannot starve forever. Issuing a pending receipt alone must not
-continually demote an unstarted request and cause a queue-to-background feedback loop.
+Foreground demand should also take priority at Tool admission, not just model activation. v1
+admits contenders per permit instance FIFO: an issued receipt never demotes an unstarted request,
+and a priority order with bounded fairness to keep background work from starving forever is
+deferred until contention is measured (S4).
 
 Priority does not preempt an executor already holding a permit. The executor retains that permit
 until actual settlement; no false release or overcommit is allowed. With capacity one, foreground

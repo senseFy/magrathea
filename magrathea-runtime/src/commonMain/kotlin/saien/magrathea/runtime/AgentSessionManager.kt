@@ -718,7 +718,21 @@ class DefaultAgentSessionManager(
                 didInstall
             }
             if (installed) {
-                runtime.registerBackground()
+                try {
+                    runtime.registerBackground()
+                } catch (failure: Throwable) {
+                    rethrowWithCleanup(failure) {
+                        endLeaseOperation(runtime, claimed.generation)
+                        mutex.withLock {
+                            val live = slots[sessionId.value] as? LiveSlot
+                            if (live?.runtime === runtime && live.generation == claimed.generation) {
+                                slots.remove(sessionId.value)
+                                publishLiveSessionIdsLocked()
+                            }
+                        }
+                        runtime.shutdown(SessionShutdown.NONE)
+                    }
+                }
                 return handoffLease(runtime, claimed.generation)
             }
             mutex.withLock { ensureOpenLocked() }
@@ -1118,20 +1132,6 @@ private class ManagedAgentSession(
                 "Agent request session ID does not match its acquired runtime",
             )
         }
-        // Regeneration fence: records whose origin call no longer exists in the history are
-        // cancelled and deleted; unreferenced origins are removed with them.
-        background?.let { executor ->
-            val callIds = request.messages
-                .flatMap { message -> message.parts.filterIsInstance<ToolCallPart>() }
-                .mapTo(linkedSetOf()) { it.toolCallId }
-            val stale = executor.records(sessionId).records
-                .filter { it.originCallId !in callIds }
-                .map { it.executionId }
-            if (stale.isNotEmpty()) {
-                executor.deleteRecords(sessionId, stale)
-                refreshBackground()
-            }
-        }
         startOperation(request, resume = false) { runner.run(request) }
     }
 
@@ -1434,6 +1434,22 @@ private class ManagedAgentSession(
         val execution = stateMutex.withLock {
             transitionLocked(machine.begin(request, resume))
             checkNotNull(machine.execution)
+        }
+        // Regeneration fence: records whose origin call no longer exists in the history are
+        // cancelled and deleted; unreferenced origins are removed with them.
+        if (!resume && request != null) {
+            background?.let { executor ->
+                val callIds = request.messages
+                    .flatMap { message -> message.parts.filterIsInstance<ToolCallPart>() }
+                    .mapTo(linkedSetOf()) { it.toolCallId }
+                val stale = executor.records(sessionId).records
+                    .filter { it.originCallId !in callIds }
+                    .map { it.executionId }
+                if (stale.isNotEmpty()) {
+                    executor.deleteRecords(sessionId, stale)
+                    refreshBackground()
+                }
+            }
         }
         scope.launch(start = CoroutineStart.UNDISPATCHED) { execute(execution, source) }
     }

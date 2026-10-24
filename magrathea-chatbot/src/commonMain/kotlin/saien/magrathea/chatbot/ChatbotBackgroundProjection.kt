@@ -4,11 +4,13 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolOrigin
 import saien.magrathea.core.AgentMessage
 import saien.magrathea.core.BackgroundExecutionState
@@ -23,19 +25,23 @@ import saien.magrathea.runtime.BackgroundToolInstructions
 internal const val PREEMPTED_METADATA = "magrathea.tool.preempted"
 private const val HANDLE_METADATA = "magrathea.background.handle"
 private const val AWAIT_RESULTS_METADATA = "magrathea.background.results"
+private const val RESULT_IS_ERROR_METADATA = "magrathea.background.result_is_error"
+private const val RESULT_ERROR_CODE_METADATA = "magrathea.background.user_error_code"
 
 /**
  * Authoritative evidence for the background projection: receipts and runtime-authored closes in
  * canonical messages or the Tool journal, retrieval payloads, and the runtime's Session view.
+ * Receipt and preemption evidence binds to a specific call identity — Providers may reuse call
+ * IDs across turns, so [ChatbotToolActivityKey] (message + call ordinal) is the lookup key.
  */
 internal class ChatbotBackgroundProjection(
     private val executionsByHandle: Map<String, ChatbotBackgroundExecution>,
-    private val receiptsByCall: Map<String, ToolBackgroundReceipt>,
-    private val preemptedCalls: Set<String>,
+    private val receiptsByCall: Map<ChatbotToolActivityKey, ToolBackgroundReceipt>,
+    private val preemptedCalls: Set<ChatbotToolActivityKey>,
     private val readResultsByHandle: Map<String, ToolResultPart>,
 ) {
     fun apply(activity: ChatbotToolActivitySnapshot): ChatbotToolActivitySnapshot {
-        val receipt = receiptsByCall[activity.call.id]
+        val receipt = receiptsByCall[activity.key]
         if (receipt != null) {
             val view = executionsByHandle[receipt.handle]
             val execution = view ?: ChatbotBackgroundExecution(
@@ -62,13 +68,12 @@ internal class ChatbotBackgroundProjection(
                 -> activity.copy(
                     status = execution.state.toActivityStatus(),
                     result = readResultsByHandle[receipt.handle]
-                        ?.toChatbotToolResult()
-                        ?.copy(id = activity.call.id, name = activity.call.name),
+                        ?.toBackgroundToolResult(activity),
                     background = execution,
                 )
             }
         }
-        if (activity.call.id in preemptedCalls) {
+        if (activity.key in preemptedCalls) {
             return activity.copy(
                 status = ChatbotToolActivityStatus.CANCELLED,
                 result = null,
@@ -78,19 +83,47 @@ internal class ChatbotBackgroundProjection(
     }
 }
 
+/**
+ * The attached result adopts the stored execution's error semantics: the read part itself stays
+ * non-error so control traffic never looks like a Tool failure, but the projected activity is
+ * FAILED with the Tool's own error marker and code.
+ */
+private fun ToolResultPart.toBackgroundToolResult(
+    activity: ChatbotToolActivitySnapshot,
+): ChatbotToolResult = toChatbotToolResult().copy(
+    id = activity.call.id,
+    name = activity.call.name,
+    isError = metadata[RESULT_IS_ERROR_METADATA]?.jsonPrimitive?.booleanOrNull == true,
+    errorCode = (metadata[RESULT_ERROR_CODE_METADATA] as? JsonPrimitive)?.content,
+)
+
 internal fun buildBackgroundProjection(
     background: BackgroundSessionSnapshot?,
     messages: List<AgentMessage>,
     toolExecutions: List<ToolExecutionRecord>,
 ): ChatbotBackgroundProjection {
-    val receipts = mutableMapOf<String, ToolBackgroundReceipt>()
-    val preempted = mutableSetOf<String>()
+    val receipts = mutableMapOf<ChatbotToolActivityKey, ToolBackgroundReceipt>()
+    val preempted = mutableSetOf<ChatbotToolActivityKey>()
     val readResults = mutableMapOf<String, ToolResultPart>()
+    val calls = mutableListOf<Pair<ChatbotToolActivityKey, ToolCallPart>>()
+
+    fun callKeyFor(toolCallId: String, toolName: String): ChatbotToolActivityKey? =
+        calls.indexOfLast {
+            it.second.toolCallId == toolCallId && it.second.toolName == toolName
+        }.takeIf { it >= 0 }?.let { calls[it].first }
+
     messages.forEach { message ->
+        var callOrdinal = 0
+        message.parts.filterIsInstance<ToolCallPart>().forEach { call ->
+            calls += ChatbotToolActivityKey(message.id, callOrdinal) to call
+            callOrdinal += 1
+        }
         message.parts.filterIsInstance<ToolResultPart>().forEach { part ->
-            part.backgroundReceipt?.let { receipts[part.toolCallId] = it }
-            if (part.metadata[PREEMPTED_METADATA] != null) {
-                preempted += part.toolCallId
+            callKeyFor(part.toolCallId, part.toolName)?.let { key ->
+                part.backgroundReceipt?.let { receipts[key] = it }
+                if (part.metadata[PREEMPTED_METADATA] != null) {
+                    preempted += key
+                }
             }
             part.retrievalResults().forEach { (handle, result) ->
                 readResults[handle] = result
@@ -98,9 +131,12 @@ internal fun buildBackgroundProjection(
         }
     }
     toolExecutions.forEach { record ->
-        record.result?.backgroundReceipt?.let { receipts[record.toolCallId] = it }
-        if (record.result?.metadata?.get(PREEMPTED_METADATA) != null) {
-            preempted += record.toolCallId
+        val key = callKeyFor(record.toolCallId, record.toolName)
+        record.result?.backgroundReceipt?.let { receipt ->
+            if (key != null) receipts[key] = receipt
+        }
+        if (record.result?.metadata?.get(PREEMPTED_METADATA) != null && key != null) {
+            preempted += key
         }
     }
     return ChatbotBackgroundProjection(
@@ -145,8 +181,8 @@ private fun ToolResultPart.retrievalResults(): List<Pair<String, ToolResultPart>
 
 /**
  * Rebuilds the result one awaited handle delivered: its own content slice, metadata (with the
- * runtime's handle/execution/Tool identity), origin, and display text. An out-of-range slice
- * yields empty content rather than a failure.
+ * runtime's handle/execution/Tool identity and the slice's error semantics), origin, and display
+ * text. An out-of-range slice yields empty content rather than a failure.
  */
 private fun ToolResultPart.awaitSliceResult(entry: JsonObject): Pair<String, ToolResultPart>? {
     val handle = entry["handle"]?.jsonPrimitive?.content ?: return null
@@ -168,6 +204,8 @@ private fun ToolResultPart.awaitSliceResult(entry: JsonObject): Pair<String, Too
             put("magrathea.background.handle", handle)
             entry["execution_id"]?.let { put("magrathea.background.execution_id", it) }
             entry["tool_name"]?.let { put("magrathea.background.tool_name", it) }
+            entry["result_is_error"]?.let { put(RESULT_IS_ERROR_METADATA, it) }
+            entry["user_error_code"]?.let { put(RESULT_ERROR_CODE_METADATA, it) }
         },
         origin = origin,
         displayText = (entry["display_text"] as? JsonPrimitive)?.content,

@@ -259,19 +259,23 @@ private fun projectRuntime(
     fallbackConfiguration: ChatbotSessionConfiguration,
     reducer: ChatbotEventReducer,
 ): ChatbotSnapshot {
-    val eventProjection = runtime.lastEvent?.let { reducer.reduce(previous, it) } ?: previous
+    val backgroundEnabled = runtime.request?.engine?.runtime?.background != null
+    val eventProjection = runtime.lastEvent
+        ?.let { reducer.reduce(previous, it, backgroundEnabled) }
+        ?: previous
     val state = runtime.state
     val runtimeFailure = runtime.failure
-    val messages = runtime.authoritativeMessages().toChatbotMessageSnapshots()
+    val messages = runtime.authoritativeMessages()
+        .toChatbotMessageSnapshots(backgroundEnabled)
     val status = runtime.toChatbotStatus(eventProjection.status)
     var toolActivities = reconcileToolActivities(messages, eventProjection.toolActivities)
     state?.pendingToolCalls
-        ?.filterNot { isBackgroundControlTool(it.toolName) }
+        ?.filterNot { backgroundEnabled && isBackgroundControlTool(it.toolName) }
         ?.forEach { toolCall ->
             toolActivities = toolActivities.withToolRequested(toolCall)
         }
     (runtime.lastEvent as? AgentEvent.ToolCompleted)?.let { event ->
-        if (!isBackgroundControlTool(event.result.toolName)) {
+        if (!event.result.isBackgroundControlResult()) {
             toolActivities = toolActivities.withToolCompleted(event.result)
         }
     }

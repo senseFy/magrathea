@@ -14,6 +14,7 @@ import kotlin.time.ComparableTimeMark
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.TimeSource
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -59,6 +60,7 @@ import saien.magrathea.core.BackgroundExecutionState
 import saien.magrathea.core.BackgroundExecutionStore
 import saien.magrathea.core.BackgroundOriginContext
 import saien.magrathea.core.BackgroundOutcome
+import saien.magrathea.core.BackgroundSessionRecords
 import saien.magrathea.core.ContextManager
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.ModelDescriptor
@@ -3756,6 +3758,543 @@ class BackgroundToolRuntimeContractTest {
         manager.close()
     }
 
+
+    // ---- review fixes ----
+
+    // RF-1: a Run deadline during the handoff wait cancels and releases the admitted
+    // execution; no record is written and nothing stays live.
+    @Test
+    fun runTimeoutDuringHandoffWaitReleasesTheAdmission() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("orphan-timeout")
+        executor.register(sessionId, NoopListener)
+        val tool = GatedTool("deep_lookup", ToolBackgroundPolicy.ELIGIBLE)
+        val provider = scriptedProvider("orphan-timeout", toolCall("call-1", "deep_lookup"))
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(
+            provider = provider,
+            tools = listOf(tool),
+            background = executor,
+            persistence = persistence,
+        )
+
+        val collected = async {
+            runner.run(
+                request(
+                    "orphan-timeout",
+                    sessionId,
+                    config = backgroundConfig(handoffWait = 10_000),
+                    runTimeoutMillis = 500,
+                ),
+            ).toList()
+        }
+        runCurrent()
+        advanceTimeBy(600)
+        runCurrent()
+        val events = collected.await()
+
+        assertTrue(
+            events.any {
+                it is AgentEvent.Failed && it.code == saien.magrathea.core.AgentFailureCode.TIMEOUT
+            },
+        )
+        assertTrue(tool.cancelled)
+        assertNull(executor.liveExecution(checkNotNull(tool.lastExecutionId)))
+        assertTrue(store.load(sessionId).records.isEmpty())
+        executor.close()
+    }
+
+    // RF-2: an interrupt during the handoff wait releases the admission; the resumed Run
+    // re-admits the same execution ID instead of failing on a live duplicate.
+    @Test
+    fun interruptDuringHandoffWaitReleasesAndResumeReAdmits() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("orphan-interrupt")
+        executor.register(sessionId, NoopListener)
+        val tool = GatedTool(
+            "deep_lookup",
+            ToolBackgroundPolicy.ELIGIBLE,
+            recoveryPolicy = ToolRecoveryPolicy.REPLAY_SAFE,
+        )
+        val provider = scriptedProvider("orphan-interrupt", toolCall("call-1", "deep_lookup"))
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(
+            provider = provider,
+            tools = listOf(tool),
+            background = executor,
+            persistence = persistence,
+        )
+        val collected = async {
+            runner.run(
+                request(
+                    "orphan-interrupt",
+                    sessionId,
+                    config = backgroundConfig(handoffWait = 60_000),
+                ),
+            ).toList()
+        }
+        runCurrent()
+        advanceTimeBy(50)
+        runCurrent()
+
+        val interruptJob = async { runner.interrupt(sessionId) }
+        runCurrent()
+        interruptJob.await()
+        runCatching { collected.await() }
+        runCurrent()
+
+        assertTrue(tool.cancelled)
+        val firstExecutionId = checkNotNull(tool.lastExecutionId)
+        assertNull(executor.liveExecution(firstExecutionId))
+        assertTrue(store.load(sessionId).records.isEmpty())
+
+        tool.gate.complete(Unit)
+        val resumed = async { runner.resume(sessionId).toList() }
+        advanceUntilIdle()
+        val completed = resumed.await().filterIsInstance<AgentEvent.Completed>().single()
+        val part = completed.state.messages
+            .filter { it.role == MessageRole.TOOL }
+            .flatMap { it.parts.filterIsInstance<ToolResultPart>() }
+            .single { it.toolCallId == "call-1" }
+        assertNull(part.backgroundReceipt)
+        assertEquals("result-deep_lookup", part.result.jsonPrimitive.content)
+        assertEquals(2, tool.executions)
+        assertNull(executor.liveExecution(firstExecutionId))
+        executor.close()
+    }
+
+    // RF-3: a store failure thrown out of the tool batch takes the same cleanup: the live
+    // admission is cancelled and released instead of orphaned.
+    @Test
+    fun storageFailureDuringHandoffReleasesTheAdmission() = runTest {
+        val inner = InMemoryBackgroundExecutionStore()
+        var failLoads = false
+        val store = object : BackgroundExecutionStore by inner {
+            override suspend fun load(sessionId: AgentSessionId): BackgroundSessionRecords {
+                if (failLoads) throw IllegalStateException("store read failed")
+                return inner.load(sessionId)
+            }
+        }
+        val executor = executor(store)
+        val sessionId = AgentSessionId("orphan-storage")
+        executor.register(sessionId, NoopListener)
+        val tool = GatedTool("deep_lookup", ToolBackgroundPolicy.ELIGIBLE)
+        val provider = scriptedProvider("orphan-storage", toolCall("call-1", "deep_lookup"))
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(
+            provider = provider,
+            tools = listOf(tool),
+            background = executor,
+            persistence = persistence,
+        )
+        val collected = async {
+            runner.run(
+                request(
+                    "orphan-storage",
+                    sessionId,
+                    config = backgroundConfig(handoffWait = 100),
+                ),
+            ).toList()
+        }
+        runCurrent()
+        failLoads = true
+        advanceTimeBy(200)
+        runCurrent()
+        val events = collected.await()
+
+        assertTrue(events.any { it is AgentEvent.Failed })
+        assertTrue(tool.cancelled)
+        assertNull(executor.liveExecution(checkNotNull(tool.lastExecutionId)))
+        failLoads = false
+        assertTrue(store.load(sessionId).records.isEmpty())
+        executor.close()
+    }
+
+    // RF-4: a throwing afterToolCall on a late settlement still settles TERMINAL ERROR,
+    // notifies, and frees the admission instead of leaving the record RUNNING.
+    @Test
+    fun lateFinalizationFailureSettlesTerminalError() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("late-finalize")
+        executor.register(sessionId, NoopListener)
+        val tool = DelayedTool("deep_lookup", 200, ToolBackgroundPolicy.ELIGIBLE)
+        val provider = scriptedProvider("late-finalize", toolCall("call-1", "deep_lookup"))
+        val runner = runner(
+            provider = provider,
+            tools = listOf(tool),
+            background = executor,
+            interceptors = listOf(
+                object : AgentInterceptor {
+                    override suspend fun afterToolCall(
+                        context: saien.magrathea.core.ToolRuntimeContext,
+                        result: ToolExecutionResult,
+                    ): ToolExecutionResult = throw IllegalStateException("interceptor failed")
+                },
+            ),
+        )
+
+        runner.run(
+            request(
+                "late-finalize",
+                sessionId,
+                config = backgroundConfig(handoffWait = 100),
+            ),
+        ).toList()
+        advanceTimeBy(400)
+        runCurrent()
+
+        val record = store.load(sessionId).records.single()
+        assertEquals(BackgroundExecutionState.TERMINAL, record.state)
+        assertEquals(BackgroundOutcome.ERROR, record.outcome)
+        assertEquals("Tool result finalization failed", record.result?.displayText)
+        assertNull(executor.liveExecution(checkNotNull(tool.lastExecutionId)))
+        assertFalse(
+            deriveBackgroundSessionSnapshot(
+                records = store.load(sessionId).records,
+                request = null,
+                state = null,
+                isExecuting = false,
+            ).requiresExecutionHost,
+        )
+        executor.close()
+    }
+
+    // RF-5: a store read failure inside registerBackground releases the Session's admitted
+    // operation; the next acquire succeeds and delete/close complete.
+    @Test
+    fun registerBackgroundFailureReleasesTheSessionOperation() = runTest {
+        val inner = InMemoryBackgroundExecutionStore()
+        var failNextLoad = true
+        val store = object : BackgroundExecutionStore by inner {
+            override suspend fun load(sessionId: AgentSessionId): BackgroundSessionRecords {
+                if (failNextLoad) {
+                    failNextLoad = false
+                    throw IllegalStateException("store read failed")
+                }
+                return inner.load(sessionId)
+            }
+        }
+        val executor = executor(store)
+        val provider = scriptedProvider("register-failure")
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(
+            provider = provider,
+            tools = emptyList(),
+            background = executor,
+            persistence = persistence,
+        )
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = persistence,
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val sessionId = AgentSessionId("register-failure")
+
+        val failure = runCatching { manager.create(sessionId) }.exceptionOrNull()
+        assertIs<IllegalStateException>(failure)
+
+        // The slot and its admitted operation were released: a re-create succeeds, the
+        // Session is usable, and delete/close complete.
+        val lease = manager.create(sessionId)
+        runCurrent()
+        lease.start(request("register-failure", sessionId, config = backgroundConfig()))
+        advanceUntilIdle()
+        lease.awaitIdle()
+        assertEquals(
+            saien.magrathea.core.AgentStatus.COMPLETED,
+            lease.state.value.state?.status,
+        )
+        manager.delete(sessionId)
+        manager.close()
+        executor.close()
+    }
+
+    // RF-6: a BUSY-rejected start never runs the regeneration fence; records and live jobs
+    // survive unchanged.
+    @Test
+    fun busyStartLeavesBackgroundRecordsUntouched() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("busy-fence")
+        val tool = GatedTool("deep_lookup", ToolBackgroundPolicy.ELIGIBLE)
+        val provider = scriptedProvider("busy-fence", toolCall("call-1", "deep_lookup"))
+        val persistence = InMemoryAgentPersistence()
+        val runner = runner(
+            provider = provider,
+            tools = listOf(tool),
+            background = executor,
+            persistence = persistence,
+        )
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = persistence,
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        lease.start(
+            request("busy-fence", sessionId, config = backgroundConfig(handoffWait = 60_000)),
+        )
+        runCurrent()
+        advanceTimeBy(50)
+        runCurrent()
+
+        // A stale record whose origin call is absent from the next request's messages.
+        store.upsert(
+            seededRecord(
+                sessionId,
+                "bg_stale",
+                state = BackgroundExecutionState.RUNNING,
+            ),
+        )
+
+        val code = rejectionCode {
+            lease.start(
+                request(
+                    "busy-fence",
+                    sessionId,
+                    config = backgroundConfig(handoffWait = 60_000),
+                ).copy(messages = listOf(userMessage("regenerate"))),
+            )
+        }
+        assertEquals(AgentSessionErrorCode.BUSY, code)
+        assertEquals(1, store.load(sessionId).records.size)
+        tool.gate.complete(Unit)
+        manager.close()
+        executor.close()
+    }
+
+    // RF-7: sequential eligible calls share the Run's handoff budget; only their own wait
+    // intervals count, so a blocking call's time is never charged.
+    @Test
+    fun sequentialEligibleCallsChargeTheSharedBudget() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("seq-budget")
+        executor.register(sessionId, NoopListener)
+        val tool = DelayedTool("deep_lookup", 600, ToolBackgroundPolicy.ELIGIBLE)
+        val provider = object : ProviderAdapter {
+            override val key = "seq-budget"
+            private var calls = 0
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                calls += 1
+                when (calls) {
+                    1 -> emit(providerChunk(toolCalls = listOf(toolCall("call-1", "deep_lookup")), completed = true))
+                    2 -> emit(providerChunk(toolCalls = listOf(toolCall("call-2", "deep_lookup")), completed = true))
+                    else -> emit(providerChunk(text = "done", completed = true))
+                }
+            }
+        }
+        val runner = runner(provider = provider, tools = listOf(tool), background = executor)
+        val collected = async {
+            runner.run(
+                request(
+                    "seq-budget",
+                    sessionId,
+                    config = backgroundConfig(handoffWait = 1_000),
+                    toolExecutionMode = ToolExecutionMode.SEQUENTIAL,
+                ),
+            ).toList()
+        }
+        runCurrent()
+        advanceTimeBy(700)
+        runCurrent()
+        advanceTimeBy(600)
+        runCurrent()
+        val events = collected.await()
+
+        val toolParts = events.filterIsInstance<AgentEvent.Completed>().single()
+            .state.messages
+            .filter { it.role == MessageRole.TOOL }
+            .flatMap { it.parts.filterIsInstance<ToolResultPart>() }
+        // call-1 waited 600 of the 1000 budget and returned its real result; call-2 had
+        // 400 left, handed off at the deadline, and carries a receipt.
+        val first = toolParts.single { it.toolCallId == "call-1" }
+        assertNull(first.backgroundReceipt)
+        assertEquals("result-deep_lookup", first.result.jsonPrimitive.content)
+        val second = toolParts.single { it.toolCallId == "call-2" }
+        assertNotNull(second.backgroundReceipt)
+        assertEquals(
+            1_000L,
+            events.filterIsInstance<AgentEvent.Completed>().single()
+                .state.foregroundToolWaitMillis,
+        )
+        executor.close()
+    }
+
+    @Test
+    fun sequentialBlockingTimeDoesNotChargeTheHandoffBudget() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("seq-blocking")
+        executor.register(sessionId, NoopListener)
+        val blocking = DelayedTool("blocking_lookup", 300, ToolBackgroundPolicy.BLOCKING)
+        val eligible = DelayedTool("deep_lookup", 600, ToolBackgroundPolicy.ELIGIBLE)
+        val provider = scriptedProvider(
+            "seq-blocking",
+            toolCall("call-1", "blocking_lookup"),
+            toolCall("call-2", "deep_lookup"),
+        )
+        val runner = runner(
+            provider = provider,
+            tools = listOf(blocking, eligible),
+            background = executor,
+        )
+        val collected = async {
+            runner.run(
+                request(
+                    "seq-blocking",
+                    sessionId,
+                    config = backgroundConfig(handoffWait = 1_000),
+                    toolExecutionMode = ToolExecutionMode.SEQUENTIAL,
+                ),
+            ).toList()
+        }
+        runCurrent()
+        advanceTimeBy(1_000)
+        runCurrent()
+        val events = collected.await()
+
+        val state = events.filterIsInstance<AgentEvent.Completed>().single().state
+        val parts = state.messages.filter { it.role == MessageRole.TOOL }
+            .flatMap { it.parts.filterIsInstance<ToolResultPart>() }
+        val eligiblePart = parts.single { it.toolCallId == "call-2" }
+        // The 300ms blocking call did not reduce the eligible call's 1000ms window.
+        assertNull(eligiblePart.backgroundReceipt)
+        assertEquals("result-deep_lookup", eligiblePart.result.jsonPrimitive.content)
+        assertEquals(600L, state.foregroundToolWaitMillis)
+        executor.close()
+    }
+
+    // RF-8: a business Tool's isError result settles the background record as ERROR; the
+    // stored error result stays readable and carries its error semantics.
+    @Test
+    fun errorResultSettlesBackgroundExecutionAsFailed() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("error-outcome")
+        executor.register(sessionId, NoopListener)
+        val tool = ErrorTool("deep_lookup", delayMillis = 200)
+        val provider = scriptedProvider(
+            "error-outcome",
+            toolCall("call-1", "deep_lookup"),
+            toolCall("read-1", "read_background_result", "{}"),
+        )
+        // The read call needs the real handle, so script the second turn lazily.
+        val lateProvider = object : ProviderAdapter {
+            override val key = "error-outcome"
+            private var calls = 0
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                calls += 1
+                when (calls) {
+                    1 -> emit(
+                        providerChunk(
+                            toolCalls = listOf(toolCall("call-1", "deep_lookup")),
+                            completed = true,
+                        ),
+                    )
+                    2 -> {
+                        val handle = request.messages
+                            .flatMap { it.parts }
+                            .filterIsInstance<ToolResultPart>()
+                            .firstNotNullOf { it.backgroundReceipt?.handle }
+                        delay(300)
+                        emit(
+                            providerChunk(
+                                toolCalls = listOf(
+                                    toolCall(
+                                        "read-1",
+                                        "read_background_result",
+                                        """{"handle":"$handle"}""",
+                                    ),
+                                ),
+                                completed = true,
+                            ),
+                        )
+                    }
+                    else -> emit(providerChunk(text = "done", completed = true))
+                }
+            }
+        }
+        val runner = runner(provider = lateProvider, tools = listOf(tool), background = executor)
+        val collected = async {
+            runner.run(
+                request(
+                    "error-outcome",
+                    sessionId,
+                    config = backgroundConfig(handoffWait = 100),
+                ),
+            ).toList()
+        }
+        runCurrent()
+        advanceTimeBy(300)
+        runCurrent()
+        advanceTimeBy(50)
+        runCurrent()
+        val events = collected.await()
+
+        val record = store.load(sessionId).records.single()
+        assertEquals(BackgroundExecutionState.TERMINAL, record.state)
+        assertEquals(BackgroundOutcome.ERROR, record.outcome)
+        assertEquals(true, record.result?.isError)
+        assertEquals("LOOKUP_FAILED", record.result?.userErrorCode)
+
+        val readPart = events.filterIsInstance<AgentEvent.Completed>().single()
+            .state.messages
+            .filter { it.role == MessageRole.TOOL }
+            .flatMap { it.parts.filterIsInstance<ToolResultPart>() }
+            .single { it.toolCallId == "read-1" }
+        assertFalse(readPart.isError)
+        assertEquals("failed", readPart.result.jsonObject["status"]!!.jsonPrimitive.content)
+        assertEquals(
+            true,
+            readPart.metadata[
+                BackgroundToolInstructions.RESULT_IS_ERROR_METADATA_KEY,
+            ]?.jsonPrimitive?.booleanOrNull,
+        )
+        assertEquals(
+            "LOOKUP_FAILED",
+            readPart.metadata[
+                BackgroundToolInstructions.RESULT_ERROR_CODE_METADATA_KEY,
+            ]?.jsonPrimitive?.content,
+        )
+        executor.close()
+    }
+
+    // RF-9: with background enabled, the four control names are reserved — a business Tool
+    // declaring one fails validation instead of being shadowed.
+    @Test
+    fun reservedControlNamesRejectTheRequest() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("reserved-names")
+        executor.register(sessionId, NoopListener)
+        val provider = scriptedProvider("reserved-names")
+        val runner = runner(provider = provider, tools = emptyList(), background = executor)
+        val tools = listOf(
+            ToolDefinition(
+                name = "read_background_result",
+                description = "business tool",
+                schema = buildJsonObject { put("type", "object") },
+            ),
+        )
+        val events = runner.run(
+            request(
+                "reserved-names",
+                sessionId,
+                config = backgroundConfig(),
+                tools = tools,
+            ),
+        ).toList()
+        val failed = events.filterIsInstance<AgentEvent.Failed>().single()
+        assertEquals(saien.magrathea.core.AgentFailureCode.INVALID_STATE, failed.code)
+        executor.close()
+    }
+
     // ---- harness ----
 
     private fun TestScope.executor(store: BackgroundExecutionStore): BackgroundToolExecutor =
@@ -3814,6 +4353,7 @@ class BackgroundToolRuntimeContractTest {
         messages: List<AgentMessage> = listOf(userMessage("look up project atlas")),
         systemPrompt: String = "",
         toolExecutionMode: ToolExecutionMode = ToolExecutionMode.PARALLEL,
+        runTimeoutMillis: Long = 1_800_000,
     ) = AgentRequest(
         sessionId = sessionId,
         messages = messages,
@@ -3835,6 +4375,7 @@ class BackgroundToolRuntimeContractTest {
             runtime = RuntimeConfig(
                 maxTurns = 6,
                 toolExecutionMode = toolExecutionMode,
+                runTimeoutMillis = runTimeoutMillis,
                 background = config,
             ),
         ),
@@ -3924,7 +4465,10 @@ class BackgroundToolRuntimeContractTest {
             schema = buildJsonObject { put("type", "object") },
         )
 
+        var lastExecutionId: String? = null
+
         override suspend fun execute(request: ToolExecutionRequest): ToolExecutionResult {
+            lastExecutionId = request.executionId
             delay(delayMillis)
             return ToolExecutionResult(
                 toolCallId = request.toolCall.toolCallId,
@@ -3947,14 +4491,48 @@ class BackgroundToolRuntimeContractTest {
         )
         val gate = CompletableDeferred<Unit>()
         var executions = 0
+        var cancelled = false
+        var lastExecutionId: String? = null
 
         override suspend fun execute(request: ToolExecutionRequest): ToolExecutionResult {
             executions += 1
-            gate.await()
+            lastExecutionId = request.executionId
+            try {
+                gate.await()
+            } catch (cancelled: CancellationException) {
+                this.cancelled = true
+                throw cancelled
+            }
             return ToolExecutionResult(
                 toolCallId = request.toolCall.toolCallId,
                 toolName = request.toolCall.toolName,
                 result = JsonPrimitive("result-${request.toolCall.toolName}"),
+            )
+        }
+    }
+
+    private class ErrorTool(
+        name: String,
+        private val delayMillis: Long,
+    ) : ToolExecutor {
+        override val definition = ToolDefinition(
+            name = name,
+            description = "failing",
+            schema = buildJsonObject { put("type", "object") },
+        )
+        override val backgroundPolicy = ToolBackgroundPolicy.ELIGIBLE
+        var lastExecutionId: String? = null
+
+        override suspend fun execute(request: ToolExecutionRequest): ToolExecutionResult {
+            lastExecutionId = request.executionId
+            delay(delayMillis)
+            return ToolExecutionResult(
+                toolCallId = request.toolCall.toolCallId,
+                toolName = request.toolCall.toolName,
+                result = JsonPrimitive("lookup failed upstream"),
+                isError = true,
+                userErrorCode = "LOOKUP_FAILED",
+                displayText = "Lookup failed",
             )
         }
     }

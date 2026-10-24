@@ -193,7 +193,10 @@ public final class saien/magrathea/runtime/BackgroundToolExecutor {
 }
 
 public final class saien/magrathea/runtime/BackgroundToolInstructions {
+	public static final field CONTROL_RESULT_METADATA_KEY Ljava/lang/String;
 	public static final field INSTANCE Lsaien/magrathea/runtime/BackgroundToolInstructions;
+	public static final field RESULT_ERROR_CODE_METADATA_KEY Ljava/lang/String;
+	public static final field RESULT_IS_ERROR_METADATA_KEY Ljava/lang/String;
 	public static final field SYSTEM_PROMPT_SECTION Ljava/lang/String;
 	public final fun getCONTROL_TOOL_NAMES ()Ljava/util/Set;
 }

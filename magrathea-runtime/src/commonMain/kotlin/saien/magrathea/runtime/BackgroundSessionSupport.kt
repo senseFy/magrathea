@@ -33,6 +33,20 @@ object BackgroundToolInstructions {
     /** Per-handle result slices carried in `await_background_results` metadata. */
     internal const val AWAIT_RESULTS_METADATA_KEY = "magrathea.background.results"
 
+    /**
+     * Marker on every runtime-authored control Tool result, including control rejections. The
+     * Chatbot hides results by this marker, not by name, so feature-off business Tools may use
+     * the same names without disappearing.
+     */
+    const val CONTROL_RESULT_METADATA_KEY = "magrathea.background.control"
+
+    /**
+     * Stored-result error semantics carried by read/await retrievals so projections can restore
+     * `isError`/`userErrorCode` on the originating activity.
+     */
+    const val RESULT_IS_ERROR_METADATA_KEY = "magrathea.background.result_is_error"
+    const val RESULT_ERROR_CODE_METADATA_KEY = "magrathea.background.user_error_code"
+
     /** Model-facing names of the four runtime control Tools, in Provider-projection order. */
     val CONTROL_TOOL_NAMES: Set<String> = setOf(READ_TOOL, AWAIT_TOOL, CANCEL_TOOL, FINISH_TOOL)
 

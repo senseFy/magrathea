@@ -15,6 +15,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
@@ -190,6 +191,23 @@ class BackgroundToolExecutor(
     /** The live admission for [executionId], settled or not; null after [release]. */
     internal suspend fun liveExecution(executionId: String): AdmittedExecution? =
         guard.withLock { executions[executionId] }
+
+    /**
+     * Cancels and releases every live admission of [runId] that never reached a handoff. Such
+     * executions have no record and no owner: the Run that admitted them is gone, so they must
+     * not keep a job or block re-admission on a later Run.
+     */
+    internal suspend fun cancelUncommittedAdmissions(runId: AgentRunId) {
+        val orphans = guard.withLock {
+            executions.values.filter { it.runId == runId && !it.handedOff }
+        }
+        for (execution in orphans) {
+            execution.cancelRequested = true
+            execution.foreground.complete(Result.failure(ExecutionCancelled()))
+            execution.job?.cancel()
+            cleanup(execution)
+        }
+    }
 
     /** Drops an execution the Run has consumed. */
     internal suspend fun release(execution: AdmittedExecution) = cleanup(execution)
@@ -419,7 +437,7 @@ class BackgroundToolExecutor(
                         result = ToolExecutionResult(
                             toolCallId = record.originCallId,
                             toolName = record.toolName,
-                            result = kotlinx.serialization.json.JsonPrimitive(
+                            result = JsonPrimitive(
                                 "Tool is no longer available",
                             ),
                             isError = true,
@@ -721,28 +739,47 @@ class BackgroundToolExecutor(
         }
         // Finalize outside the Session mutex so interceptors cannot block other Session writes.
         val record = execution.record ?: return@withContext cleanup(execution)
-        val origin = store.load(execution.sessionId).origins
-            .firstOrNull { it.runId == record.originRunId }
-        val (settleOutcome, result) = execution.spec.lateFinalize(outcome, record, origin)
-        var settled: BackgroundExecutionRecord? = null
-        sessionMutex.withLock {
-            val current = execution.record
-            if (current != null && current.state != BackgroundExecutionState.TERMINAL) {
-                val updated = current.copy(
-                    state = BackgroundExecutionState.TERMINAL,
-                    outcome = settleOutcome,
-                    result = result,
-                    resultVersion = maxOf(1, current.resultVersion),
-                    settledAtEpochMs = epochClock(),
-                )
-                writeRecord(updated)
-                execution.record = updated
-                settled = updated
-            }
+        val (settleOutcome, result) = try {
+            val origin = store.load(execution.sessionId).origins
+                .firstOrNull { it.runId == record.originRunId }
+            execution.spec.lateFinalize(outcome, record, origin)
+        } catch (cancelled: CancellationException) {
+            cancelled.rethrowFatalError()
+            throw cancelled
+        } catch (failure: Throwable) {
+            failure.rethrowFatalError()
+            BackgroundOutcome.ERROR to ToolExecutionResult(
+                toolCallId = record.originCallId,
+                toolName = record.toolName,
+                result = JsonPrimitive(
+                    "Tool result finalization failed",
+                ),
+                isError = true,
+                displayText = "Tool result finalization failed",
+            )
         }
-        execution.spanOutcome = settled?.outcome?.name?.lowercase()
-        settled?.let { notifySettled(execution.sessionId, it) }
-        cleanup(execution)
+        var settled: BackgroundExecutionRecord? = null
+        try {
+            sessionMutex.withLock {
+                val current = execution.record
+                if (current != null && current.state != BackgroundExecutionState.TERMINAL) {
+                    val updated = current.copy(
+                        state = BackgroundExecutionState.TERMINAL,
+                        outcome = settleOutcome,
+                        result = result,
+                        resultVersion = maxOf(1, current.resultVersion),
+                        settledAtEpochMs = epochClock(),
+                    )
+                    writeRecord(updated)
+                    execution.record = updated
+                    settled = updated
+                }
+            }
+            execution.spanOutcome = settled?.outcome?.name?.lowercase()
+            settled?.let { notifySettled(execution.sessionId, it) }
+        } finally {
+            cleanup(execution)
+        }
     }
 
     private suspend fun cleanup(execution: AdmittedExecution) {
