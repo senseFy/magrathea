@@ -45,6 +45,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import kotlin.time.ComparableTimeMark
 import kotlin.time.TimeSource
 import saien.magrathea.core.AgentCheckpoint
 import saien.magrathea.core.AgentEvent
@@ -71,6 +72,7 @@ import saien.magrathea.core.AgentSessionSnapshot
 import saien.magrathea.core.AgentStateSnapshot
 import saien.magrathea.core.AgentStatus
 import saien.magrathea.core.AttachmentPart
+import saien.magrathea.core.BackgroundExecutionConfig
 import saien.magrathea.core.BackgroundExecutionRecord
 import saien.magrathea.core.BackgroundExecutionState
 import saien.magrathea.core.BackgroundOriginContext
@@ -2296,8 +2298,8 @@ class DefaultAgentRunner(
             JournaledToolCall(indexed, record)
         }
         val results = arrayOfNulls<ToolExecutionResult>(executions.size)
-        val pending = mutableListOf<CallResolution.EligiblePending>()
-        var explicitWaitMillis = 0L
+        val pendingResults = arrayOfNulls<CallResolution.EligiblePending>(executions.size)
+        val explicitWaitTracker = ExplicitWaitTracker(timeSource)
         var finishRequested = false
 
         suspend fun persistCompleted(entry: JournaledToolCall, result: ToolExecutionResult) {
@@ -2358,11 +2360,10 @@ class DefaultAgentRunner(
                                 toolCall = entry.indexed.toolCall,
                                 request = request,
                                 state = state,
-                                spentExplicitWaitMillis = explicitWaitMillis,
+                                explicitWaitTracker = explicitWaitTracker,
                                 runtimeNoticeAdded = runtimeNoticeAdded,
                             )
-                            explicitWaitMillis += outcome.explicitWaitMillis
-                            finishRequested = finishRequested || outcome.finishRequested
+                            if (outcome.finishRequested) finishRequested = true
                             persistCompleted(entry, outcome.result)
                             CallResolution.Final(outcome.result)
                         }
@@ -2511,7 +2512,7 @@ class DefaultAgentRunner(
                     results[index] = resolution.result
                     emit(AgentEvent.ToolCompleted(request.sessionId, resolution.result))
                 }
-                is CallResolution.EligiblePending -> pending += resolution
+                is CallResolution.EligiblePending -> pendingResults[index] = resolution
             }
         }
 
@@ -2637,13 +2638,13 @@ class DefaultAgentRunner(
                     is CallResolution.EligiblePending -> {
                         // An eligible call waits (within the batch deadline) before the next
                         // sequential call starts; on deadline it is handed off first.
-                        pending.remove(resolution)
                         drainEligible(entry, resolution)
                     }
                 }
             }
         }
 
+        val pending = pendingResults.filterNotNull()
         if (pending.isNotEmpty()) {
             // The batch ends when every blocking call has settled and either every eligible call
             // settled or the remaining handoff allowance elapsed.
@@ -2659,7 +2660,7 @@ class DefaultAgentRunner(
             } else {
                 0L
             },
-            explicitWaitMillis = explicitWaitMillis,
+            explicitWaitMillis = explicitWaitTracker.spent(),
             finishWithoutReply = finishRequested,
         )
     }
@@ -2670,7 +2671,7 @@ class DefaultAgentRunner(
         toolCall: ToolCallPart,
         request: AgentRequest,
         state: AgentStateSnapshot,
-        spentExplicitWaitMillis: Long,
+        explicitWaitTracker: ExplicitWaitTracker,
         runtimeNoticeAdded: Boolean,
     ): ControlOutcome {
         val executor = checkNotNull(background)
@@ -2749,132 +2750,20 @@ class DefaultAgentRunner(
                         finishRequested = false,
                     )
                 }
-                val handles = arguments["handles"]?.jsonArray?.mapNotNull {
-                    it.jsonPrimitive.contentOrNull
-                } ?: emptyList()
-                val requested = arguments["max_wait_ms"]?.jsonPrimitive?.longOrNull
-                val remaining = (
-                    config.explicitWaitAllowanceMillis - state.explicitWaitMillis -
-                        spentExplicitWaitMillis
-                    ).coerceAtLeast(0L)
-                val wait = minOf(requested ?: remaining, remaining)
-                val mark = timeSource.markNow()
-                executor.waitForSettlement(request.sessionId, handles, wait)
-                val waited = mark.elapsedNow().inWholeMilliseconds
-                val records = executor.records(request.sessionId).records
-                val resultJson = buildJsonObject {
-                    putJsonArray("results") {
-                        handles.forEach { handle ->
-                            val record = records.firstOrNull { it.handle == handle }
-                            if (record == null) {
-                                add(
-                                    buildJsonObject {
-                                        put("handle", handle)
-                                        put("status", "unknown")
-                                    },
-                                )
-                            } else {
-                                add(
-                                    backgroundReadJson(
-                                        record,
-                                        BackgroundToolInstructions.awaitDeclared(config),
-                                    ),
-                                )
-                            }
-                        }
-                    }
-                    put("waited_ms", waited)
-                    if (remaining <= 0L) {
-                        put("wait_allowance_exhausted", true)
-                        put(
-                            "note",
-                            "No waiting time is left in this Run. Answer now with what " +
-                                "you have; a runtime notice will report results that " +
-                                "arrive later.",
-                        )
-                    } else {
-                        val stillRunning = handles.any { handle ->
-                            records.firstOrNull { it.handle == handle }
-                                ?.let {
-                                    it.state == BackgroundExecutionState.QUEUED ||
-                                        it.state == BackgroundExecutionState.RUNNING
-                                } == true
-                        }
-                        if (stillRunning) {
-                            put(
-                                "note",
-                                "Some results are not ready yet. Answer now with what " +
-                                    "you already have; a runtime notice will report them " +
-                                    "when they arrive. Do not cancel them or call the " +
-                                    "Tool again for them.",
-                            )
-                        }
-                    }
+                val spent = explicitWaitTracker.begin()
+                try {
+                    awaitBackgroundResults(
+                        executor = executor,
+                        config = config,
+                        toolCall = toolCall,
+                        request = request,
+                        state = state,
+                        arguments = arguments,
+                        spent = spent,
+                    )
+                } finally {
+                    explicitWaitTracker.end()
                 }
-                // Every settled record contributes its content slice and a metadata entry
-                // with its slice coordinates, so projections can attribute citations and
-                // images back to the correct handle.
-                var contentOffset = 0
-                val settledEntries = mutableListOf<JsonObject>()
-                val content = handles.mapNotNull { handle ->
-                    records.firstOrNull {
-                        it.handle == handle && it.state == BackgroundExecutionState.TERMINAL
-                    }
-                }.flatMap { record ->
-                    val slice = record.result?.content ?: emptyList()
-                    settledEntries += buildJsonObject {
-                        put("handle", record.handle)
-                        put("execution_id", record.executionId)
-                        put("tool_name", record.toolName)
-                        put("content_offset", contentOffset)
-                        put("content_count", slice.size)
-                        record.result?.displayText?.let { put("display_text", it) }
-                        record.result?.origin?.let { origin ->
-                            put(
-                                "origin",
-                                Json.encodeToJsonElement(ToolOrigin.serializer(), origin),
-                            )
-                        }
-                        put(
-                            "metadata",
-                            record.result?.metadata ?: JsonObject(emptyMap()),
-                        )
-                    }
-                    contentOffset += slice.size
-                    slice
-                }
-                // A single-handle settled await carries the record's stored result fields
-                // (content/origin/contextHints/metadata) exactly like a direct read, so
-                // downstream projections see the same citations and identity.
-                val single = handles.singleOrNull()
-                    ?.let { wanted -> records.firstOrNull { it.handle == wanted } }
-                    ?.takeIf { it.state == BackgroundExecutionState.TERMINAL }
-                ControlOutcome(
-                    result = ToolExecutionResult(
-                        toolCallId = toolCall.toolCallId,
-                        toolName = toolCall.toolName,
-                        result = resultJson,
-                        isError = false,
-                        content = content,
-                        origin = single?.result?.origin,
-                        contextHints = single?.result?.contextHints,
-                        metadata = buildJsonObject {
-                            single?.let { record ->
-                                record.result?.metadata?.forEach { (key, value) ->
-                                    put(key, value)
-                                }
-                                put("magrathea.background.handle", record.handle)
-                                put("magrathea.background.execution_id", record.executionId)
-                                put("magrathea.background.tool_name", record.toolName)
-                            }
-                            putJsonArray(BackgroundToolInstructions.AWAIT_RESULTS_METADATA_KEY) {
-                                settledEntries.forEach { add(it) }
-                            }
-                        },
-                    ),
-                    explicitWaitMillis = waited,
-                    finishRequested = false,
-                )
             }
             BackgroundToolInstructions.CANCEL_TOOL -> {
                 val handles = arguments["handles"]?.jsonArray?.mapNotNull {
@@ -2935,6 +2824,142 @@ class DefaultAgentRunner(
                 finishRequested = false,
             )
         }
+    }
+
+    private suspend fun awaitBackgroundResults(
+        executor: BackgroundToolExecutor,
+        config: BackgroundExecutionConfig,
+        toolCall: ToolCallPart,
+        request: AgentRequest,
+        state: AgentStateSnapshot,
+        arguments: JsonObject,
+        spent: Long,
+    ): ControlOutcome {
+        val handles = arguments["handles"]?.jsonArray?.mapNotNull {
+            it.jsonPrimitive.contentOrNull
+        } ?: emptyList()
+        val requested = arguments["max_wait_ms"]?.jsonPrimitive?.longOrNull
+        val remaining = (
+            config.explicitWaitAllowanceMillis - state.explicitWaitMillis - spent
+            ).coerceAtLeast(0L)
+        val wait = minOf(requested ?: remaining, remaining)
+        val mark = timeSource.markNow()
+        executor.waitForSettlement(request.sessionId, handles, wait)
+        val waited = mark.elapsedNow().inWholeMilliseconds
+        val records = executor.records(request.sessionId).records
+        val resultJson = buildJsonObject {
+            putJsonArray("results") {
+                handles.forEach { handle ->
+                    val record = records.firstOrNull { it.handle == handle }
+                    if (record == null) {
+                        add(
+                            buildJsonObject {
+                                put("handle", handle)
+                                put("status", "unknown")
+                            },
+                        )
+                    } else {
+                        add(
+                            backgroundReadJson(
+                                record,
+                                BackgroundToolInstructions.awaitDeclared(config),
+                            ),
+                        )
+                    }
+                }
+            }
+            put("waited_ms", waited)
+            if (remaining - waited <= 0L) {
+                put("wait_allowance_exhausted", true)
+                put(
+                    "note",
+                    "No waiting time is left in this Run. Answer now with what " +
+                        "you have; a runtime notice will report results that " +
+                        "arrive later.",
+                )
+            } else {
+                val stillRunning = handles.any { handle ->
+                    records.firstOrNull { it.handle == handle }
+                        ?.let {
+                            it.state == BackgroundExecutionState.QUEUED ||
+                                it.state == BackgroundExecutionState.RUNNING
+                        } == true
+                }
+                if (stillRunning) {
+                    put(
+                        "note",
+                        "Some results are not ready yet. Answer now with what " +
+                            "you already have; a runtime notice will report them " +
+                            "when they arrive. Do not cancel them or call the " +
+                            "Tool again for them.",
+                    )
+                }
+            }
+        }
+        // Every settled record contributes its content slice and a metadata entry
+        // with its slice coordinates, so projections can attribute citations and
+        // images back to the correct handle.
+        var contentOffset = 0
+        val settledEntries = mutableListOf<JsonObject>()
+        val content = handles.mapNotNull { handle ->
+            records.firstOrNull {
+                it.handle == handle && it.state == BackgroundExecutionState.TERMINAL
+            }
+        }.flatMap { record ->
+            val slice = record.result?.content ?: emptyList()
+            settledEntries += buildJsonObject {
+                put("handle", record.handle)
+                put("execution_id", record.executionId)
+                put("tool_name", record.toolName)
+                put("content_offset", contentOffset)
+                put("content_count", slice.size)
+                record.result?.displayText?.let { put("display_text", it) }
+                record.result?.origin?.let { origin ->
+                    put(
+                        "origin",
+                        Json.encodeToJsonElement(ToolOrigin.serializer(), origin),
+                    )
+                }
+                put(
+                    "metadata",
+                    record.result?.metadata ?: JsonObject(emptyMap()),
+                )
+            }
+            contentOffset += slice.size
+            slice
+        }
+        // A single-handle settled await carries the record's stored result fields
+        // (content/origin/contextHints/metadata) exactly like a direct read, so
+        // downstream projections see the same citations and identity.
+        val single = handles.singleOrNull()
+            ?.let { wanted -> records.firstOrNull { it.handle == wanted } }
+            ?.takeIf { it.state == BackgroundExecutionState.TERMINAL }
+        return ControlOutcome(
+            result = ToolExecutionResult(
+                toolCallId = toolCall.toolCallId,
+                toolName = toolCall.toolName,
+                result = resultJson,
+                isError = false,
+                content = content,
+                origin = single?.result?.origin,
+                contextHints = single?.result?.contextHints,
+                metadata = buildJsonObject {
+                    single?.let { record ->
+                        record.result?.metadata?.forEach { (key, value) ->
+                            put(key, value)
+                        }
+                        put("magrathea.background.handle", record.handle)
+                        put("magrathea.background.execution_id", record.executionId)
+                        put("magrathea.background.tool_name", record.toolName)
+                    }
+                    putJsonArray(BackgroundToolInstructions.AWAIT_RESULTS_METADATA_KEY) {
+                        settledEntries.forEach { add(it) }
+                    }
+                },
+            ),
+            explicitWaitMillis = waited,
+            finishRequested = false,
+        )
     }
 
     private fun backgroundReadResult(
@@ -4476,6 +4501,42 @@ private class ToolBatchOutcome(
     val explicitWaitMillis: Long,
     val finishWithoutReply: Boolean,
 )
+
+/**
+ * The union of active explicit-wait intervals inside one tool batch: concurrent awaits share
+ * one window, sequential awaits accumulate.
+ */
+private class ExplicitWaitTracker(
+    private val timeSource: TimeSource.WithComparableMarks,
+) {
+    private val mutex = Mutex()
+    private var activeCount = 0
+    private var activeSince: ComparableTimeMark? = null
+    private var accumulatedMillis = 0L
+
+    /** Joins the shared wait window and reports this batch's spent wait so far. */
+    suspend fun begin(): Long = mutex.withLock {
+        if (activeCount == 0) activeSince = timeSource.markNow()
+        activeCount += 1
+        spentLocked()
+    }
+
+    suspend fun end() = withContext(NonCancellable) {
+        mutex.withLock {
+            check(activeCount > 0) { "Explicit wait tracker ended with no active wait" }
+            activeCount -= 1
+            if (activeCount == 0) {
+                accumulatedMillis += activeSince?.elapsedNow()?.inWholeMilliseconds ?: 0L
+                activeSince = null
+            }
+        }
+    }
+
+    suspend fun spent(): Long = mutex.withLock { spentLocked() }
+
+    private fun spentLocked(): Long =
+        accumulatedMillis + (activeSince?.elapsedNow()?.inWholeMilliseconds ?: 0L)
+}
 
 private sealed class CallResolution {
     class Final(val result: ToolExecutionResult) : CallResolution()

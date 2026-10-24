@@ -828,6 +828,254 @@ class BackgroundToolRuntimeContractTest {
         executor.close()
     }
 
+    // Two awaits in one assistant message share one wait window: the Run is charged the
+    // union (3 s) rather than the sum (6 s), leaving the rest of the allowance for the
+    // next turn's await.
+    @Test
+    fun parallelAwaitsChargeTheSharedWindowOnce() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("await-parallel")
+        executor.register(sessionId, NoopListener)
+        val first = seededRecord(
+            sessionId,
+            "bg_first",
+            state = BackgroundExecutionState.RUNNING,
+        )
+        val second = seededRecord(
+            sessionId,
+            "bg_second",
+            state = BackgroundExecutionState.RUNNING,
+        )
+        store.upsert(first)
+        store.upsert(second)
+        backgroundScope.launch {
+            delay(3_000)
+            executor.putRecord(
+                first.copy(
+                    state = BackgroundExecutionState.TERMINAL,
+                    outcome = BackgroundOutcome.SUCCEEDED,
+                    result = seededResult(),
+                    settledAtEpochMs = 3_000,
+                ),
+            )
+            // The second handle settles A - X - 1 s after the second turn's await starts
+            // (t = 3 s + 6 s = 9 s) — inside the remaining 7 s allowance.
+            delay(6_000)
+            executor.putRecord(
+                second.copy(
+                    state = BackgroundExecutionState.TERMINAL,
+                    outcome = BackgroundOutcome.SUCCEEDED,
+                    result = seededResult(),
+                    settledAtEpochMs = 9_000,
+                ),
+            )
+        }
+        val provider = object : ProviderAdapter {
+            override val key = "await-parallel"
+            private var calls = 0
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                calls += 1
+                emit(
+                    when (calls) {
+                        1 -> providerChunk(
+                            toolCalls = listOf(
+                                toolCall(
+                                    "w1",
+                                    "await_background_results",
+                                    """{"handles":["bg_first"]}""",
+                                ),
+                                toolCall(
+                                    "w2",
+                                    "await_background_results",
+                                    """{"handles":["bg_first"]}""",
+                                ),
+                            ),
+                            completed = true,
+                        )
+                        2 -> providerChunk(
+                            toolCalls = listOf(
+                                toolCall(
+                                    "w3",
+                                    "await_background_results",
+                                    """{"handles":["bg_second"]}""",
+                                ),
+                            ),
+                            completed = true,
+                        )
+                        else -> providerChunk(text = "done", completed = true)
+                    },
+                )
+            }
+        }
+        val runner = runner(provider = provider, tools = emptyList(), background = executor)
+
+        val events = runner.run(
+            request(
+                "await-parallel",
+                sessionId,
+                config = backgroundConfig(explicitAllowance = 10_000),
+            ),
+        ).toList()
+
+        val completed = events.filterIsInstance<AgentEvent.Completed>().single()
+        val parts = completed.state.messages
+            .flatMap { it.parts }.filterIsInstance<ToolResultPart>()
+            .filter { it.toolName == "await_background_results" }
+        val w3 = parts.single { it.toolCallId == "w3" }
+        assertEquals("succeeded", w3.result.jsonObject["results"]!!.jsonArray.single()
+            .jsonObject.getValue("status").jsonPrimitive.content)
+        assertNull(w3.result.jsonObject["wait_allowance_exhausted"])
+        // Charge is the union: 3 s for the overlapped turn + 6 s for the second turn.
+        assertEquals(9_000L, completed.state.explicitWaitMillis)
+        executor.close()
+    }
+
+    // Two parallel awaits on a handle that never settles each wait the full shared
+    // allowance once: both report exhaustion, the Run is charged A (not 2A), and the next
+    // turn's await is refused.
+    @Test
+    fun parallelAwaitsExhaustTheAllowanceOnce() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("await-parallel-exhausted")
+        executor.register(sessionId, NoopListener)
+        store.upsert(
+            seededRecord(
+                sessionId,
+                "bg_never",
+                state = BackgroundExecutionState.RUNNING,
+            ),
+        )
+        val provider = object : ProviderAdapter {
+            override val key = "await-parallel-exhausted"
+            private var calls = 0
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                calls += 1
+                emit(
+                    when (calls) {
+                        1 -> providerChunk(
+                            toolCalls = listOf(
+                                toolCall(
+                                    "w1",
+                                    "await_background_results",
+                                    """{"handles":["bg_never"]}""",
+                                ),
+                                toolCall(
+                                    "w2",
+                                    "await_background_results",
+                                    """{"handles":["bg_never"]}""",
+                                ),
+                            ),
+                            completed = true,
+                        )
+                        2 -> providerChunk(
+                            toolCalls = listOf(
+                                toolCall(
+                                    "w3",
+                                    "await_background_results",
+                                    """{"handles":["bg_never"]}""",
+                                ),
+                            ),
+                            completed = true,
+                        )
+                        else -> providerChunk(text = "done", completed = true)
+                    },
+                )
+            }
+        }
+        val runner = runner(provider = provider, tools = emptyList(), background = executor)
+
+        val events = runner.run(
+            request(
+                "await-parallel-exhausted",
+                sessionId,
+                config = backgroundConfig(explicitAllowance = 10_000),
+            ),
+        ).toList()
+
+        val completed = events.filterIsInstance<AgentEvent.Completed>().single()
+        val parts = completed.state.messages
+            .flatMap { it.parts }.filterIsInstance<ToolResultPart>()
+            .filter { it.toolName == "await_background_results" }
+        parts.filter { it.toolCallId == "w1" || it.toolCallId == "w2" }.forEach { part ->
+            assertFalse(part.isError)
+            assertEquals(
+                true,
+                part.result.jsonObject["wait_allowance_exhausted"]?.jsonPrimitive?.booleanOrNull,
+            )
+        }
+        val refused = parts.single { it.toolCallId == "w3" }
+        assertTrue(refused.isError)
+        assertEquals(
+            true,
+            refused.result.jsonObject["wait_allowance_exhausted"]?.jsonPrimitive?.booleanOrNull,
+        )
+        assertEquals(10_000L, completed.state.explicitWaitMillis)
+        executor.close()
+    }
+
+    // Sequential awaits never overlap, so the union equals the sum: two disjoint 2 s waits
+    // charge the full 4 s.
+    @Test
+    fun sequentialAwaitsChargeTheSum() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("await-sequential")
+        executor.register(sessionId, NoopListener)
+        val first = seededRecord(
+            sessionId,
+            "bg_first",
+            state = BackgroundExecutionState.RUNNING,
+        )
+        val second = seededRecord(
+            sessionId,
+            "bg_second",
+            state = BackgroundExecutionState.RUNNING,
+        )
+        store.upsert(first)
+        store.upsert(second)
+        backgroundScope.launch {
+            delay(2_000)
+            executor.putRecord(
+                first.copy(
+                    state = BackgroundExecutionState.TERMINAL,
+                    outcome = BackgroundOutcome.SUCCEEDED,
+                    result = seededResult(),
+                    settledAtEpochMs = 2_000,
+                ),
+            )
+            delay(2_000)
+            executor.putRecord(
+                second.copy(
+                    state = BackgroundExecutionState.TERMINAL,
+                    outcome = BackgroundOutcome.SUCCEEDED,
+                    result = seededResult(),
+                    settledAtEpochMs = 4_000,
+                ),
+            )
+        }
+        val provider = scriptedProvider(
+            "await-sequential",
+            toolCall("w1", "await_background_results", """{"handles":["bg_first"]}"""),
+            toolCall("w2", "await_background_results", """{"handles":["bg_second"]}"""),
+        )
+        val runner = runner(provider = provider, tools = emptyList(), background = executor)
+
+        val events = runner.run(
+            request(
+                "await-sequential",
+                sessionId,
+                config = backgroundConfig(explicitAllowance = 10_000),
+                toolExecutionMode = ToolExecutionMode.SEQUENTIAL,
+            ),
+        ).toList()
+
+        val completed = events.filterIsInstance<AgentEvent.Completed>().single()
+        assertEquals(4_000L, completed.state.explicitWaitMillis)
+        executor.close()
+    }
+
     // 11: cancel settles the referenced executions as suppressed CANCELLED results that are
     // never noticed.
     @Test
@@ -2454,18 +2702,24 @@ class BackgroundToolRuntimeContractTest {
             .filter { it.role == MessageRole.TOOL }
             .flatMap { it.parts.filterIsInstance<ToolResultPart>() }
         val firstAwait = results.single { it.toolCallId == "call-2" }
-        assertTrue(firstAwait.result.jsonObject["wait_allowance_exhausted"] == null)
-        val secondAwait = results.single { it.toolCallId == "call-3" }
+        assertFalse(firstAwait.isError)
         assertEquals(
             JsonPrimitive(true),
-            secondAwait.result.jsonObject["wait_allowance_exhausted"],
+            firstAwait.result.jsonObject["wait_allowance_exhausted"],
         )
         assertEquals(
             "No waiting time is left in this Run. Answer now with what you have; " +
                 "a runtime notice will report results that arrive later.",
-            secondAwait.result.jsonObject["note"]!!.jsonPrimitive.content,
+            firstAwait.result.jsonObject["note"]!!.jsonPrimitive.content,
         )
-        assertEquals(0L, secondAwait.result.jsonObject["waited_ms"]!!.jsonPrimitive.long)
+        assertEquals(50L, firstAwait.result.jsonObject["waited_ms"]!!.jsonPrimitive.long)
+        // A later await after exhaustion is refused outright.
+        val secondAwait = results.single { it.toolCallId == "call-3" }
+        assertTrue(secondAwait.isError)
+        assertEquals(
+            JsonPrimitive(true),
+            secondAwait.result.jsonObject["wait_allowance_exhausted"],
+        )
         manager.close()
     }
 
@@ -3002,26 +3256,26 @@ class BackgroundToolRuntimeContractTest {
         val parts = checkNotNull(lease.state.value.state).messages
             .filter { it.role == MessageRole.TOOL }
             .flatMap { it.parts.filterIsInstance<ToolResultPart>() }
-        // The first await consumes the 50 ms allowance; the second finds none left and
-        // returns the non-error exhausted payload; the third is refused outright.
+        // The first await consumes the 50 ms allowance and reports the exhaustion itself;
+        // every later await in the Run is refused outright.
         val waited = parts.single { it.toolCallId == "call-2" }
         assertFalse(waited.isError)
-        assertNull(waited.result.jsonObject["wait_allowance_exhausted"])
-        val exhausted = parts.single { it.toolCallId == "call-3" }
-        assertFalse(exhausted.isError)
         assertEquals(
             JsonPrimitive(true),
-            exhausted.result.jsonObject["wait_allowance_exhausted"],
+            waited.result.jsonObject["wait_allowance_exhausted"],
         )
-        val refused = parts.single { it.toolCallId == "call-4" }
-        assertTrue(refused.isError)
-        val json = refused.result.jsonObject
-        assertEquals(
-            "No waiting time is left in this Run. Stop waiting and answer now; a " +
-                "runtime notice will report results that arrive later.",
-            json["error"]!!.jsonPrimitive.content,
-        )
-        assertEquals(JsonPrimitive(true), json["wait_allowance_exhausted"])
+        val refused3 = parts.single { it.toolCallId == "call-3" }
+        val refused4 = parts.single { it.toolCallId == "call-4" }
+        for (refused in listOf(refused3, refused4)) {
+            assertTrue(refused.isError)
+            val json = refused.result.jsonObject
+            assertEquals(
+                "No waiting time is left in this Run. Stop waiting and answer now; a " +
+                    "runtime notice will report results that arrive later.",
+                json["error"]!!.jsonPrimitive.content,
+            )
+            assertEquals(JsonPrimitive(true), json["wait_allowance_exhausted"])
+        }
         manager.close()
     }
 
