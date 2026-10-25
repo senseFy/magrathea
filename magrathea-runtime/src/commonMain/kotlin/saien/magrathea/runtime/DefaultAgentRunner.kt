@@ -2258,7 +2258,8 @@ class DefaultAgentRunner(
         val executor = background ?: return state
         val config = request.engine.runtime.background ?: return state
         if (!executor.isManaged(request.sessionId)) return state
-        val pending = executor.records(request.sessionId).records.filter { record ->
+        val records = executor.records(request.sessionId).records
+        val pending = records.filter { record ->
             record.state == BackgroundExecutionState.TERMINAL &&
                 record.outcome != null &&
                 record.outcome != BackgroundOutcome.CANCELLED &&
@@ -2275,6 +2276,9 @@ class DefaultAgentRunner(
                 resultVersion = record.resultVersion,
             )
         }
+        val running = records
+            .filter { it.state != BackgroundExecutionState.TERMINAL }
+            .map { PendingNoticeEntry(handle = it.handle, toolName = it.toolName) }
         val notice = AgentMessage(
             role = MessageRole.RUNTIME,
             parts = listOf(
@@ -2283,6 +2287,7 @@ class DefaultAgentRunner(
                     delivery = RuntimeNoticeDelivery.COALESCED,
                     text = renderRuntimeNotice(
                         entries,
+                        running,
                         RuntimeNoticeDelivery.COALESCED,
                         config.consumptionPolicy,
                         config.allowBusinessToolsInContinuations,
@@ -2401,8 +2406,7 @@ class DefaultAgentRunner(
                         }
                         is ToolCallDecision.Control -> {
                             val outcome = executeBackgroundControl(
-                                name = decision.name,
-                                arguments = decision.arguments,
+                                control = decision.call,
                                 toolCall = entry.indexed.toolCall,
                                 request = request,
                                 runId = runId,
@@ -2740,8 +2744,7 @@ class DefaultAgentRunner(
     }
 
     private suspend fun executeBackgroundControl(
-        name: String,
-        arguments: JsonObject,
+        control: BackgroundControlCall,
         toolCall: ToolCallPart,
         request: AgentRequest,
         runId: AgentRunId,
@@ -2751,11 +2754,11 @@ class DefaultAgentRunner(
     ): ControlOutcome {
         val executor = checkNotNull(background)
         val config = checkNotNull(request.engine.runtime.background)
-        return when (name) {
-            BackgroundToolInstructions.READ_TOOL -> {
-                val handle = arguments["handle"]?.jsonPrimitive?.contentOrNull
-                val record = handle?.let { wanted ->
-                    executor.records(request.sessionId).records.firstOrNull { it.handle == wanted }
+        return when (control) {
+            is BackgroundControlCall.Read -> {
+                val handle = control.handle
+                val record = executor.records(request.sessionId).records.firstOrNull {
+                    it.handle == handle
                 }
                 if (record == null) {
                     ControlOutcome(
@@ -2806,7 +2809,7 @@ class DefaultAgentRunner(
                     )
                 }
             }
-            BackgroundToolInstructions.AWAIT_TOOL -> {
+            is BackgroundControlCall.Await -> {
                 if (state.messages.awaitAllowanceExhaustedEarlier(runId)) {
                     return ControlOutcome(
                         result = backgroundControlError(
@@ -2833,18 +2836,15 @@ class DefaultAgentRunner(
                         toolCall = toolCall,
                         request = request,
                         state = state,
-                        arguments = arguments,
+                        control = control,
                         spent = spent,
                     )
                 } finally {
                     explicitWaitTracker.end()
                 }
             }
-            BackgroundToolInstructions.CANCEL_TOOL -> {
-                val handles = arguments["handles"]?.jsonArray?.mapNotNull {
-                    it.jsonPrimitive.contentOrNull
-                } ?: emptyList()
-                val batch = executor.cancel(request.sessionId, handles)
+            is BackgroundControlCall.Cancel -> {
+                val batch = executor.cancel(request.sessionId, control.handles)
                 ControlOutcome(
                     result = ToolExecutionResult(
                         toolCallId = toolCall.toolCallId,
@@ -2862,7 +2862,7 @@ class DefaultAgentRunner(
                     finishRequested = false,
                 )
             }
-            BackgroundToolInstructions.FINISH_TOOL -> {
+            BackgroundControlCall.Finish -> {
                 if (!runtimeNoticeAdded) {
                     ControlOutcome(
                         result = backgroundControlError(
@@ -2890,14 +2890,6 @@ class DefaultAgentRunner(
                     )
                 }
             }
-            else -> ControlOutcome(
-                result = backgroundControlError(
-                    toolCall,
-                    buildJsonObject { put("error", "Unknown background control.") },
-                ),
-                explicitWaitMillis = 0L,
-                finishRequested = false,
-            )
         }
     }
 
@@ -2907,13 +2899,11 @@ class DefaultAgentRunner(
         toolCall: ToolCallPart,
         request: AgentRequest,
         state: AgentStateSnapshot,
-        arguments: JsonObject,
+        control: BackgroundControlCall.Await,
         spent: Long,
     ): ControlOutcome {
-        val handles = arguments["handles"]?.jsonArray?.mapNotNull {
-            it.jsonPrimitive.contentOrNull
-        } ?: emptyList()
-        val requested = arguments["max_wait_ms"]?.jsonPrimitive?.longOrNull
+        val handles = control.handles
+        val requested = control.maxWaitMillis
         val remaining = (
             config.explicitWaitAllowanceMillis - state.explicitWaitMillis - spent
             ).coerceAtLeast(0L)
@@ -3414,7 +3404,15 @@ class DefaultAgentRunner(
             BackgroundToolInstructions.isControlTool(toolCall.toolName) &&
             (toolCall.toolName != BackgroundToolInstructions.AWAIT_TOOL || awaitDeclared)
         ) {
-            return ToolCallDecision.Control(toolCall.toolName, arguments)
+            return when (val parsed = parseBackgroundControlCall(toolCall.toolName, arguments)) {
+                is BackgroundControlParseResult.Valid -> ToolCallDecision.Control(parsed.call)
+                is BackgroundControlParseResult.Invalid -> ToolCallDecision.Rejected(
+                    backgroundControlError(
+                        toolCall,
+                        buildJsonObject { put("error", parsed.message) },
+                    ),
+                )
+            }
         }
         val requestDefinition = request.tools.firstOrNull { it.name == toolCall.toolName }
             ?: return ToolCallDecision.Rejected(rejectToolCall(toolCall, "Tool not advertised"))
@@ -4726,7 +4724,7 @@ private sealed class CallResolution {
 private sealed class ToolCallDecision {
     class Rejected(val result: ToolExecutionResult) : ToolCallDecision()
 
-    class Control(val name: String, val arguments: JsonObject) : ToolCallDecision()
+    class Control(val call: BackgroundControlCall) : ToolCallDecision()
 
     class Admitted(val call: AdmittedToolCall) : ToolCallDecision()
 }

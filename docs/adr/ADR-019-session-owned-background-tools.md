@@ -65,7 +65,10 @@ since call IDs can be renormalized after a model switch. A notice includes no ex
 titles, URLs, citations, or raw error messages, and no model-authored arguments such as queries,
 because arguments can carry text copied from earlier external results. A typical notice says that a
 `web_search` call has a result available under its handle, names the allowed retrieval control,
-and states the current execution restriction. It is not itself evidence for an answer.
+and states the current execution restriction. Executions still running when the notice is
+emitted are listed as such so the model can await them and merge imminent results into the same
+reply rather than waking per result; awaiting one delivers and acknowledges it, so its settlement
+raises no second activation. It is not itself evidence for an answer.
 
 The model retrieves the payload through an actual call to `read_background_result(id)`, or through
 an explicit await that returns settled outcomes. The returned content uses that new call's identity
@@ -179,9 +182,12 @@ allowance would make every await after a receipt return immediately. Await ends 
 referenced execution is terminal, or at the earliest of the requested duration, remaining Run time,
 applicable source-associated deadlines, and the Run's remaining explicit-wait allowance. That
 allowance is host-configured, cumulative per Run, and counts overlapping awaits once; repeated
-awaits draw it down and cannot renew it. Expiry returns current statuses without cancelling the
-underlying business executions or pretending they succeeded. An already-terminal dependency
-returns immediately, including failure/cancellation.
+awaits draw it down and cannot renew it. The runtime uses the allowance on the host's continuation
+request unchanged, including small positive bounds and zero. Hosts may choose a separate
+continuation allowance to merge imminent results after the first answer, but the SDK never
+raises a configured bound. Expiry returns current statuses
+without cancelling the underlying business executions or pretending they succeeded. An
+already-terminal dependency returns immediately, including failure/cancellation.
 
 Send preempts this Run-local wait like foreground generation. No persisted wait predicate survives
 Run settlement in v1. Outstanding business executions remain Session-owned and later completion
@@ -305,8 +311,10 @@ rather than silently defaulted.
 
 Run cancellation, targeted execution cancellation, and Session Stop are distinct operations.
 Session Stop fences current generation, queued/running Tool executions, Run-local waits, and queued
-automatic activations. Late callbacks cannot revive them; future explicit user requests may admit
-new work. Regeneration/deletion/history clearing invalidate affected provenance and delivery.
+automatic activations. A resumed execution receives new process-local commit ownership; the retired
+execution cannot commit even if a non-cancellable interceptor finishes later. Admission, ownership
+revocation, and result commits serialize under the same Session boundary. Late callbacks cannot
+revive stopped or deleted work; future explicit user requests may admit new work. Regeneration/deletion/history clearing invalidate affected provenance and delivery.
 Ordinary background failure does not retroactively fail an earlier valid answer.
 
 Persist execution facts, terminal results, and notification/retrieval/acknowledgement progress

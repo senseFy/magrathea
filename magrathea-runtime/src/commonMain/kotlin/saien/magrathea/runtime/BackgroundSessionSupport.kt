@@ -67,6 +67,7 @@ object BackgroundToolInstructions {
                             "handle" to JsonObject(
                                 mapOf(
                                     "type" to JsonPrimitive("string"),
+                                    "minLength" to JsonPrimitive(1),
                                     "description" to JsonPrimitive("Handle from a receipt or runtime notice."),
                                 ),
                             ),
@@ -89,13 +90,17 @@ object BackgroundToolInstructions {
                             "handles" to JsonObject(
                                 mapOf(
                                     "type" to JsonPrimitive("array"),
-                                    "items" to JsonObject(mapOf("type" to JsonPrimitive("string"))),
+                                    "items" to JsonObject(mapOf(
+                                        "type" to JsonPrimitive("string"),
+                                        "minLength" to JsonPrimitive(1),
+                                    )),
                                     "description" to JsonPrimitive("Handles to wait for."),
                                 ),
                             ),
                             "max_wait_ms" to JsonObject(
                                 mapOf(
                                     "type" to JsonPrimitive("integer"),
+                                    "minimum" to JsonPrimitive(0),
                                     "description" to JsonPrimitive("Optional upper bound in milliseconds."),
                                 ),
                             ),
@@ -117,7 +122,10 @@ object BackgroundToolInstructions {
                             "handles" to JsonObject(
                                 mapOf(
                                     "type" to JsonPrimitive("array"),
-                                    "items" to JsonObject(mapOf("type" to JsonPrimitive("string"))),
+                                    "items" to JsonObject(mapOf(
+                                        "type" to JsonPrimitive("string"),
+                                        "minLength" to JsonPrimitive(1),
+                                    )),
                                 ),
                             ),
                         ),
@@ -174,11 +182,21 @@ object BackgroundToolInstructions {
 }
 
 /**
+ * One execution still running when a Runtime notice is emitted. Render input only — pending
+ * entries live inside the notice text so the persisted schema stays untouched.
+ */
+internal data class PendingNoticeEntry(
+    val handle: String,
+    val toolName: String,
+)
+
+/**
  * Renders the fixed Runtime notice text (ADR-019). The text uses only runtime-owned values and
  * never contains call IDs; it is stored once and replayed byte-identically.
  */
 internal fun renderRuntimeNotice(
     entries: List<RuntimeNoticeEntry>,
+    pending: List<PendingNoticeEntry>,
     delivery: RuntimeNoticeDelivery,
     policy: BackgroundConsumptionPolicy,
     businessToolsAllowed: Boolean,
@@ -207,7 +225,21 @@ internal fun renderRuntimeNotice(
         )
         append('\n')
     }
+    pending.forEach { entry ->
+        append("- handle: ")
+        append(entry.handle)
+        append(", tool: ")
+        append(entry.toolName)
+        append(", still running\n")
+    }
     append("Retrieve a result with read_background_result before relying on it.\n")
+    if (pending.isNotEmpty() && awaitDeclared) {
+        append(
+            "Executions marked still running have no result yet. If one could change your " +
+                "answer, await_background_results can wait for it and you may cover everything " +
+                "in this reply instead of a later one.\n",
+        )
+    }
     if (delivery == RuntimeNoticeDelivery.CONTINUATION) {
         append(
             when (policy) {

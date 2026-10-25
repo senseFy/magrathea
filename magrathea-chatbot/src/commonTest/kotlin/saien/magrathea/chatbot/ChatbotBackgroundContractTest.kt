@@ -68,6 +68,69 @@ import saien.magrathea.core.ToolExecutor
 
 @OptIn(kotlin.time.ExperimentalTime::class)
 class ChatbotBackgroundContractTest {
+    @Test
+    fun continuationFactorySelectsHostBudgetWithoutChangingLaterUserRequests() = runTest {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val tool = GatedTool("deep_lookup")
+        val provider = ScriptedProvider("test")
+        provider.script += { chunk(toolCalls = listOf(toolCall("call-1", "deep_lookup"))) }
+        provider.script += { chunk(text = "initial answer") }
+        provider.script += { chunk(text = "supplement") }
+        val persistence = InMemoryAgentPersistence()
+        val base = DefaultChatbotRequestFactory(
+            tools = listOf(tool.definition),
+            configure = {
+                copy(engine = engine.copy(runtime = RuntimeConfig(
+                    background = backgroundConfig().copy(explicitWaitAllowanceMillis = 100),
+                )))
+            },
+        )
+        var continuationCalls = 0
+        val client = createChatbotClient(
+            runner = runner(provider, listOf(tool), executor, persistence),
+            requestFactory = object : ChatbotRequestFactory {
+                override fun create(context: ChatbotRequestContext) = base.create(context)
+
+                override fun createContinuation(context: ChatbotRequestContext) =
+                    base.create(context).let { request ->
+                        continuationCalls += 1
+                        request.copy(engine = request.engine.copy(runtime = request.engine.runtime.copy(
+                            background = backgroundConfig().copy(explicitWaitAllowanceMillis = 15_000),
+                        )))
+                    }
+            },
+            persistence = persistence,
+            closeResources = {},
+            sessionDispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        try {
+            val session = client.createSession(testChatbotConfiguration(provider = "test"))
+            suspend fun allowance(): Long? = persistence.load(
+                saien.magrathea.core.AgentSessionId(checkNotNull(session.snapshot().sessionId)),
+            )?.snapshot?.request?.engine?.runtime?.background?.explicitWaitAllowanceMillis
+
+            session.send("question")
+            advanceTimeBy(50)
+            runCurrent()
+            assertEquals(100L, allowance())
+            tool.gate.complete(Unit)
+            runCurrent()
+            assertTrue(session.continueWithBackgroundResults())
+            advanceUntilIdle()
+            assertEquals(1, continuationCalls)
+            assertEquals(15_000L, allowance())
+
+            session.send("next question")
+            advanceUntilIdle()
+            assertEquals(100L, allowance())
+            assertEquals(1, continuationCalls)
+        } finally {
+            client.close()
+        }
+    }
+
     // 1. send -> handoff -> RUNNING activity -> settle -> pending activation -> continuation.
     @Test
     fun endToEndHandoffSettleAndContinuation() = runTest {

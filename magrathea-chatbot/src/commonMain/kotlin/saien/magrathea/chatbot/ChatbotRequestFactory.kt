@@ -15,6 +15,13 @@ data class ChatbotRequestContext(
 /** Builds a Provider-neutral [AgentRequest] from the current Chatbot session and conversation. */
 fun interface ChatbotRequestFactory {
     fun create(context: ChatbotRequestContext): AgentRequest
+
+    /**
+     * Builds a background-results continuation under the host's policy. By default it uses the
+     * same configuration as [create]; hosts may override budgets without changing stored schemas
+     * or inferring the activation from message history. Runtime still owns activation admission.
+     */
+    fun createContinuation(context: ChatbotRequestContext): AgentRequest = create(context)
 }
 
 /** Builds requests from the session model with fixed system/tool defaults and a final hook. */

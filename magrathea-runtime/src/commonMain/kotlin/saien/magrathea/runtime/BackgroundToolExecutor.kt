@@ -3,6 +3,7 @@ package saien.magrathea.runtime
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -180,16 +181,14 @@ class BackgroundToolExecutor(
      * the execution settles before a handoff.
      */
     internal suspend fun admit(spec: AdmittedSpec): AdmittedExecution {
-        val sessionMutex = guard.withLock {
-            check(spec.executionRequest.executionId !in executions) {
-                "Duplicate background execution ${spec.executionRequest.executionId}"
-            }
-            sessionMutexes.getOrPut(spec.sessionId.value) { Mutex() }
+        val sessionMutex = sessionMutex(spec.sessionId)
+        return sessionMutex.withLock {
+            launchLocked(spec, sessionMutex)
         }
-        return launch(spec, sessionMutex)
     }
 
-    private suspend fun launch(
+    /** Installs a new execution generation while the Session command/commit mutex is held. */
+    private suspend fun launchLocked(
         spec: AdmittedSpec,
         sessionMutex: Mutex,
         resumedRecord: BackgroundExecutionRecord? = null,
@@ -200,8 +199,16 @@ class BackgroundToolExecutor(
             execution.handedOff = true
             execution.record = resumedRecord
         }
-        guard.withLock { executions[spec.executionRequest.executionId] = execution }
-        execution.job = scope.launch { runExecution(execution, sessionMutex) }
+        guard.withLock {
+            check(execution.executionId !in executions) {
+                "Duplicate background execution ${execution.executionId}"
+            }
+            executions[execution.executionId] = execution
+        }
+        // Publish the Job before starting it, even with an immediate dispatcher. A concurrent
+        // stop/suspend can then revoke this exact owner before its first business instruction.
+        execution.job = scope.launch(start = CoroutineStart.LAZY) { runExecution(execution, sessionMutex) }
+        execution.job?.start()
         return execution
     }
 
@@ -219,10 +226,11 @@ class BackgroundToolExecutor(
             executions.values.filter { it.runId == runId && !it.handedOff }
         }
         for (execution in orphans) {
-            execution.cancelRequested = true
-            execution.foreground.complete(Result.failure(ExecutionCancelled()))
-            execution.job?.cancel()
-            cleanup(execution)
+            sessionMutex(execution.sessionId).withLock {
+                if (!execution.handedOff && ownsExecutionLocked(execution)) {
+                    retireExecutionLocked(execution)
+                }
+            }
         }
     }
 
@@ -243,7 +251,7 @@ class BackgroundToolExecutor(
     ): BackgroundExecutionRecord? {
         val sessionMutex = sessionMutex(execution.sessionId)
         val record = sessionMutex.withLock {
-            if (execution.foreground.isCompleted) {
+            if (!ownsExecutionLocked(execution) || execution.foreground.isCompleted) {
                 // The raw outcome arrived before the receipt commit; the Run finalizes it.
                 return@withLock null
             }
@@ -309,9 +317,8 @@ class BackgroundToolExecutor(
                         )
                         writeRecord(updated)
                         val live = guard.withLock { executions[record.executionId] }
-                        live?.cancelRequested = true
                         live?.record = updated
-                        live?.job?.cancel()
+                        live?.let { retireExecutionLocked(it) }
                         settled += updated
                         cancelled += handle
                     }
@@ -330,7 +337,6 @@ class BackgroundToolExecutor(
      */
     internal suspend fun stopSession(sessionId: AgentSessionId, suppressExecutionIds: Set<String>) {
         val sessionMutex = sessionMutex(sessionId)
-        val live = guard.withLock { executions.values.filter { it.sessionId == sessionId } }
         val settled = mutableListOf<BackgroundExecutionRecord>()
         val changed = mutableListOf<BackgroundExecutionRecord>()
         sessionMutex.withLock {
@@ -358,9 +364,8 @@ class BackgroundToolExecutor(
                     }
                 }
             }
-            for (execution in live) {
-                execution.cancelRequested = true
-                execution.job?.cancel()
+            for (execution in liveById.values.filter { it.sessionId == sessionId }) {
+                retireExecutionLocked(execution)
             }
         }
         settled.forEach { notifySettled(sessionId, it) }
@@ -374,12 +379,12 @@ class BackgroundToolExecutor(
      */
     internal suspend fun suspendSession(sessionId: AgentSessionId) {
         val sessionMutex = sessionMutex(sessionId)
-        val live = guard.withLock {
-            executions.values.filter { it.sessionId == sessionId && it.handedOff }
-        }
         val settled = mutableListOf<BackgroundExecutionRecord>()
         val changed = mutableListOf<BackgroundExecutionRecord>()
         sessionMutex.withLock {
+            val live = guard.withLock {
+                executions.values.filter { it.sessionId == sessionId && it.handedOff }
+            }
             for (record in store.load(sessionId).records) {
                 if (record.state == BackgroundExecutionState.TERMINAL) continue
                 val tool = jobFactory?.toolFor(record)
@@ -402,8 +407,7 @@ class BackgroundToolExecutor(
                 }
             }
             for (execution in live) {
-                execution.cancelRequested = true
-                execution.job?.cancel()
+                retireExecutionLocked(execution)
             }
         }
         settled.forEach { notifySettled(sessionId, it) }
@@ -420,14 +424,16 @@ class BackgroundToolExecutor(
         val factory = jobFactory ?: return
         val sessionMutex = sessionMutex(sessionId)
         val settled = mutableListOf<BackgroundExecutionRecord>()
-        val admissions = mutableListOf<Pair<AdmittedSpec, BackgroundExecutionRecord>>()
         sessionMutex.withLock {
             val stored = store.load(sessionId)
             val liveById = guard.withLock { executions.toMap() }
             for (record in stored.records) {
                 if (record.state != BackgroundExecutionState.QUEUED) continue
                 val live = liveById[record.executionId]
-                if (live != null && live.job?.isActive == true) continue
+                // Ownership, rather than Job.isActive, is the admission fence. A cancelled
+                // coroutine can still be finalizing in NonCancellable; suspend explicitly
+                // retires it before a replacement is allowed to commit.
+                if (live != null) continue
                 val origin = stored.origins.firstOrNull { it.runId == record.originRunId }
                 val maxLifetime =
                     origin?.request?.engine?.runtime?.background?.maxQueuedLifetimeMillis
@@ -445,6 +451,8 @@ class BackgroundToolExecutor(
                 val spec = try {
                     if (factory.toolFor(record) == null) null else factory.specFor(record)
                 } catch (failure: Throwable) {
+                    failure.rethrowFatalError()
+                    if (failure is CancellationException) throw failure
                     null
                 }
                 if (spec == null) {
@@ -467,11 +475,10 @@ class BackgroundToolExecutor(
                     settled += updated
                     continue
                 }
-                admissions += spec to record
+                // Keep record inspection and owner installation in one critical section.
+                // Stop/delete cannot finish between deciding to resume and launching work.
+                launchLocked(spec, sessionMutex, resumedRecord = record)
             }
-        }
-        for ((spec, record) in admissions) {
-            launch(spec, sessionMutex, resumedRecord = record)
         }
         settled.forEach { notifySettled(sessionId, it) }
     }
@@ -487,14 +494,13 @@ class BackgroundToolExecutor(
             for (executionId in executionIds) {
                 val live = guard.withLock { executions[executionId] }
                 live?.let {
-                    it.cancelRequested = true
                     it.record = it.record?.copy(
                         state = BackgroundExecutionState.TERMINAL,
                         outcome = BackgroundOutcome.CANCELLED,
                         activationSuppressed = true,
                         settledAtEpochMs = epochClock(),
                     )
-                    it.job?.cancel()
+                    retireExecutionLocked(it)
                 }
                 store.delete(sessionId, executionId)
             }
@@ -518,14 +524,13 @@ class BackgroundToolExecutor(
         sessionMutex.withLock {
             val live = guard.withLock { executions.values.filter { it.sessionId == sessionId } }
             for (execution in live) {
-                execution.cancelRequested = true
                 execution.record = execution.record?.copy(
                     state = BackgroundExecutionState.TERMINAL,
                     outcome = BackgroundOutcome.CANCELLED,
                     activationSuppressed = true,
                     settledAtEpochMs = epochClock(),
                 )
-                execution.job?.cancel()
+                retireExecutionLocked(execution)
             }
             store.deleteSession(sessionId)
             bumpVersion(sessionId)
@@ -670,7 +675,9 @@ class BackgroundToolExecutor(
         var changed: BackgroundExecutionRecord? = null
         try {
             sessionMutex.withLock {
-                if (execution.record?.state == BackgroundExecutionState.TERMINAL) {
+                if (!ownsExecutionLocked(execution) ||
+                    execution.record?.state == BackgroundExecutionState.TERMINAL
+                ) {
                     throw ExecutionCancelled()
                 }
                 execution.started = true
@@ -712,6 +719,7 @@ class BackgroundToolExecutor(
         var settled: BackgroundExecutionRecord? = null
         execution.spanOutcome = "interrupted"
         sessionMutex.withLock {
+            if (!ownsExecutionLocked(execution)) return@withLock
             if (!execution.handedOff) {
                 execution.foreground.complete(
                     Result.failure(ExecutionCancelled()),
@@ -741,6 +749,10 @@ class BackgroundToolExecutor(
         sessionMutex: Mutex,
         outcome: Result<ToolExecutionResult?>,
     ) = withContext(NonCancellable) {
+        if (!sessionMutex.withLock { ownsExecutionLocked(execution) }) {
+            cleanup(execution)
+            return@withContext
+        }
         val failure = outcome.exceptionOrNull()
         val wasCancelled = failure is CancellationException &&
             (execution.cancelRequested || !job.isActive)
@@ -755,7 +767,7 @@ class BackgroundToolExecutor(
         var completedForeground = false
         if (!execution.handedOff) {
             sessionMutex.withLock {
-                if (!execution.handedOff) {
+                if (ownsExecutionLocked(execution) && !execution.handedOff) {
                     // Completed under the Session mutex so a concurrent handoff cannot
                     // double-answer.
                     execution.spanOutcome = outcome.fold(
@@ -787,6 +799,9 @@ class BackgroundToolExecutor(
             }
             var settled: BackgroundExecutionRecord? = null
             sessionMutex.withLock {
+                // A suspend/resume may have installed a new owner while lateFinalize was
+                // suspended. The retired object's local record is no longer authoritative.
+                if (!ownsExecutionLocked(execution)) return@withLock
                 val current = execution.record
                 if (current != null && current.state != BackgroundExecutionState.TERMINAL) {
                     val updated = current.copy(
@@ -814,6 +829,18 @@ class BackgroundToolExecutor(
                 executions.remove(execution.executionId)
             }
         }
+    }
+
+    /** Call only under the Session mutex; object identity is the process-local execution token. */
+    private suspend fun ownsExecutionLocked(execution: AdmittedExecution): Boolean =
+        !execution.cancelRequested && guard.withLock { executions[execution.executionId] === execution }
+
+    /** Revokes commit/admission rights before cancellation, which may leave a finalizer running. */
+    private suspend fun retireExecutionLocked(execution: AdmittedExecution) {
+        execution.cancelRequested = true
+        cleanup(execution)
+        execution.foreground.complete(Result.failure(ExecutionCancelled()))
+        execution.job?.cancel()
     }
 
     private suspend fun notifyRecordChanged(sessionId: AgentSessionId, record: BackgroundExecutionRecord) {
