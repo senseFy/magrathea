@@ -5,6 +5,13 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## [0.1.0-alpha.20](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.19...v0.1.0-alpha.20) (2026-10-25)
+
+
+### Features
+
+* configure background continuations and harden session stop ([#29](https://github.com/senseFy/magrathea/issues/29)) ([5e62ab4](https://github.com/senseFy/magrathea/commit/5e62ab457fd73fe2d11ab06e3286dcff4c7d984e))
+
 ## [0.1.0-alpha.19](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.18...v0.1.0-alpha.19) (2026-10-24)
 
 
