@@ -32,7 +32,7 @@ use always stays blocking because there is no managed Session to own the work.
 |---|---|
 | `handoffWaitMillis` | Cumulative per-Run budget for waiting on eligible calls before they receive a receipt. Within it a call answers synchronously; at expiry it hands off and continues in the background |
 | `explicitWaitAllowanceMillis` | Cumulative per-Run budget for the model's `await_background_results` control. Overlapping awaits count once; `0` means the control is not declared at all |
-| `maxAutomaticActivationsPerSource` | Per-source bound on automatic continuation activations across Runs |
+| `maxAutomaticActivationsPerSource` | Per-source bound on automatic continuation activations across Runs, including Runs that finish without a reply |
 | `maxQueuedLifetimeMillis` | Maximum lifetime of an unstarted queued execution before it settles as interrupted |
 | `consumptionPolicy` | How stored results may reach the model: `LATEST_CONTEXT` (supplement Runs see the latest conversation), `ORIGIN_DIRECTED` (anchored to the originating context), or `PASSIVE` (no automatic activation) |
 | `allowBusinessToolsInContinuations` | Whether continuation Runs may call business Tools; `false` by default, so continuations can only read and answer |
@@ -53,10 +53,22 @@ use always stays blocking because there is no managed Session to own the work.
 - The original call's result is either the real result or a receipt carrying a non-guessable
   `ToolBackgroundReceipt.handle`.
 - When the execution settles, a Runtime notice appears at a model-input boundary (or opens a
-  continuation Run). It carries structured facts only — never external payload.
+  continuation Run). It carries structured facts only — never external payload. Executions still
+  running at that moment are listed as `still running` so the model may await them and merge
+  results that settle moments later into the same reply instead of waking per result.
 - The controls `read_background_result`, `cancel_background_executions`, and
   `finish_without_reply` are declared, plus `await_background_results` when the explicit-wait
   allowance is non-zero.
+- Each Run uses the explicit-wait allowance supplied by its host, without an SDK floor.
+  Chatbot hosts may override `ChatbotRequestFactory.createContinuation(context)` to choose a
+  different continuation budget; its default delegates to `create(context)`. A zero allowance
+  disables awaits for that request, independently of earlier Runs.
+- A continuation that calls `finish_without_reply` still consumes an automatic activation.
+  Once the source's activation limit is reached, later results remain stored and readable but
+  do not start another automatic continuation. Hosts should choose continuation wait budgets
+  and activation limits together when several Tools may finish at different times.
+- Malformed control arguments produce a paired Tool error so the model can correct the call;
+  they do not fail the entire Run or partially apply cancellation.
 - Runtime-owned instruction text is appended automatically when the feature is enabled; hosts
   add no prompt text.
 - Waiting allowances and repeated-poll checks belong to one Run: a new Run resets them, while
@@ -73,12 +85,16 @@ use always stays blocking because there is no managed Session to own the work.
 - Schedule a continuation when the lease snapshot's `background?.pendingActivation` is
   non-null: `AgentSessionLease.startContinuation(request)` builds the Run from the Session's
   authoritative messages. Chatbot hosts call
-  `ChatbotSession.continueWithBackgroundResults()`, which does the same check internally.
+  `ChatbotSession.continueWithBackgroundResults()`, which does the same check internally. Every
+  automatic activation must pass the host's current execution admission gate, including after
+  a scheduling delay or draft deferral; cached availability is not an admission grant.
 - `stopAll()` cancels every live background execution and suppresses unacknowledged records;
   `cancelBackground(handles)` targets specific executions, the host form of the model's cancel
   control.
 - `suspendBackground()` stops live jobs on host loss (REPLAY_SAFE records return to QUEUED,
-  others settle as interrupted); `resumeBackground()` re-admits them.
+  others settle as interrupted); `resumeBackground()` re-admits them. Restore is attach-only:
+  when a conversation is opened after its host is already available, the host must still schedule
+  this resume. Old callbacks cannot commit after their execution ownership has been revoked.
 - A new Send preempts the Run: surviving background work keeps running, each surviving call
   closes with exactly one result, and any settlement lands in the next Run's notice flow.
 

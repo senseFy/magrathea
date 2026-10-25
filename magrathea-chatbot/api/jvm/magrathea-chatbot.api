@@ -378,6 +378,11 @@ public final class saien/magrathea/chatbot/ChatbotRequestContext {
 
 public abstract interface class saien/magrathea/chatbot/ChatbotRequestFactory {
 	public abstract fun create (Lsaien/magrathea/chatbot/ChatbotRequestContext;)Lsaien/magrathea/core/AgentRequest;
+	public fun createContinuation (Lsaien/magrathea/chatbot/ChatbotRequestContext;)Lsaien/magrathea/core/AgentRequest;
+}
+
+public final class saien/magrathea/chatbot/ChatbotRequestFactory$DefaultImpls {
+	public static fun createContinuation (Lsaien/magrathea/chatbot/ChatbotRequestFactory;Lsaien/magrathea/chatbot/ChatbotRequestContext;)Lsaien/magrathea/core/AgentRequest;
 }
 
 public final class saien/magrathea/chatbot/ChatbotSendOptions {
@@ -706,5 +711,6 @@ public final class saien/magrathea/chatbot/DefaultChatbotRequestFactory : saien/
 	public fun <init> (Ljava/lang/String;Ljava/util/List;Lkotlin/jvm/functions/Function1;)V
 	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;Lkotlin/jvm/functions/Function1;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun create (Lsaien/magrathea/chatbot/ChatbotRequestContext;)Lsaien/magrathea/core/AgentRequest;
+	public fun createContinuation (Lsaien/magrathea/chatbot/ChatbotRequestContext;)Lsaien/magrathea/core/AgentRequest;
 }
 

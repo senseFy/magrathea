@@ -141,6 +141,10 @@ data class RuntimeNoticeEntry(
 
 `text` is rendered when the notice is created and stored, so every replay sends identical bytes.
 The template uses only runtime-owned values. `CANCELLED` outcomes never produce a notice.
+Executions still running at emission appear as `still running` lines, and the hint to await them
+is included only when `await_background_results` is declared. Pending entries stay inside the
+rendered text — the persisted part shape is unchanged — while consumers read live state from
+`snapshot.executions`.
 
 The four reference request builders project a `RUNTIME` message as a user-input text block in its
 chronological position, using the wire fragments in ADR-019. `DefaultReplayPolicy` orders `RUNTIME`
@@ -263,8 +267,12 @@ until contention is measured (section 11).
 The executor acquires the Tool's permit when the job starts; `SharedToolExecutionPermit` admits
 waiters FIFO and never preempts a held permit. It writes `RUNNING`, and runs `execute` under `effectiveTimeoutMillis`. Settlement applies `afterToolCall` interceptors with the
 origin context, normalization, and runtime limits, then writes `TERMINAL` with the result and emits
-`AgentEvent.BackgroundExecutionSettled` on the manager's event stream. A late callback for a record
-that is already terminal, fenced, or deleted is discarded.
+`AgentEvent.BackgroundExecutionSettled` on the manager's event stream. Each live execution object
+is a process-local ownership token. Admission/re-admission installs that token under the Session
+mutex; suspension, cancellation, Stop, and deletion revoke it before cancelling the coroutine.
+Both executor start and result commit verify the current token under the same mutex. Interceptors
+run outside the mutex, and a retired finalizer cannot commit over a replacement execution or
+restore stopped/deleted records. The token is not persisted: process restore establishes new ownership.
 
 ### 5.3 Delivery into an active Run
 
@@ -301,12 +309,17 @@ messages, and `request.engine.runtime.background` is set. Otherwise it rejects t
 results stay passive, for example after the user switched to a model that has not passed the gates.
 The manager then appends a `CONTINUATION` notice for the pending records, sets
 `activation = RunActivation(BACKGROUND_RESULTS, anchorMessageId = notice.id, sourceIds)`, and starts
-the Run, which uses the notice as its activation anchor. Business Tool calls in that Run receive a
-paired policy error unless `allowBusinessToolsInContinuations` is true.
+the Run, which uses the notice as its activation anchor. Its explicit-wait allowance is exactly
+the bound on the host's request; there is no SDK minimum or default. A host can explicitly choose
+a longer continuation allowance to merge results landing moments apart, independently of its
+foreground allowance. Business Tool calls in that Run receive a paired policy error unless
+`allowBusinessToolsInContinuations` is true.
 
 `magrathea-chatbot` adds `ChatbotSession.continueWithBackgroundResults()`, which builds the
-request through the existing `ChatbotRequestFactory` from the current session configuration.
-A new send preempts a continuation like any other Run.
+request through `ChatbotRequestFactory.createContinuation` from the current session configuration.
+The default implementation delegates to `create`, preserving existing factories and their budgets.
+Hosts override it to select continuation policy without inspecting message history or changing the
+storage schema. A new send uses `create` again and preempts a continuation like any other Run.
 
 ### 5.5 Acknowledgement and activation counts
 
@@ -318,6 +331,11 @@ A source's automatic activation count is the number of `CONTINUATION` notices in
 it. No separate delivery record is written.
 
 ### 5.6 Controls
+
+Control arguments are parsed into typed commands before execution. Required handles must be
+non-blank strings, handle lists must be arrays of non-blank strings, and an optional `max_wait_ms`
+must be a non-negative integer. Invalid calls return a paired Tool error; they neither fail the
+Run nor partially cancel a valid subset of a malformed request.
 
 In a background-enabled Run (configuration set, executor attached, session managed), the Runtime
 appends four control definitions after the host Tools in the Provider projection, and appends
@@ -346,9 +364,12 @@ as it does today.
 ### 5.8 Session Stop, targeted cancellation, and host loss
 
 - `lease.stopAll()` first cancels and suppresses every record of the session in the executor. It
-  then cancels the Run, so closure writes real `cancelled` outcomes instead of receipts, and finally
-  suppresses unacknowledged terminal results. Suppression is persisted on records, so restore keeps
-  the fence.
+  then cancels and drains the Run, so already-admitted foreground calls close with real `cancelled`
+  outcomes instead of receipts. A final executor sweep cancels work admitted while the first
+  sweep was notifying listeners and suppresses unacknowledged terminal results. Suppression is
+  persisted on records, so restore keeps the fence. A resumable Run uses the same cancellation
+  transition as `lease.cancel()`: its checkpoint is cleared and the Session becomes cancelled,
+  even when no foreground collector is active.
 - `lease.cancelBackground(handles)` cancels only the referenced records.
 - `lease.suspendBackground()` handles host loss. Running jobs stop locally; `REPLAY_SAFE` records
   return to `QUEUED`, and the others become `INTERRUPTED`. `lease.resumeBackground()` admits

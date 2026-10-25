@@ -658,6 +658,169 @@ class BackgroundToolRuntimeContractTest {
         manager.close()
     }
 
+    // 8b: the notice lists executions still running, and awaiting one inside the
+    // continuation delivers and acknowledges it, so its settlement raises no second
+    // activation. Each continuation uses exactly the budget its host supplied.
+    @Test
+    fun continuationNoticeListsPendingAndAwaitMergesIt() = runTest {
+        checkContinuationWaitAllowance(15_000, mergesResult = true)
+    }
+
+    @Test
+    fun continuationDoesNotRaiseASmallHostWaitAllowance() = runTest {
+        checkContinuationWaitAllowance(100, mergesResult = false)
+    }
+
+    @Test
+    fun continuationKeepsAwaitsDisabledWhenItsHostAllowanceIsZero() = runTest {
+        checkContinuationWaitAllowance(0, mergesResult = false)
+    }
+
+    private suspend fun TestScope.checkContinuationWaitAllowance(
+        allowance: Long,
+        mergesResult: Boolean,
+    ) {
+        val store = InMemoryBackgroundExecutionStore()
+        val executor = executor(store)
+        val sessionId = AgentSessionId("merge-continuation")
+        val first = GatedTool("deep_lookup", ToolBackgroundPolicy.ELIGIBLE)
+        val second = GatedTool("other_lookup", ToolBackgroundPolicy.ELIGIBLE)
+        val provider = object : ProviderAdapter {
+            override val key = "merge-provider"
+            val requests = mutableListOf<ProviderRequest>()
+            override suspend fun generate(request: ProviderRequest): Flow<ProviderChunk> = flow {
+                requests += request
+                val notice = request.messages
+                    .lastOrNull { it.role == MessageRole.RUNTIME }
+                    ?.parts?.filterIsInstance<RuntimeNoticePart>()?.singleOrNull()
+                val stillRunning = notice?.let { part ->
+                    Regex("- handle: (\\S+), tool: [^,]+, still running")
+                        .findAll(part.text)
+                        .map { it.groupValues[1] }
+                        .toList()
+                }.orEmpty()
+                when {
+                    // The model awaits the still-running handles the notice listed.
+                    stillRunning.isNotEmpty() &&
+                        request.tools.any { it.name == "await_background_results" } &&
+                        request.messages.lastOrNull()?.role == MessageRole.RUNTIME -> emit(
+                        providerChunk(
+                            toolCalls = listOf(
+                                toolCall(
+                                    "w1",
+                                    "await_background_results",
+                                    """{"handles":[${
+                                        stillRunning.joinToString(",") { "\"$it\"" }
+                                    }]}""",
+                                ),
+                            ),
+                            completed = true,
+                        ),
+                    )
+                    notice != null -> emit(
+                        providerChunk(text = "merged supplement", completed = true),
+                    )
+                    request.messages.lastOrNull()?.role == MessageRole.TOOL -> emit(
+                        providerChunk(text = "initial answer", completed = true),
+                    )
+                    else -> emit(
+                        providerChunk(
+                            toolCalls = listOf(
+                                toolCall("call-1", "deep_lookup"),
+                                toolCall("call-2", "other_lookup"),
+                            ),
+                            completed = true,
+                        ),
+                    )
+                }
+            }
+        }
+        val runner = runner(provider = provider, tools = listOf(first, second), background = executor)
+        val manager = DefaultAgentSessionManager(
+            runner = runner,
+            persistence = InMemoryAgentPersistence(),
+            dispatcher = StandardTestDispatcher(testScheduler),
+            background = executor,
+        )
+        val lease = manager.create(sessionId)
+        val request = request(
+            "merge-provider",
+            sessionId,
+            config = backgroundConfig(
+                handoffWait = 300,
+                explicitAllowance = 100,
+            ),
+            tools = listOf(first.definition, second.definition),
+        )
+        lease.start(request)
+        advanceTimeBy(400)
+        runCurrent()
+        lease.awaitIdle()
+        runCurrent()
+
+        // Only the first search settles; the second stays RUNNING when the continuation starts.
+        first.gate.complete(Unit)
+        runCurrent()
+        assertNotNull(lease.state.value.background?.pendingActivation)
+
+        lease.startContinuation(
+            request.copy(
+                messages = checkNotNull(lease.state.value.state).messages,
+                engine = request.engine.copy(
+                    runtime = request.engine.runtime.copy(
+                        background = backgroundConfig(handoffWait = 300, explicitAllowance = allowance),
+                    ),
+                ),
+            ),
+        )
+        runCurrent()
+        // Settle after 500ms: a host-selected 15s budget merges the result; 100ms and zero
+        // must leave it pending. The SDK must never silently raise either bound.
+        advanceTimeBy(500)
+        runCurrent()
+        second.gate.complete(Unit)
+        runCurrent()
+        lease.awaitIdle()
+        runCurrent()
+
+        // The notice listed the still-running execution and the model awaited it.
+        val notice = provider.requests
+            .last { it.messages.any { message -> message.role == MessageRole.RUNTIME } }
+            .messages.last { it.role == MessageRole.RUNTIME }
+        val noticePart = notice.parts.filterIsInstance<RuntimeNoticePart>().single()
+        assertTrue(
+            "- handle: ${store.load(sessionId).records.single { it.toolName == "other_lookup" }.handle}, " +
+                "tool: other_lookup, still running" in noticePart.text,
+        )
+
+        val awaitResult = checkNotNull(lease.state.value.state).messages
+            .flatMap { it.parts.filterIsInstance<ToolResultPart>() }
+            .singleOrNull { it.toolCallId == "w1" }
+        if (allowance == 0L) {
+            assertNull(awaitResult)
+        } else {
+            val result = assertNotNull(awaitResult).result.jsonObject
+            assertEquals(if (mergesResult) 500L else allowance, result.getValue("waited_ms").jsonPrimitive.long)
+            assertEquals(
+                if (mergesResult) "succeeded" else "running",
+                result.getValue("results").jsonArray.single().jsonObject.getValue("status").jsonPrimitive.content,
+            )
+        }
+        assertEquals(if (allowance == 0L) 3 else 4, provider.requests.size)
+        val lastState = checkNotNull(lease.state.value.state)
+        assertEquals(
+            "merged supplement",
+            lastState.messages.last { it.role == MessageRole.ASSISTANT }
+                .parts.filterIsInstance<TextPart>().single().text,
+        )
+        if (mergesResult) {
+            assertNull(lease.state.value.background?.pendingActivation)
+        } else {
+            assertNotNull(lease.state.value.background?.pendingActivation)
+        }
+        manager.close()
+    }
+
     // 9: every startContinuation rejection surface returns INVALID_STATE.
     @Test
     fun startContinuationRejectsInadmissibleRequests() = runTest {
@@ -2595,6 +2758,7 @@ class BackgroundToolRuntimeContractTest {
         )
         val withoutAwait = renderRuntimeNotice(
             entries,
+            pending = emptyList(),
             RuntimeNoticeDelivery.CONTINUATION,
             BackgroundConsumptionPolicy.LATEST_CONTEXT,
             businessToolsAllowed = false,
@@ -2608,6 +2772,7 @@ class BackgroundToolRuntimeContractTest {
 
         val withAwait = renderRuntimeNotice(
             entries,
+            pending = emptyList(),
             RuntimeNoticeDelivery.CONTINUATION,
             BackgroundConsumptionPolicy.LATEST_CONTEXT,
             businessToolsAllowed = false,
@@ -2617,6 +2782,55 @@ class BackgroundToolRuntimeContractTest {
             "read_background_result, await_background_results, " +
                 "cancel_background_executions, finish_without_reply." in withAwait,
         )
+    }
+
+    // S3-6b: notices list executions still running so a follow-up may await them, and the
+    // merge hint only appears when the await Tool is actually declared.
+    @Test
+    fun runtimeNoticeListsPendingExecutions() {
+        val entries = listOf(
+            RuntimeNoticeEntry(
+                handle = "bg_done",
+                toolName = "web_search",
+                callId = "call-1",
+                outcome = BackgroundOutcome.SUCCEEDED,
+                resultVersion = 1,
+            ),
+        )
+        val pending = listOf(
+            PendingNoticeEntry(handle = "bg_live", toolName = "x_search"),
+        )
+        val text = renderRuntimeNotice(
+            entries,
+            pending = pending,
+            delivery = RuntimeNoticeDelivery.CONTINUATION,
+            policy = BackgroundConsumptionPolicy.LATEST_CONTEXT,
+            businessToolsAllowed = false,
+            awaitDeclared = true,
+        )
+        assertTrue("- handle: bg_live, tool: x_search, still running" in text)
+        assertTrue("await_background_results can wait for it" in text)
+
+        val noAwait = renderRuntimeNotice(
+            entries,
+            pending = pending,
+            delivery = RuntimeNoticeDelivery.CONTINUATION,
+            policy = BackgroundConsumptionPolicy.LATEST_CONTEXT,
+            businessToolsAllowed = false,
+            awaitDeclared = false,
+        )
+        assertTrue("- handle: bg_live, tool: x_search, still running" in noAwait)
+        assertTrue("await_background_results can wait" !in noAwait)
+
+        val nonePending = renderRuntimeNotice(
+            entries,
+            pending = emptyList(),
+            delivery = RuntimeNoticeDelivery.CONTINUATION,
+            policy = BackgroundConsumptionPolicy.LATEST_CONTEXT,
+            businessToolsAllowed = false,
+            awaitDeclared = true,
+        )
+        assertTrue("still running" !in nonePending)
     }
 
     // S3-7: an await that finds no remaining allowance returns immediately with the

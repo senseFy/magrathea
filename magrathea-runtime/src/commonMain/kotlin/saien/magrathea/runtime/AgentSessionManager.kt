@@ -1169,6 +1169,11 @@ private class ManagedAgentSession(
                 resultVersion = record.resultVersion,
             )
         }
+        // Executions still running are listed so the continuation may await them and merge
+        // imminent results into this reply instead of waking for each one separately.
+        val running = records
+            .filter { it.state != BackgroundExecutionState.TERMINAL }
+            .map { PendingNoticeEntry(handle = it.handle, toolName = it.toolName) }
         val notice = AgentMessage(
             role = MessageRole.RUNTIME,
             parts = listOf(
@@ -1177,6 +1182,7 @@ private class ManagedAgentSession(
                     delivery = RuntimeNoticeDelivery.CONTINUATION,
                     text = renderRuntimeNotice(
                         entries,
+                        running,
                         RuntimeNoticeDelivery.CONTINUATION,
                         config.consumptionPolicy,
                         config.allowBusinessToolsInContinuations,
@@ -1198,11 +1204,9 @@ private class ManagedAgentSession(
     }
 
     suspend fun stopAll() = commandMutex.withLock {
-        if (stateMutex.withLock { machine.lifecycle } != SessionLifecycle.OPEN) {
-            return@withLock
-        }
-        val executor = background
-        if (executor != null) {
+        if (stateMutex.withLock { machine.lifecycle } != SessionLifecycle.OPEN) return@withLock
+        suspend fun stopBackground() {
+            val executor = background ?: return
             val messages = stateMutex.withLock { machine.result.state?.messages }.orEmpty()
             val suppress = executor.records(sessionId).records
                 .filter {
@@ -1213,10 +1217,20 @@ private class ManagedAgentSession(
                 .mapTo(linkedSetOf()) { it.executionId }
             executor.stopSession(sessionId, suppress)
         }
-        if (stateMutex.withLock { machine.isExecuting }) {
-            runner.cancel(sessionId)
+        withContext(NonCancellable) {
+            val failures = CleanupFailureAccumulator()
+            // Retire current admissions first so foreground cancellation closes them as
+            // cancelled instead of handing them off with send-preemption receipts.
+            failures.capture { stopBackground() }
+            failures.capture { cancelLocked(requirePendingWork = false) }
+            // The first sweep's notifications may suspend while the Run admits more work.
+            // Once that Run and its collector settle, no further admissions can race this
+            // final sweep. Re-read messages too before choosing terminal suppression.
+            failures.capture { stopBackground() }
+            failures.capture { refreshBackground() }
+            failures.failureOrNull()?.let { throw it }
+            Unit
         }
-        refreshBackground()
     }
 
     suspend fun cancelBackground(handles: List<String>): BackgroundCancellationResult =
@@ -1295,12 +1309,23 @@ private class ManagedAgentSession(
     }
 
     suspend fun cancel() = commandMutex.withLock {
+        cancelLocked(requirePendingWork = true)
+    }
+
+    /** Applies the same durable cancellation transition to active and recoverable Runs. */
+    private suspend fun cancelLocked(requirePendingWork: Boolean) {
         val before = stateMutex.withLock {
             machine.requireOpen()
-            if (!machine.hasPendingWork) {
+            if (requirePendingWork && !machine.hasPendingWork) {
                 throw AgentSessionException(AgentSessionErrorCode.INVALID_STATE, "Agent session has no pending execution")
             }
             machine
+        }
+        if (!before.hasPendingWork) {
+            // A terminal event can precede the collector's final cleanup. Stop-all must
+            // drain that collector before its final background sweep, even on an idle Run.
+            awaitExecutionSettled(before.execution)
+            return
         }
         var controlSucceeded = false
         try {

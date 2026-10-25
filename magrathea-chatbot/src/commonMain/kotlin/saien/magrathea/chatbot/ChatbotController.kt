@@ -141,7 +141,9 @@ internal class ChatbotController(
         if (runtime.background?.pendingActivation == null) return@withLock false
         if (runtime.phase.hasPendingExecution) return@withLock false
         try {
-            lease.startContinuation(buildRequest(runtime.authoritativeMessages()))
+            lease.startContinuation(
+                buildRequest(runtime.authoritativeMessages(), continuation = true),
+            )
         } catch (failure: AgentSessionException) {
             if (failure.code == AgentSessionErrorCode.INVALID_STATE) return@withLock false
             throw failure
@@ -211,17 +213,18 @@ internal class ChatbotController(
     private suspend fun buildRequest(
         messages: List<AgentMessage>,
         configuration: ChatbotSessionConfiguration? = null,
+        continuation: Boolean = false,
     ): AgentRequest {
         val selectedConfiguration = configuration
             ?: lease.state.value.request?.toChatbotSessionConfiguration()
             ?: stateMutex.withLock { mutableState.value.configuration }
-        val request = requestFactory.create(
-            ChatbotRequestContext(
-                sessionId = lease.sessionId,
-                configuration = selectedConfiguration,
-                messages = messages,
-            ),
+        val context = ChatbotRequestContext(
+            sessionId = lease.sessionId,
+            configuration = selectedConfiguration,
+            messages = messages,
         )
+        val request = if (continuation) requestFactory.createContinuation(context)
+            else requestFactory.create(context)
         return request.copy(
             sessionId = lease.sessionId,
             messages = messages,
