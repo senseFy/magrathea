@@ -10,6 +10,7 @@ import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
+import saien.magrathea.buildinfo.MagratheaBuildInfo
 
 data class TraceContext(
     val traceId: String,
@@ -341,7 +342,7 @@ suspend fun <T> withMagratheaTraceContext(
 
 object MagratheaSdk {
     val version: String
-        get() = MAGRATHEA_CORE_SDK_VERSION
+        get() = MagratheaBuildInfo.sdkVersion
 }
 
 private fun requireTraceAttributes(attributes: Map<String, TraceValue>) {

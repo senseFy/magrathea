@@ -20,6 +20,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "magrathea"
 
+include(":magrathea-build-info")
 include(":magrathea-core")
 include(":magrathea-session-catalog")
 include(":magrathea-provider-api")

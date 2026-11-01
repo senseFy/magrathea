@@ -22,6 +22,7 @@ end
 allowed_licenses = %w[Apache-2.0 MIT].freeze
 
 published_modules = %w[
+  magrathea-build-info
   magrathea-core
   magrathea-session-catalog
   magrathea-provider-api

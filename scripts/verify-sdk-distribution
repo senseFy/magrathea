@@ -6,6 +6,7 @@ VERSION="${2:?usage: verify-sdk-distribution ROOT_DIR VERSION}"
 REPOSITORY="$ROOT_DIR/build/sdk-verification-repository/saien/magrathea"
 
 MOBILE_KMP_MODULES=(
+  magrathea-build-info
   magrathea-core
   magrathea-session-catalog
   magrathea-provider-api
@@ -22,6 +23,7 @@ MOBILE_KMP_MODULES=(
   magrathea-chatbot
 )
 WEB_ENABLED_KMP_MODULES=(
+  magrathea-build-info
   magrathea-core
   magrathea-session-catalog
   magrathea-provider-api
@@ -121,5 +123,6 @@ python3 "$ROOT_DIR/scripts/verify_klib_paths.py" \
   "$REPOSITORY" \
   --forbid-root "$ROOT_DIR" \
   --expected-count "$expected_klibs"
+python3 "$ROOT_DIR/scripts/verify_version_isolation.py" "$REPOSITORY" "$VERSION"
 
 printf 'MAGRATHEA_DISTRIBUTION_PASS coordinates=%s\n' "$expected_coordinates"

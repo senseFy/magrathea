@@ -81,7 +81,7 @@ Magrathea is Alpha. Its APIs and persisted formats may change before the stable 
 - Signed Maven artifacts are published to GitHub Packages. GitHub requires authenticated package
   reads, including for public repositories; anonymous Maven consumption remains a Maven Central
   release concern.
-- The 95-coordinate rollback contract is a loopback rehearsal. An actual rollback still requires a
+- The 102-coordinate rollback contract is a loopback rehearsal. An actual rollback still requires a
   release owner and a verified previous application pin.
 - The JS/TypeScript Web archive is build-local and no task publishes it to npm.
 - An annotated version tag triggers signed GitHub Packages publication and a GitHub Release only

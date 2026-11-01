@@ -23,8 +23,8 @@ port=""
 }
 coordinate_count="$(wc -l < "$COORDINATES_FILE" | tr -d ' ')"
 unique_coordinate_count="$(sort "$COORDINATES_FILE" | uniq | wc -l | tr -d ' ')"
-[[ "$coordinate_count" -eq 95 && "$unique_coordinate_count" -eq "$coordinate_count" ]] || {
-  printf 'rollback contract failed: expected 95 unique coordinates, found %s/%s\n' \
+[[ "$coordinate_count" -eq 102 && "$unique_coordinate_count" -eq "$coordinate_count" ]] || {
+  printf 'rollback contract failed: expected 102 unique coordinates, found %s/%s\n' \
     "$unique_coordinate_count" "$coordinate_count" >&2
   exit 1
 }

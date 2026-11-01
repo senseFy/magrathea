@@ -100,8 +100,8 @@ substitute for the public API or the tests themselves.
 
 | ID | Invariant | Nearest verification boundary |
 |---|---|---|
-| D-001 | 17 logical SDK modules generate 95 build-local Maven coordinates | Distribution verifier |
-| D-002 | An isolated consumer resolves all 14 mobile KMP modules and links the graph into device and Simulator frameworks | Published-consumer Apple gate |
+| D-001 | 18 logical SDK modules generate 102 build-local Maven coordinates; only `magrathea-build-info` binaries embed the SDK version | Distribution verifier |
+| D-002 | An isolated consumer resolves all 15 mobile KMP modules and links the graph into device and Simulator frameworks | Published-consumer Apple gate |
 | D-003 | Public JVM-bearing ABI and serialization fixtures are release gates | API/schema verifier |
 | D-004 | Isolated consumers resolve published JVM, Android, iOS, JS, and Wasm variants | Published-consumer gates |
 | D-005 | Remote Maven publication requires in-memory PGP signing, publication-isolated signature outputs, and immutable coordinates | Publisher and rollback contracts |

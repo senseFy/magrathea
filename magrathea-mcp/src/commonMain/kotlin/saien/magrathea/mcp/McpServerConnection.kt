@@ -34,6 +34,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.io.IOException
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonObject
+import saien.magrathea.core.MagratheaSdk
 import saien.magrathea.core.ToolExecutionRequest
 import saien.magrathea.core.ToolExecutionResult
 import saien.magrathea.core.ToolExecutor
@@ -52,7 +53,7 @@ class McpServerConnection(
     private val policyProvider: McpToolPolicyProvider = McpToolPolicyProvider { McpToolPolicy() },
     clientInfo: McpImplementationInfo = McpImplementationInfo(
         name = "magrathea",
-        version = MAGRATHEA_MCP_SDK_VERSION,
+        version = MagratheaSdk.version,
         title = "Magrathea",
     ),
     private val options: McpConnectionOptions = McpConnectionOptions(),

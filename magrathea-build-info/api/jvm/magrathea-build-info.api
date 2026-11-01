@@ -1,0 +1,5 @@
+public final class saien/magrathea/buildinfo/MagratheaBuildInfo {
+	public static final field INSTANCE Lsaien/magrathea/buildinfo/MagratheaBuildInfo;
+	public final fun getSdkVersion ()Ljava/lang/String;
+}
+

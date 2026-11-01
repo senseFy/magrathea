@@ -10,7 +10,7 @@ The normative decision is [ADR-012](adr/ADR-012-project-positioning-and-layers.m
 
 | Layer | Modules | Responsibility |
 |---|---|---|
-| Kernel | `magrathea-core`, `magrathea-provider-api` | Agent models, stores, credentials, Provider events, transports, and serialization |
+| Kernel | `magrathea-core`, `magrathea-provider-api`, `magrathea-build-info` | Agent models, stores, credentials, Provider events, transports, serialization, and the SDK version |
 | Runtime | `magrathea-runtime` | Turns, Tools, retry, checkpoints, managed session ownership, resume, context management, limits, and tracing |
 | Capabilities | Provider adapters, `magrathea-mcp`, `magrathea-policy` | Reference protocols, MCP Tools, and reusable approval policy |
 | Catalog | `magrathea-session-catalog` | Optional Core-only session directory, organization, projections, and bounded maintenance contracts |
