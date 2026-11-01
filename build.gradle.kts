@@ -1525,6 +1525,7 @@ val verifySdkDistribution = tasks.register("verifySdkDistribution") {
 val releaseNotes = layout.buildDirectory.file("release-notes/v${sdkVersion}.md")
 val generateReleaseNotes = tasks.register<Exec>("generateReleaseNotes") {
     inputs.file("CHANGELOG.md")
+    inputs.file("scripts/publish-sdk")
     inputs.file("scripts/release_notes.py")
     inputs.property("version", sdkVersion)
     outputs.file(releaseNotes)
