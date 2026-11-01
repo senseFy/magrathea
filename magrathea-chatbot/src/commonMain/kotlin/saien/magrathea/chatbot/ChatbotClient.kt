@@ -59,6 +59,13 @@ class ChatbotSession internal constructor(
     internal val boundSessionId: String
         get() = controller.sessionId
 
+    /**
+     * Stable Agent identity, available before the first send. Reading it does not create a
+     * persisted record; [snapshot] retains its existing ID-less draft projection until execution.
+     */
+    val sessionId: AgentSessionId
+        get() = AgentSessionId(boundSessionId)
+
     fun snapshot(): ChatbotSnapshot = controller.state.value
 
     fun observe(observer: ChatbotStateObserver): ChatbotObservation {
@@ -81,6 +88,50 @@ class ChatbotSession internal constructor(
             ensureOpen()
             controller.sendMessage(text, attachments, options)
         }
+    }
+
+    /** Captures a user input and its canonical ID without starting execution or changing history. */
+    @Throws(ChatbotException::class, CancellationException::class)
+    suspend fun prepareMessage(
+        text: String,
+        attachments: List<ChatbotAttachment> = emptyList(),
+        options: ChatbotSendOptions = ChatbotSendOptions(),
+    ): ChatbotPreparedMessage = facadeOperation {
+        if (text.isBlank() && attachments.isEmpty()) {
+            throw ChatbotException(ChatbotFailure.INVALID_ARGUMENT)
+        }
+        lifecycleMutex.withLock {
+            ensureOpen()
+            controller.prepareMessage(text, attachments, options)
+        }
+    }
+
+    /**
+     * Sends [prepared] once on its originating facade, appending to the current authoritative
+     * history. Cancellation while waiting for command admission leaves it unused; after the
+     * attempt starts, failure or cancellation does not make it reusable. See [ChatbotPreparedMessage].
+     */
+    @Throws(ChatbotException::class, CancellationException::class)
+    suspend fun sendPrepared(prepared: ChatbotPreparedMessage) = facadeOperation {
+        lifecycleMutex.withLock {
+            ensureOpen()
+            controller.sendPreparedMessage(prepared)
+        }
+    }
+
+    /**
+     * Joins the current local execution collector, including cleanup after its terminal event.
+     * Does not cancel a run, resume a checkpoint, or wait for independent background work.
+     * Concurrent cancel, interrupt and close operations remain available while waiting.
+     * Callers coordinating storage migration must separately fence new commands and background
+     * writers; returning from this method alone is not a lifetime or persistence fence.
+     */
+    @Throws(ChatbotException::class, CancellationException::class)
+    suspend fun awaitIdle() = facadeOperation {
+        lifecycleMutex.withLock {
+            ensureOpen()
+        }
+        controller.awaitIdle()
     }
 
     @Throws(ChatbotException::class, CancellationException::class)
