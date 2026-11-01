@@ -46,6 +46,10 @@ and file checksums; Gradle decides reuse from task inputs, including version-dep
 Missing, expired, or invalid snapshots fall back to ordinary builds and never authorize publication.
 Dependency downloads continue to use `setup-gradle` caching. Platform gates produce new snapshots
 even when compilation hits the cache, so subsequent PRs do not need a main build to refresh them.
+Only `magrathea-build-info` compiles the SDK version. Core uses it as an implementation dependency
+and other modules keep it off Kotlin/Native compile classpaths, so a version-only Release PR
+recompiles those two modules, relinks, and reruns tests while downstream compilation stays
+reusable. The distribution gate rejects any other compiled artifact that embeds the version.
 
 Publication pins the source CI run and attempt. Its receipt retains the tested commit and tree
 alongside the final release commit. Partial reruns can retain successful jobs and checkout records

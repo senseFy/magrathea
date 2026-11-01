@@ -16,7 +16,7 @@ Use `saien.magrathea:<logical-module>:<version>`. Choose a version from
 [GitHub Releases](https://github.com/senseFy/magrathea/releases); a Release PR is a candidate until
 publication completes.
 
-Kotlin Multiplatform generates target variants from the 17 logical modules. Consumers declare the
+Kotlin Multiplatform generates target variants from the 18 logical modules. Consumers declare the
 logical module, not a target-specific publication.
 
 Inspect every generated coordinate:

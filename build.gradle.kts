@@ -16,9 +16,12 @@ import org.cyclonedx.gradle.CyclonedxDirectTask
 import org.cyclonedx.model.License
 import org.cyclonedx.model.LicenseChoice
 import org.cyclonedx.parsers.JsonParser
+import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
+import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.targets.js.nodejs.NodeJsRootExtension
 import org.jetbrains.kotlin.gradle.targets.js.yarn.YarnRootExtension
 import org.jetbrains.kotlin.gradle.targets.wasm.yarn.WasmYarnRootExtension
+import org.jetbrains.kotlin.gradle.tasks.KotlinNativeCompile
 
 plugins {
     alias(libs.plugins.androidKotlinMultiplatformLibrary) apply false
@@ -55,6 +58,7 @@ apiValidation {
 }
 
 val sdkPublishProjects = listOf(
+    ":magrathea-build-info",
     ":magrathea-core",
     ":magrathea-session-catalog",
     ":magrathea-provider-api",
@@ -75,6 +79,7 @@ val sdkPublishProjects = listOf(
 )
 
 val sdkKmpMobilePublishProjects = setOf(
+    ":magrathea-build-info",
     ":magrathea-core",
     ":magrathea-session-catalog",
     ":magrathea-provider-api",
@@ -96,6 +101,7 @@ val sdkKmpWebOnlyPublishProjects = setOf(
 )
 val sdkKmpPublishProjects = sdkKmpMobilePublishProjects + sdkKmpWebOnlyPublishProjects
 val sdkKmpWebPublishProjects = setOf(
+    ":magrathea-build-info",
     ":magrathea-core",
     ":magrathea-session-catalog",
     ":magrathea-provider-api",
@@ -150,6 +156,8 @@ val explicitlyNonPublishedProjects = setOf(
 val sdkGroup = providers.gradleProperty("magrathea.group").get()
 val sdkVersion = providers.gradleProperty("magrathea.version").get()
 val pomProjectUrl = providers.gradleProperty("magrathea.pom.url").get()
+val sdkBuildInfoModule = "magrathea-build-info"
+val sdkBuildInfoCompileProjects = setOf(":$sdkBuildInfoModule", ":magrathea-core")
 
 group = sdkGroup
 version = sdkVersion
@@ -209,6 +217,24 @@ subprojects {
 
     if (path in sdkPublishProjects) {
         configureSdkPublishing()
+    }
+    if (path !in sdkBuildInfoCompileProjects) {
+        configurations.matching { it.name.endsWith("CompileKlibraries") }.configureEach {
+            exclude(group = sdkGroup, module = sdkBuildInfoModule)
+        }
+        plugins.withId("org.jetbrains.kotlin.multiplatform") {
+            extensions.configure<KotlinMultiplatformExtension> {
+                targets.withType<KotlinNativeTarget>().configureEach {
+                    val buildInfoCompile = ":$sdkBuildInfoModule:compileKotlin${targetName.replaceFirstChar { it.uppercase() }}"
+                    val buildInfoKlib = files(
+                        provider { (rootProject.tasks.getByPath(buildInfoCompile) as KotlinNativeCompile).outputFile.get() },
+                    ).builtBy(buildInfoCompile)
+                    binaries.configureEach {
+                        linkTaskProvider.configure { libraries.from(buildInfoKlib) }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -303,7 +329,12 @@ val catalogLayerChecks = listOf(
                     "$path must not depend on the optional session catalog"
                 }
             } else {
-                val unexpected = closure - setOf(path, ":magrathea-core", ":magrathea-session-catalog")
+                val unexpected = closure - setOf(
+                    path,
+                    ":$sdkBuildInfoModule",
+                    ":magrathea-core",
+                    ":magrathea-session-catalog",
+                )
                 check(unexpected.isEmpty()) { "$path has non-harness production dependencies: $unexpected" }
             }
         }
@@ -487,8 +518,8 @@ val writeRollbackCoordinates = tasks.register("writeRollbackCoordinates") {
 
     doLast {
         val coordinates = publishingArtifactCoordinates(null)
-        check(coordinates.size == 95) {
-            "Rollback rehearsal expected 95 publication coordinates, found ${coordinates.size}"
+        check(coordinates.size == 102) {
+            "Rollback rehearsal expected 102 publication coordinates, found ${coordinates.size}"
         }
         check(coordinates.toSet().size == coordinates.size) {
             "Rollback rehearsal contains duplicate publication coordinates"
@@ -751,6 +782,7 @@ val verifyJvmChatSample = tasks.register<GradleBuild>("verifyJvmChatSample") {
     group = "verification"
     description = "Run the published-artifact JVM chatbot and deterministic provider-protocol sample."
     dependsOn(
+        ":$sdkBuildInfoModule:publishAllPublicationsToSdkVerificationRepository",
         ":magrathea-chatbot:publishAllPublicationsToSdkVerificationRepository",
         ":magrathea-core:publishAllPublicationsToSdkVerificationRepository",
         ":magrathea-provider-api:publishAllPublicationsToSdkVerificationRepository",
@@ -824,6 +856,7 @@ val stopWebGatewayE2eServer = tasks.register("stopWebGatewayE2eServer") {
 }
 
 val webSamplePublishProjects = listOf(
+    ":$sdkBuildInfoModule",
     ":magrathea-core",
     ":magrathea-session-catalog",
     ":magrathea-provider-api",
@@ -1473,7 +1506,7 @@ val verifyWebTypeScriptConsumer = tasks.register<Exec>("verifyWebTypeScriptConsu
 
 val verifySdkMavenDistribution = tasks.register<Exec>("verifySdkMavenDistribution") {
     group = "verification"
-    description = "Validate all 95 build-local Maven coordinates and their documentation artifacts."
+    description = "Validate all 102 build-local Maven coordinates and their documentation artifacts."
     dependsOn(sdkPublishProjects.map { "$it:publishAllPublicationsToSdkVerificationRepository" })
     commandLine(
         "/bin/bash",

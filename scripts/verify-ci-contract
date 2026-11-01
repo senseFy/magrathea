@@ -359,6 +359,7 @@ fail_contract("release.yml must publish four logical-module shards") unless
     publish_strategy["max-parallel"] == 4 &&
     publish_matrix.all? { |entry| entry["name"] && entry["modules"] }
 expected_publish_modules = %w[
+  magrathea-build-info
   magrathea-core
   magrathea-session-catalog
   magrathea-provider-api

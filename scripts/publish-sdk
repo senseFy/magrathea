@@ -21,6 +21,7 @@ VERSION_FILE="$ROOT_DIR/gradle.properties"
 VERSION_PROPERTY="magrathea.version"
 GROUP_PROPERTY="magrathea.group"
 SDK_MODULES=(
+  "magrathea-build-info"
   "magrathea-core"
   "magrathea-session-catalog"
   "magrathea-provider-api"

@@ -465,7 +465,7 @@ data class StoredCheckpointEnvelope(
 
 class AgentSessionSnapshotCodec(
     json: Json = Json,
-    private val sdkVersion: String = MAGRATHEA_CORE_SDK_VERSION,
+    private val sdkVersion: String = MagratheaSdk.version,
 ) {
     private val json = fixedStorageJson(json)
 
@@ -500,7 +500,7 @@ class AgentSessionSnapshotCodec(
 
 class AgentCheckpointCodec(
     json: Json = Json,
-    private val sdkVersion: String = MAGRATHEA_CORE_SDK_VERSION,
+    private val sdkVersion: String = MagratheaSdk.version,
 ) {
     private val json = fixedStorageJson(json)
 
@@ -536,7 +536,7 @@ class AgentCheckpointCodec(
 /** Durable codec for one Session-owned background execution record (ADR-019). */
 class BackgroundExecutionRecordCodec(
     json: Json = Json,
-    private val sdkVersion: String = MAGRATHEA_CORE_SDK_VERSION,
+    private val sdkVersion: String = MagratheaSdk.version,
 ) {
     private val json = fixedStorageJson(json)
 
@@ -572,7 +572,7 @@ class BackgroundExecutionRecordCodec(
 /** Durable codec for the originating request context of a handed-off Run (ADR-019). */
 class BackgroundOriginContextCodec(
     json: Json = Json,
-    private val sdkVersion: String = MAGRATHEA_CORE_SDK_VERSION,
+    private val sdkVersion: String = MagratheaSdk.version,
 ) {
     private val json = fixedStorageJson(json)
 

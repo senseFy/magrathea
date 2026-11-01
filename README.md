@@ -16,15 +16,16 @@ bring their own UI and choose only the integrations they need.
 
 | Layer | Modules |
 |---|---|
-| Kernel | `magrathea-core`, `magrathea-provider-api` |
+| Kernel | `magrathea-core`, `magrathea-provider-api`, `magrathea-build-info` |
 | Runtime | `magrathea-runtime` |
 | Agent APIs | `magrathea-chatbot`, `magrathea-policy`, `magrathea-mcp` |
 | Providers | `magrathea-provider-gemini`, `magrathea-provider-openai`, `magrathea-provider-anthropic` |
 | Data and credentials | `magrathea-session-catalog`, `magrathea-storage-room`, `magrathea-storage-web`, `magrathea-credentials` |
 | Browser Gateway | `magrathea-gateway-protocol`, `magrathea-provider-gateway`, `magrathea-gateway-server`, `magrathea-web-client` |
 
-These are 17 logical modules. Kotlin Multiplatform publication variants are generated from them,
-and consumers declare the logical module coordinates they need.
+These are 18 logical modules. Kotlin Multiplatform publication variants are generated from them,
+and consumers declare the logical module coordinates they need. `magrathea-build-info` only carries
+the SDK version and arrives transitively through `magrathea-core`.
 
 ## Capabilities
 

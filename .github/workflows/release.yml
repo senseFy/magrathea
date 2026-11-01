@@ -322,8 +322,8 @@ jobs:
         include:
           - name: foundation
             modules: >-
-              magrathea-core magrathea-session-catalog magrathea-provider-api magrathea-credentials
-              magrathea-storage-web magrathea-gateway-server
+              magrathea-build-info magrathea-core magrathea-session-catalog magrathea-provider-api
+              magrathea-credentials magrathea-storage-web magrathea-gateway-server
           - name: runtime
             modules: >-
               magrathea-runtime magrathea-mcp magrathea-provider-openai
