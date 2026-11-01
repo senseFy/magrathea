@@ -25,6 +25,8 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -32,7 +34,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import saien.magrathea.core.AgentEngineConfig
+import saien.magrathea.core.AgentEvent
 import saien.magrathea.core.AgentMessage
+import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.BackgroundConsumptionPolicy
 import saien.magrathea.core.BackgroundExecutionConfig
 import saien.magrathea.core.BackgroundExecutionState
@@ -65,6 +69,7 @@ import saien.magrathea.runtime.InMemoryAgentPersistence
 import saien.magrathea.runtime.InMemoryBackgroundExecutionStore
 import saien.magrathea.runtime.InMemoryToolRegistry
 import saien.magrathea.core.ToolExecutor
+import saien.magrathea.core.toMessagePart
 
 @OptIn(kotlin.time.ExperimentalTime::class)
 class BackgroundFacadeReviewRegressionTest {
@@ -119,6 +124,102 @@ class BackgroundFacadeReviewRegressionTest {
         val enabled = messages.toChatbotMessageSnapshots(true)
         assertEquals(1, enabled.sumOf { it.toolCalls.size }, "The latest request's control namespace must not hide an already answered historical business call")
         assertEquals(1, reconcileToolActivities(enabled).size)
+    }
+
+    @Test
+    fun featureOffBusinessToolsWithControlNamesAcceptObjectHandles() {
+        val results = listOf(
+            ToolResultPart(
+                toolCallId = "read",
+                toolName = "read_background_result",
+                result = JsonPrimitive("Business read"),
+                displayText = "Business read",
+                metadata = buildJsonObject { put("magrathea.background.handle", JsonObject(emptyMap())) },
+            ),
+            ToolResultPart(
+                toolCallId = "await",
+                toolName = "await_background_results",
+                result = buildJsonObject {
+                    putJsonArray("results") {
+                        addJsonObject { put("handle", JsonObject(emptyMap())) }
+                    }
+                },
+                displayText = "Business await",
+            ),
+            ToolResultPart(
+                toolCallId = "slices",
+                toolName = "await_background_results",
+                result = JsonPrimitive("Business slices"),
+                displayText = "Business slices",
+                metadata = buildJsonObject {
+                    putJsonArray("magrathea.background.results") {
+                        addJsonObject { put("handle", JsonArray(emptyList())) }
+                        addJsonObject {
+                            put("handle", "unrelated")
+                            put("content_offset", JsonObject(emptyMap()))
+                            put("content_count", JsonArray(emptyList()))
+                        }
+                        addJsonObject {
+                            put("handle", "overflow")
+                            put("content_offset", Int.MAX_VALUE)
+                            put("content_count", 1)
+                        }
+                    }
+                },
+            ),
+        )
+        val messages = results.flatMap { result ->
+            listOf(
+                AgentMessage(
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(toolCall(result.toolCallId, result.toolName)),
+                ),
+                AgentMessage(role = MessageRole.TOOL, parts = listOf(result)),
+            )
+        }
+        val snapshots = messages.toChatbotMessageSnapshots(backgroundEnabled = false)
+        val activities = reconcileToolActivities(snapshots).applyBackgroundProjection(
+            buildBackgroundProjection(null, messages, emptyList(), backgroundEnabled = false),
+        )
+
+        assertEquals(results.map { it.toolCallId }, activities.map { it.call.id })
+        assertEquals(results.map { it.displayText }, activities.map { it.result?.text })
+        assertTrue(activities.all { it.status == ChatbotToolActivityStatus.SUCCEEDED && it.background == null })
+        assertEquals(results.size, snapshots.sumOf { it.toolCalls.size })
+        assertEquals(results.size, snapshots.sumOf { it.toolResults.size })
+    }
+
+    @Test
+    fun malformedControlMarkersDoNotHideBusinessResultsInEventsOrHistory() {
+        val sessionId = AgentSessionId("business-session")
+        val call = toolCall("business-call", "lookup")
+        val assistant = AgentMessage(role = MessageRole.ASSISTANT, parts = listOf(call))
+        val reducer = ChatbotEventReducer()
+        for (marker in listOf(JsonObject(emptyMap()), JsonArray(emptyList()))) {
+            val result = ToolExecutionResult(
+                toolCallId = call.toolCallId,
+                toolName = call.toolName,
+                result = JsonPrimitive("Business result"),
+                displayText = "Business result",
+                metadata = buildJsonObject { put("magrathea.background.control", marker) },
+            )
+            val emitted = reducer.reduce(
+                ChatbotSnapshot(configuration = testChatbotConfiguration()),
+                AgentEvent.MessageEmitted(sessionId, assistant),
+            )
+            val requested = reducer.reduce(emitted, AgentEvent.ToolRequested(sessionId, call))
+            assertEquals(ChatbotToolActivityStatus.RUNNING, requested.toolActivities.single().status)
+            val completed = reducer.reduce(requested, AgentEvent.ToolCompleted(sessionId, result))
+            assertEquals("Business result", completed.toolActivities.single().result?.text)
+            assertEquals(ChatbotToolActivityStatus.SUCCEEDED, completed.toolActivities.single().status)
+
+            val messages = listOf(
+                assistant,
+                AgentMessage(role = MessageRole.TOOL, parts = listOf(result.toMessagePart())),
+            ).toChatbotMessageSnapshots()
+            assertEquals(1, messages.sumOf { it.toolCalls.size })
+            assertEquals("Business result", messages.flatMap { it.toolResults }.single().text)
+        }
     }
 
     @Test
