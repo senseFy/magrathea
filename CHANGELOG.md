@@ -5,6 +5,17 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## [0.1.0-alpha.21](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.20...v0.1.0-alpha.21) (2026-11-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* Published Room schema 2 databases upgrade to physical schema 3; IndexedDB databases upgrade from schema 1 to 2. The Room upgrade adds columns, covering indexes, and catalog/backup tables without copying canonical payload tables; index creation scales with record count. Older SDKs cannot reopen upgraded databases. Downgrading requires a compatible pre-upgrade backup; canonical envelope schema 9 is unchanged. Hosts schedule bounded catalog maintenance and must fence/drain writers before policy replacement or canonical attachment-name migration. Room deleteSession and clear atomically remove session-owned background executions, origins, migration backups and derived catalog rows; clear retains collections. Direct persistence callers must fence and drain canonical and background writers before deletion. PREPARED activity mode is strict: missing preparation for a changed activity identity rejects the canonical commit atomically with ACTIVITY_NOT_PREPARED; unchanged identities need no new preparation. Shared projectors must be safe for concurrent calls. Room close rejects new work and waits for admitted operations even if its closing coroutine is cancelled.
+
+### Features
+
+* add durable session catalogs and prepared execution ([#31](https://github.com/senseFy/magrathea/issues/31)) ([5d6be72](https://github.com/senseFy/magrathea/commit/5d6be72be0bc6e79eb3253874840e7bb717f37ba))
+
 ## [0.1.0-alpha.20](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.19...v0.1.0-alpha.20) (2026-10-25)
 
 

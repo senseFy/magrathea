@@ -35,7 +35,7 @@ model.
 ## Dependency
 
 ```kotlin
-implementation("saien.magrathea:magrathea-mcp:0.1.0-alpha.20") // x-release-please-version
+implementation("saien.magrathea:magrathea-mcp:0.1.0-alpha.21") // x-release-please-version
 ```
 
 ## Streamable HTTP
