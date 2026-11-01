@@ -409,8 +409,112 @@ class SessionCatalogContractTest {
             assertFailsWith<IllegalArgumentException> { store.catalog.pageSessions(SessionCatalogQuery(), limit = limit) }
             assertFailsWith<IllegalArgumentException> { store.catalog.pageCollections(limit = limit) }
             assertFailsWith<IllegalArgumentException> { store.catalog.windowAround(AgentSessionId("s"), SessionCatalogQuery(), limit) }
+            assertFailsWith<IllegalArgumentException> { store.catalog.windowAroundCollection("c", limit = limit) }
         }
         assertEquals(1, store.catalog.pageSessions(SessionCatalogQuery(), limit = MAX_CATALOG_PAGE_SIZE).entries.size)
+    }
+
+    @Test
+    fun collectionRevisionIgnoresSessionActivityMembershipAndNoopCollectionWrites() = runTest {
+        val store = InMemorySessionCatalogStore()
+        val catalog = store.catalog
+        assertEquals(0L, catalog.state().collectionsRevision)
+        val folder = collection("c", "Folder")
+        catalog.createCollection(folder)
+        val created = catalog.state()
+        assertEquals(created.revision, created.collectionsRevision)
+        repeat(10) { store.persistence.commit(snapshot("s", time = it.toLong()), null) }
+        val identity = assertNotNull(catalog.sessionIdentity(AgentSessionId("s")))
+        catalog.updateOrganization(identity, SessionOrganizationMutation.Collection(folder.id))
+        catalog.updateOrganization(identity, SessionOrganizationMutation.Title("Custom"))
+        catalog.updateOrganization(identity, SessionOrganizationMutation.Pin(7))
+        store.persistence.deleteSession(identity.sessionId)
+        catalog.renameCollection(folder.id, folder.name, folder.nameSortKey, folder.nameUniqueKey)
+        catalog.deleteCollection("absent")
+        assertFailure(SessionCatalogFailure.COLLECTION_CONFLICT) { catalog.createCollection(folder) }
+        assertTrue(catalog.state().revision > created.revision)
+        assertEquals(created.collectionsRevision, catalog.state().collectionsRevision)
+
+        catalog.renameCollection(folder.id, "Renamed", "renamed", "renamed")
+        val renamed = catalog.state()
+        assertTrue(renamed.collectionsRevision > created.collectionsRevision)
+        assertEquals(renamed.revision, renamed.collectionsRevision)
+        catalog.deleteCollection(folder.id)
+        val deleted = catalog.state()
+        assertTrue(deleted.collectionsRevision > renamed.collectionsRevision)
+        assertEquals(deleted.revision, deleted.collectionsRevision)
+        store.close()
+    }
+
+    @Test
+    fun collectionRevisionInvalidatesRetainedCollectionCursorsOnClearAndRebuild() = runTest {
+        val store = InMemorySessionCatalogStore()
+        repeat(3) { store.catalog.createCollection(collection("c$it", "Folder $it")) }
+        val page = store.catalog.pageCollections(limit = 1)
+        store.persistence.clear()
+        val cleared = store.catalog.state()
+        assertTrue(cleared.collectionsRevision > page.state.collectionsRevision)
+        assertEquals(3, store.catalog.pageCollections(limit = 10).entries.size)
+        assertFailure(SessionCatalogFailure.INVALID_CURSOR) {
+            store.catalog.pageCollections(cursor = assertNotNull(page.nextCursor), limit = 1)
+        }
+        val rebuilt = store.maintenance.rebuild(cleared.policy, cleared.generation).state
+        assertTrue(rebuilt.collectionsRevision > cleared.collectionsRevision)
+        assertEquals(rebuilt.collectionsRevision, store.maintenance.runBatch(1).progress.state.collectionsRevision)
+        store.rebuild()
+        assertTrue(store.catalog.state().collectionsRevision > rebuilt.collectionsRevision)
+        store.close()
+    }
+
+    @Test
+    fun organizationImportOnlyInvalidatesCollectionsWhenItAddsDefinitions() = runTest {
+        val store = InMemorySessionCatalogStore()
+        val folder = collection("c", "Folder")
+        store.catalog.createCollection(folder)
+        val before = store.catalog.state().collectionsRevision
+        val receipt = store.migration.beginOrganizationImport("host", "frozen-source")
+        store.migration.importOrganizationBatch(receipt.token, 0, listOf(folder), emptyList())
+        assertEquals(before, store.catalog.state().collectionsRevision)
+        val added = collection("d", "Other")
+        store.migration.importOrganizationBatch(receipt.token, 1, listOf(added), emptyList(), complete = true)
+        val after = store.catalog.state()
+        assertTrue(after.collectionsRevision > before)
+        assertEquals(after.revision, after.collectionsRevision)
+        store.migration.importOrganizationBatch(receipt.token, 1, listOf(added), emptyList(), complete = true)
+        assertEquals(after, store.catalog.state())
+        store.close()
+    }
+
+    @Test
+    fun collectionWindowsOwnTheirCursorsAcrossTiesSearchRenameAndDeletion() = runTest {
+        val store = InMemorySessionCatalogStore()
+        val ids = listOf("a", "a\u0000", "é", "中", "😀", "\uFFFF")
+        ids.reversed().forEach {
+            store.catalog.createCollection(SessionCollection(it, "Group %", "same-sort", "unique-$it"))
+        }
+        val query = SessionCollectionQuery(" GROUP % ")
+        val anchor = store.catalog.windowAroundCollection("中", query, 1)
+        assertEquals(listOf("中"), anchor.entries.map { it.id })
+        assertFalse(anchor.exhausted)
+        val before = store.catalog.pageCollections(query, assertNotNull(anchor.previousCursor), CatalogPageDirection.BEFORE, 10)
+        val after = store.catalog.pageCollections(query, assertNotNull(anchor.nextCursor), limit = 10)
+        assertEquals(ids.sorted(), (before.entries + anchor.entries + after.entries).map { it.id })
+        val full = store.catalog.windowAroundCollection("\uFFFF", query, 10)
+        assertEquals(ids.sorted(), full.entries.map { it.id })
+        assertTrue(full.exhausted)
+        val missing = store.catalog.windowAroundCollection("absent", query, 3)
+        assertTrue(missing.entries.isEmpty())
+        assertTrue(missing.exhausted)
+        assertNull(missing.previousCursor)
+        assertNull(missing.nextCursor)
+        assertTrue(store.catalog.windowAroundCollection("中", SessionCollectionQuery("none"), 3).entries.isEmpty())
+
+        store.catalog.renameCollection("中", "Renamed", "zzz", "renamed")
+        assertTrue(store.catalog.windowAroundCollection("中", query, 3).entries.isEmpty())
+        assertEquals("Renamed", store.catalog.windowAroundCollection("中", limit = 1).entries.single().name)
+        store.catalog.deleteCollection("中")
+        assertTrue(store.catalog.windowAroundCollection("中", limit = 3).entries.isEmpty())
+        store.close()
     }
 
     @Test

@@ -104,6 +104,7 @@ internal class RoomSessionCatalog(
                         put("policyId", projector.policy.id)
                         put("policyVersion", projector.policy.version.toString())
                         put("revision", "0")
+                        put("collectionsRevision", "0")
                         put("generation", "1")
                         put("sequence", "0")
                         put("activityMode", projector.activityMode.name)
@@ -190,6 +191,7 @@ internal class RoomSessionCatalog(
                 "partial" -> CatalogCoverage.PARTIAL
                 else -> CatalogCoverage.INDEXING
             },
+            collectionsRevision = number("collectionsRevision"),
         )
     }
 
@@ -197,6 +199,11 @@ internal class RoomSessionCatalog(
         val next = increment(number("revision"))
         put("revision", next.toString())
         return next
+    }
+
+    /** Call in the transaction that changes collection results or invalidates their cursors. */
+    internal suspend fun markCollectionsChanged(revision: Long) {
+        put("collectionsRevision", revision.toString())
     }
 
     override suspend fun state(): SessionCatalogState = read { it }
@@ -403,7 +410,7 @@ internal class RoomSessionCatalog(
         put("generation", generation.toString())
         put("coverage", if (collectionsComplete) "complete" else "incomplete")
         resetRoomMaintenanceProgress(dao, generation, complete = true, collectionsComplete = collectionsComplete)
-        advanceRevision()
+        markCollectionsChanged(advanceRevision())
     }
 
     internal fun cleared() {
@@ -527,7 +534,9 @@ internal class RoomSessionCatalog(
 
     override suspend fun createCollection(collection: SessionCollection) = write {
         if (dao.collection(collection.id) != null || dao.collectionByUniqueKey(collection.nameUniqueKey) != null) fail(SessionCatalogFailure.COLLECTION_CONFLICT)
-        dao.upsertCollection(collection.entity(advanceRevision(), projector))
+        val revision = advanceRevision()
+        dao.upsertCollection(collection.entity(revision, projector))
+        markCollectionsChanged(revision)
     }
 
     override suspend fun renameCollection(id: String, name: String, nameSortKey: String, nameUniqueKey: String) = write {
@@ -536,7 +545,9 @@ internal class RoomSessionCatalog(
         if (previous.collection() == replacement) return@write
         val conflict = dao.collectionByUniqueKey(nameUniqueKey)
         if (conflict != null && conflict.collectionId != id) fail(SessionCatalogFailure.COLLECTION_CONFLICT)
-        dao.upsertCollection(replacement.entity(advanceRevision(), projector))
+        val revision = advanceRevision()
+        dao.upsertCollection(replacement.entity(revision, projector))
+        markCollectionsChanged(revision)
     }
 
     override suspend fun deleteCollection(id: String) = write {
@@ -546,7 +557,7 @@ internal class RoomSessionCatalog(
                 updateOrganizationRows(SessionIdentity(AgentSessionId(sessionId), organization.incarnation), organization.organization().copy(collectionId = null))
             }
             dao.deleteCollection(id)
-            advanceRevision()
+            markCollectionsChanged(advanceRevision())
         }
         Unit
     }
@@ -678,30 +689,94 @@ internal class RoomSessionCatalog(
         val normalized = SessionCollectionQuery(projector.normalizeSearch(query.search))
         return read { state ->
             if (cursor != null && (cursor.query != normalized || cursor.policy != state.policy || cursor.generation != state.generation)) fail(SessionCatalogFailure.INVALID_CURSOR)
-            val predicates = mutableListOf<String>()
-            val args = mutableListOf<Any>()
-            if (normalized.search.isNotEmpty()) {
-                predicates += "instr(normalizedName, ?) > 0"
-                args += normalized.search
-            }
-            if (cursor != null) {
-                predicates += "(nameSortKey, idSortKey) ${if (direction == CatalogPageDirection.AFTER) ">" else "<"} (?, ?)"
-                args += cursor.nameSortKey
-                args += cursor.idSortKey
-            }
-            val where = if (predicates.isEmpty()) "" else " WHERE ${predicates.joinToString(" AND ")}"
-            val order = if (direction == CatalogPageDirection.AFTER) "ASC" else "DESC"
-            args += limit + 1
-            val rows = dao.pageCollections(boundQuery("SELECT * FROM session_collections$where ORDER BY nameSortKey $order, idSortKey $order LIMIT ?", args))
+            val rows = collectionRows(normalized, cursor, direction, limit + 1)
             val extra = rows.size > limit
             val selected = rows.take(limit).let { if (direction == CatalogPageDirection.BEFORE) it.reversed() else it }
-            fun token(row: SessionCollectionEntity) = SessionCollectionCursor(normalized, state.policy, state.generation, row.nameSortKey, row.idSortKey)
             val previous = if (direction == CatalogPageDirection.BEFORE) extra else cursor != null
             val next = if (direction == CatalogPageDirection.AFTER) extra else cursor != null
-            SessionCollectionPage(selected.map { it.collection() }, if (previous) selected.firstOrNull()?.let(::token) else null,
-                if (next) selected.lastOrNull()?.let(::token) else null, !extra, state)
+            collectionPage(selected, normalized, state, previous, next, exhausted = !extra)
         }
     }
+
+    override suspend fun windowAroundCollection(
+        id: String,
+        query: SessionCollectionQuery,
+        limit: Int,
+    ): SessionCollectionPage {
+        validateCatalogPageLimit(limit)
+        val normalized = SessionCollectionQuery(projector.normalizeSearch(query.search))
+        return read { state ->
+            val anchor = dao.collection(id)
+                ?.takeIf { normalized.search.isEmpty() || it.normalizedName.contains(normalized.search) }
+                ?: return@read SessionCollectionPage(emptyList(), null, null, true, state)
+            val cursor = collectionCursor(anchor, normalized, state)
+            val beforeCount = (limit - 1) / 2
+            val before = collectionRows(normalized, cursor, CatalogPageDirection.BEFORE, beforeCount + 1)
+            val selectedBefore = before.take(beforeCount)
+            val afterCount = limit - selectedBefore.size - 1
+            val after = collectionRows(normalized, cursor, CatalogPageDirection.AFTER, afterCount + 1)
+            val previous = before.size > beforeCount
+            val next = after.size > afterCount
+            collectionPage(
+                rows = selectedBefore.reversed() + anchor + after.take(afterCount),
+                query = normalized,
+                state = state,
+                previous = previous,
+                next = next,
+                exhausted = !previous && !next,
+            )
+        }
+    }
+
+    private suspend fun collectionRows(
+        query: SessionCollectionQuery,
+        cursor: SessionCollectionCursor?,
+        direction: CatalogPageDirection,
+        limit: Int,
+    ): List<SessionCollectionEntity> {
+        val predicates = mutableListOf<String>()
+        val args = mutableListOf<Any>()
+        if (query.search.isNotEmpty()) {
+            predicates += "instr(normalizedName, ?) > 0"
+            args += query.search
+        }
+        if (cursor != null) {
+            val comparison = if (direction == CatalogPageDirection.AFTER) ">" else "<"
+            predicates += "(nameSortKey, idSortKey) $comparison (?, ?)"
+            args += cursor.nameSortKey
+            args += cursor.idSortKey
+        }
+        val where = if (predicates.isEmpty()) "" else " WHERE ${predicates.joinToString(" AND ")}"
+        val order = if (direction == CatalogPageDirection.AFTER) "ASC" else "DESC"
+        args += limit
+        return dao.pageCollections(
+            boundQuery(
+                "SELECT * FROM session_collections$where ORDER BY nameSortKey $order, idSortKey $order LIMIT ?",
+                args,
+            ),
+        )
+    }
+
+    private fun collectionCursor(
+        row: SessionCollectionEntity,
+        query: SessionCollectionQuery,
+        state: SessionCatalogState,
+    ) = SessionCollectionCursor(query, state.policy, state.generation, row.nameSortKey, row.idSortKey)
+
+    private fun collectionPage(
+        rows: List<SessionCollectionEntity>,
+        query: SessionCollectionQuery,
+        state: SessionCatalogState,
+        previous: Boolean,
+        next: Boolean,
+        exhausted: Boolean,
+    ) = SessionCollectionPage(
+        entries = rows.map { it.collection() },
+        previousCursor = if (previous) rows.firstOrNull()?.let { collectionCursor(it, query, state) } else null,
+        nextCursor = if (next) rows.lastOrNull()?.let { collectionCursor(it, query, state) } else null,
+        exhausted = exhausted,
+        state = state,
+    )
 }
 
 private fun fail(failure: SessionCatalogFailure): Nothing = throw SessionCatalogException(failure)

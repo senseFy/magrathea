@@ -176,7 +176,11 @@ internal class WebSessionCatalog(
     internal fun mutation(
         view: WebCatalogView,
         control: WebCatalogControl = view.control.copy(revision = nextCatalogLong(view.control.revision)),
-    ) = WebCatalogMutation(view, control)
+        collectionsChanged: Boolean = false,
+    ) = WebCatalogMutation(
+        view,
+        if (collectionsChanged) control.copy(collectionsRevision = control.revision) else control,
+    )
 
     val migration: SessionCatalogMigration = WebCatalogDataMigration(this, lifecycle, json)
 
@@ -485,7 +489,7 @@ internal class WebSessionCatalog(
                     SessionCatalogMigrationEncoding.receipt(if (receipt.complete) receipt else receipt.copy(invalidated = true))
                 },
             )
-            mutation(source, next).apply {
+            mutation(source, next, collectionsChanged = true).apply {
                 clears += listOf(WEB_SESSION_STORE, WEB_CHECKPOINT_STORE, CATALOG_ROWS, CATALOG_SEARCH, CATALOG_REFS, CATALOG_ORGANIZATION)
             } to Unit
         }
@@ -584,7 +588,9 @@ internal class WebSessionCatalog(
             if (unique.result.array("keys").any { it.jsonObject.getValue("primaryKey") != JsonPrimitive(replacement.id) }) {
                 fail(SessionCatalogFailure.COLLECTION_CONFLICT)
             }
-            if (apply(mutation(source).apply { puts += putRecord(CATALOG_COLLECTIONS, replacement.id, row) })) return
+            if (apply(mutation(source, collectionsChanged = true).apply {
+                puts += putRecord(CATALOG_COLLECTIONS, replacement.id, row)
+            })) return
         }
         storageFailure()
     }
@@ -592,7 +598,7 @@ internal class WebSessionCatalog(
     override suspend fun deleteCollection(id: String) = lifecycle.withCatalogOperation {
         mutate(listOf(lookup(CATALOG_COLLECTIONS, id))) { source ->
             if (source.value(CATALOG_COLLECTIONS, id) == null) return@mutate null to Unit
-            mutation(source).apply {
+            mutation(source, collectionsChanged = true).apply {
                 deletes += lookup(CATALOG_COLLECTIONS, id)
                 patches += wireObject {
                     put("store", CATALOG_ORGANIZATION)
@@ -790,70 +796,137 @@ internal class WebSessionCatalog(
         cursor: SessionCollectionCursor?,
         direction: CatalogPageDirection,
         limit: Int,
-    ): SessionCollectionPage =
-        lifecycle.withCatalogOperation {
-            validateCatalogPageLimit(limit)
-            val normalized = SessionCollectionQuery(projector.normalizeSearch(query.search))
-            val range = wireObject {
-                if (cursor != null) {
-                    val name = if (direction == CatalogPageDirection.AFTER) "lower" else "upper"
-                    put(name, buildJsonArray {
-                        add(cursor.nameSortKey)
-                        add(cursor.idSortKey)
-                    })
-                    put("${name}Open", true)
-                }
+    ): SessionCollectionPage = lifecycle.withCatalogOperation {
+        validateCatalogPageLimit(limit)
+        val normalized = SessionCollectionQuery(projector.normalizeSearch(query.search))
+        val result = collectionRows(normalized, cursor, direction, limit + 1)
+        val state = result.control.state()
+        if (cursor != null &&
+            (cursor.query != normalized || cursor.policy != state.policy || cursor.generation != state.generation)
+        ) {
+            fail(SessionCatalogFailure.INVALID_CURSOR)
+        }
+        val rows = result.result.array("values").map { it.jsonObject.collection() }
+        val selected = rows.take(limit).let {
+            if (direction == CatalogPageDirection.BEFORE) it.reversed() else it
+        }
+        val continuation = collectionContinuation(result, normalized, rows, limit, cursor)
+        SessionCollectionPage(
+            selected,
+            if (direction == CatalogPageDirection.BEFORE) continuation
+            else if (cursor != null) selected.firstOrNull()?.let { collectionCursor(result, normalized, it) } ?: cursor
+            else null,
+            if (direction == CatalogPageDirection.AFTER) continuation
+            else if (cursor != null) selected.lastOrNull()?.let { collectionCursor(result, normalized, it) } ?: cursor
+            else null,
+            continuation == null,
+            state,
+        )
+    }
+
+    override suspend fun windowAroundCollection(
+        id: String,
+        query: SessionCollectionQuery,
+        limit: Int,
+    ): SessionCollectionPage = lifecycle.withCatalogOperation {
+        validateCatalogPageLimit(limit)
+        val normalized = SessionCollectionQuery(projector.normalizeSearch(query.search))
+        repeat(ATTEMPTS) {
+            val initial = read(listOf(lookup(CATALOG_COLLECTIONS, id)))
+            val anchorRow = initial.value(CATALOG_COLLECTIONS, id) as? JsonObject
+                ?: return@withCatalogOperation SessionCollectionPage(
+                    emptyList(), null, null, true, initial.control.state(),
+                )
+            if (normalized.search.isNotEmpty() && !anchorRow.string("normalizedName").contains(normalized.search)) {
+                return@withCatalogOperation SessionCollectionPage(
+                    emptyList(), null, null, true, initial.control.state(),
+                )
             }
-            val result = view("page", wireObject {
-                put("store", CATALOG_COLLECTIONS)
-                put("index", "name")
-                put("range", range)
-                put("direction", if (direction == CatalogPageDirection.AFTER) "next" else "prev")
-                put("limit", limit + 1)
-                if (normalized.search.isNotEmpty()) put("search", wireObject {
-                    put("store", CATALOG_COLLECTIONS)
-                    put("needle", normalized.search)
-                    put("fields", buildJsonArray { add("normalizedName") })
-                })
-            })
-            val state = result.control.state()
-            if (
-                cursor != null &&
-                (cursor.query != normalized || cursor.policy != state.policy || cursor.generation != state.generation)
-            ) {
-                fail(SessionCatalogFailure.INVALID_CURSOR)
-            }
-            val rows = result.result.array("values").map { it.jsonObject.collection() }
-            val extra = rows.size > limit
-            val selected = rows.take(limit).let { if (direction == CatalogPageDirection.BEFORE) it.reversed() else it }
-            fun token(row: SessionCollection) = SessionCollectionCursor(
-                normalized,
-                state.policy,
-                state.generation,
-                row.nameSortKey,
-                CatalogKeyEncoding.stringKey(row.id),
-            )
-            val continuation = if (extra) token(rows[limit - 1]) else if (!result.result.boolean("scanExhausted")) {
-                (result.result["lastScannedKey"] as? JsonArray)?.let {
-                    SessionCollectionCursor(
-                        normalized,
-                        state.policy,
-                        state.generation,
-                        it[0].jsonPrimitive.content,
-                        it[1].jsonPrimitive.content,
-                    )
-                }
-            } else null
-            SessionCollectionPage(
-                selected,
-                if (direction == CatalogPageDirection.BEFORE) continuation
-                else if (cursor != null) selected.firstOrNull()?.let(::token) ?: cursor else null,
-                if (direction == CatalogPageDirection.AFTER) continuation
-                else if (cursor != null) selected.lastOrNull()?.let(::token) ?: cursor else null,
-                continuation == null,
-                state,
+            val anchor = anchorRow.collection()
+            val key = collectionCursor(initial, normalized, anchor)
+            val beforeCount = (limit - 1) / 2
+            val before = collectionRows(normalized, key, CatalogPageDirection.BEFORE, beforeCount + 1)
+            if (!initial.control.sameCollections(before.control)) return@repeat
+            val preceding = before.result.array("values").map { it.jsonObject.collection() }
+            val afterCount = limit - preceding.take(beforeCount).size - 1
+            val after = collectionRows(normalized, key, CatalogPageDirection.AFTER, afterCount + 1)
+            if (!initial.control.sameCollections(after.control)) return@repeat
+            val following = after.result.array("values").map { it.jsonObject.collection() }
+            val previousCursor = collectionContinuation(before, normalized, preceding, beforeCount, key)
+            val nextCursor = collectionContinuation(after, normalized, following, afterCount, key)
+            return@withCatalogOperation SessionCollectionPage(
+                preceding.take(beforeCount).reversed() + anchor + following.take(afterCount),
+                previousCursor,
+                nextCursor,
+                previousCursor == null && nextCursor == null,
+                after.control.state(),
             )
         }
+        storageFailure()
+    }
+
+    private fun WebCatalogControl.sameCollections(other: WebCatalogControl): Boolean =
+        policy == other.policy && generation == other.generation &&
+            collectionsRevision == other.collectionsRevision
+
+    private suspend fun collectionRows(
+        query: SessionCollectionQuery,
+        cursor: SessionCollectionCursor?,
+        direction: CatalogPageDirection,
+        limit: Int,
+    ): WebCatalogView = view("page", wireObject {
+        put("store", CATALOG_COLLECTIONS)
+        put("index", "name")
+        put("range", wireObject {
+            if (cursor != null) {
+                val bound = if (direction == CatalogPageDirection.AFTER) "lower" else "upper"
+                put(bound, buildJsonArray {
+                    add(cursor.nameSortKey)
+                    add(cursor.idSortKey)
+                })
+                put("${bound}Open", true)
+            }
+        })
+        put("direction", if (direction == CatalogPageDirection.AFTER) "next" else "prev")
+        put("limit", limit)
+        if (query.search.isNotEmpty()) put("search", wireObject {
+            put("store", CATALOG_COLLECTIONS)
+            put("needle", query.search)
+            put("fields", buildJsonArray { add("normalizedName") })
+        })
+    })
+
+    private fun collectionCursor(
+        result: WebCatalogView,
+        query: SessionCollectionQuery,
+        row: SessionCollection,
+    ) = SessionCollectionCursor(
+        query,
+        result.control.policy,
+        result.control.generation,
+        row.nameSortKey,
+        CatalogKeyEncoding.stringKey(row.id),
+    )
+
+    private fun collectionContinuation(
+        result: WebCatalogView,
+        query: SessionCollectionQuery,
+        rows: List<SessionCollection>,
+        limit: Int,
+        startingKey: SessionCollectionCursor?,
+    ): SessionCollectionCursor? = if (rows.size > limit) {
+        if (limit == 0) startingKey else collectionCursor(result, query, rows[limit - 1])
+    } else if (!result.result.boolean("scanExhausted")) {
+        (result.result["lastScannedKey"] as? JsonArray)?.let {
+            SessionCollectionCursor(
+                query,
+                result.control.policy,
+                result.control.generation,
+                it[0].jsonPrimitive.content,
+                it[1].jsonPrimitive.content,
+            )
+        }
+    } else null
 
     override suspend fun pageRecoveryCandidates(
         cursor: SessionRecoveryCursor?,
@@ -945,8 +1018,10 @@ internal class WebSessionCatalog(
                     collectionsComplete = false,
                     unindexedSources = 0,
                 )
-                val plan = mutation(source, next).apply { clears += listOf(CATALOG_ROWS, CATALOG_SEARCH, CATALOG_REFS) }
-                if (apply(plan)) return@withCatalogOperation next.progress()
+                val plan = mutation(source, next, collectionsChanged = true).apply {
+                    clears += listOf(CATALOG_ROWS, CATALOG_SEARCH, CATALOG_REFS)
+                }
+                if (apply(plan)) return@withCatalogOperation plan.control.progress()
             }
             storageFailure()
         }
@@ -1057,7 +1132,9 @@ internal class WebSessionCatalog(
                             afterSessionKey = physicalKey.getValue("primaryKeyToken"),
                             processed = nextCatalogLong(next.processed),
                         )
-                        var plan = mutation(source, next)
+                        val collectionsChanged = collectionPhase && raw != null &&
+                            raw.jsonObject["normalizedName"] != JsonPrimitive(normalizedCollection)
+                        var plan = mutation(source, next, collectionsChanged)
                         plan.checks += exactCheck(store, id, raw)
                         if (!collectionPhase) plan.checks += exactCheck(WEB_CHECKPOINT_STORE, id, checkpointRaw)
                         if (collectionPhase) {
@@ -1137,7 +1214,7 @@ internal class WebSessionCatalog(
                                 replacement.puts += plan.puts
                             }
                         }
-                        if (apply(plan)) result = WebCatalogView(next.wire(), next, wireObject { })
+                        if (apply(plan)) result = WebCatalogView(plan.control.wire(), plan.control, wireObject { })
                         else {
                             issue = null
                             installed = false

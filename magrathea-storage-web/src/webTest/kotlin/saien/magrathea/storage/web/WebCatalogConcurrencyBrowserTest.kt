@@ -112,6 +112,7 @@ class WebCatalogConcurrencyBrowserTest {
                 val source = IndexedDbRecordDatabase(name).executeCatalog("read", wireObject { }).jsonObject
                 val control = WebCatalogControl.from(source.getValue("state").jsonObject)
                 assertEquals(initial.revision + 4, control.revision)
+                assertEquals(initial.revision + 3, control.collectionsRevision)
                 assertEquals(2L, control.sequence)
                 assertEquals(2L, control.processed)
                 assertNotNull(store.persistence.load(AgentSessionId("first")))
@@ -313,6 +314,7 @@ private fun injectControlChurn(name: String, once: Boolean, puts: String): Unit 
             const state = writing.objectStore("catalog_state").get("state");
             state.onsuccess = () => writing.objectStore("catalog_state").put(Object.assign({}, state.result, {
               revision: String(BigInt(state.result.revision) + BigInt(1)),
+              collectionsRevision: String(BigInt(state.result.revision) + BigInt(1)),
               sequence: String(BigInt(state.result.sequence) + BigInt(1)),
               processed: String(BigInt(state.result.processed) + BigInt(1))
             }), "state");

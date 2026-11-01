@@ -345,7 +345,7 @@ internal val MAGRATHEA_ROOM_MIGRATION_1_2 = object : Migration(1, 2) {
         CatalogStateEntity::class,
         SessionAttachmentNameBackupEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 @ConstructedBy(MagratheaDatabaseConstructor::class)

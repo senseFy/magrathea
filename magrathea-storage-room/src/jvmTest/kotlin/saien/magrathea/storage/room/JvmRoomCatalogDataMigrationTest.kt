@@ -204,8 +204,13 @@ class JvmRoomCatalogDataMigrationTest {
             store.persistence.commit(roomTestSnapshot("reused"), null)
             val receipt = store.migration.beginOrganizationImport("host-json-v1", "sha256-of-frozen-source")
             val folder = SessionCollection("folder", "Folder", "folder", "folder")
+            val beforeImport = store.catalog.state().collectionsRevision
             val first = store.migration.importOrganizationBatch(receipt.token, 0, listOf(folder), emptyList())
+            val afterImport = store.catalog.state()
+            assertEquals(afterImport.revision, afterImport.collectionsRevision)
+            assertTrue(afterImport.collectionsRevision > beforeImport)
             assertEquals(first, store.migration.importOrganizationBatch(receipt.token, 0, listOf(folder), emptyList()))
+            assertEquals(afterImport.collectionsRevision, store.catalog.state().collectionsRevision)
             assertNull(store.catalog.sessionHeader(AgentSessionId("opaque")))
             store.close()
             val reopened = JvmMagratheaRoom.open(path, reporter, NameProjector())
@@ -213,6 +218,7 @@ class JvmRoomCatalogDataMigrationTest {
                 assertEquals(first, reopened.migration.organizationImportStatus())
                 val rows = listOf("opaque", "reused", "deleted").map { LegacySessionOrganization(AgentSessionId(it), SessionOrganization("Saved title", "folder", 44)) }
                 val completed = reopened.migration.importOrganizationBatch(first.token, 1, emptyList(), rows, true)
+                assertEquals(afterImport.collectionsRevision, reopened.catalog.state().collectionsRevision)
                 assertEquals(1L, completed.imported)
                 assertEquals(2L, completed.skipped)
                 assertEquals(SessionOrganization("Saved title", "folder", 44), reopened.catalog.organization(SessionIdentity(AgentSessionId("opaque"), "legacy")))
@@ -233,11 +239,13 @@ class JvmRoomCatalogDataMigrationTest {
         fixture { _, store, _ ->
             val receipt = store.migration.beginOrganizationImport("source", "fingerprint")
             store.catalog.createCollection(SessionCollection("existing", "Existing", "e", "unique"))
+            val beforeConflict = store.catalog.state()
             assertEquals(SessionCatalogFailure.COLLECTION_CONFLICT, assertFailsWith<SessionCatalogException> {
                 store.migration.importOrganizationBatch(receipt.token, 0,
                     listOf(SessionCollection("first", "First", "f", "first"), SessionCollection("conflict", "Conflict", "c", "unique")), emptyList())
             }.failure)
             assertNull(store.catalog.collection("first"))
+            assertEquals(beforeConflict, store.catalog.state())
             assertEquals(0L, store.migration.organizationImportStatus()?.nextBatch)
             store.persistence.clear()
             assertTrue(store.migration.organizationImportStatus()?.invalidated == true)

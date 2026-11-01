@@ -222,13 +222,22 @@ class JvmRoomCatalogMaintenanceTest {
             try {
                 assertEquals(SessionCatalogFailure.POLICY_MISMATCH,
                     assertFailsWith<SessionCatalogException> { switched.catalog.state() }.failure)
-                switched.maintenance.rebuild(before.policy, before.generation)
+                val rebuilt = switched.maintenance.rebuild(before.policy, before.generation).state
+                assertEquals(rebuilt.revision, rebuilt.collectionsRevision)
+                assertTrue(rebuilt.collectionsRevision > before.collectionsRevision)
                 assertFalse(switched.maintenance.runBatch(1).progress.complete)
+                val normalized = switched.catalog.state()
+                assertEquals(normalized.revision, normalized.collectionsRevision)
+                assertTrue(normalized.collectionsRevision > rebuilt.collectionsRevision)
                 switched.persistence.clear()
+                val cleared = switched.catalog.state()
+                assertEquals(cleared.revision, cleared.collectionsRevision)
+                assertTrue(cleared.collectionsRevision > normalized.collectionsRevision)
                 assertEquals(CatalogCoverage.INDEXING, switched.catalog.state().coverage)
                 switched.close()
                 switched = JvmMagratheaRoom.open(fixture.path, reporter, newPolicy)
                 finish(switched, limit = 1)
+                assertTrue(switched.catalog.state().collectionsRevision > cleared.collectionsRevision)
                 assertEquals(CatalogCoverage.COMPLETE, switched.catalog.state().coverage)
                 for (id in listOf("a", "b", "c")) {
                     assertEquals(listOf(id), switched.catalog.pageCollections(SessionCollectionQuery("Name $id"), limit = 10).entries.map { it.id })

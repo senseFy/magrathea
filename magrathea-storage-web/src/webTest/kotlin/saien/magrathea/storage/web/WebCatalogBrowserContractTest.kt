@@ -159,7 +159,7 @@ class WebCatalogBrowserContractTest {
                 assertNull(store.catalog.sessionHeader(a.sessionId))
                 assertEquals(CatalogCoverage.INDEXING, store.catalog.state().coverage)
                 val before = inspect(name)
-                assertEquals(2, before.getValue("version").jsonPrimitive.int)
+                assertEquals(3, before.getValue("version").jsonPrimitive.int)
                 assertEquals(8, before.getValue("stores").jsonArray.size)
                 assertEquals(codec.encode(a), before.getValue("sessions").jsonObject.getValue("a").jsonPrimitive.content)
                 assertEquals(opaque, before.getValue("sessions").jsonObject.getValue("m-corrupt").jsonPrimitive.content)

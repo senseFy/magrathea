@@ -31,7 +31,7 @@ internal data class WebDecodedStoredRecord<T>(
 internal fun <T> StoredEnvelopeDecodeResult<T>.toWebStoredRecord(): WebDecodedStoredRecord<T> =
     WebDecodedStoredRecord(value, rewritePayload)
 
-const val MAGRATHEA_WEB_DATABASE_VERSION: Int = 2
+const val MAGRATHEA_WEB_DATABASE_VERSION: Int = 3
 const val DEFAULT_MAGRATHEA_WEB_DATABASE_NAME: String = "magrathea-core"
 
 data class MagratheaWebStoreConfiguration(

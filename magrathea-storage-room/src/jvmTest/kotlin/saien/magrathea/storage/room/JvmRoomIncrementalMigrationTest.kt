@@ -49,7 +49,7 @@ class JvmRoomIncrementalMigrationTest {
                 assertTrue(growth < 4 * 1024 * 1024, "Structural upgrade wrote $growth bytes")
                 BundledSQLiteDriver().open(path.toString()).use { db ->
                     assertEquals(roots, db.rootPages())
-                    assertEquals("3", db.single("PRAGMA user_version"))
+                    assertEquals("4", db.single("PRAGMA user_version"))
                     assertEquals(listOf("sessionId", "payload", "updatedAtEpochMs"), db.columns("agent_sessions").take(3))
                     assertFalse("catalogAttachmentNameBackup" in db.columns("agent_sessions"))
                     assertEquals("0", db.single("SELECT count(*) FROM session_attachment_name_backups"))
@@ -139,9 +139,13 @@ class JvmRoomIncrementalMigrationTest {
     }
 }
 
-internal fun createVersionTwoRoomFixture(db: SQLiteConnection) {
+internal fun createVersionTwoRoomFixture(db: SQLiteConnection) = createRoomSchemaFixture(db, 2)
+
+internal fun createVersionThreeRoomFixture(db: SQLiteConnection) = createRoomSchemaFixture(db, 3)
+
+private fun createRoomSchemaFixture(db: SQLiteConnection, version: Int) {
     fun execute(sql: String) = db.prepare(sql).use { it.step() }
-    val relative = "schemas/saien.magrathea.storage.room.MagratheaDatabase/2.json"
+    val relative = "schemas/saien.magrathea.storage.room.MagratheaDatabase/$version.json"
     val candidates = listOf(Path.of(relative), Path.of("magrathea-storage-room").resolve(relative))
     val schema = Json.parseToJsonElement(Files.readString(candidates.first { Files.exists(it) }))
         .jsonObject.getValue("database").jsonObject
@@ -154,5 +158,5 @@ internal fun createVersionTwoRoomFixture(db: SQLiteConnection) {
         }
     }
     schema.getValue("setupQueries").jsonArray.forEach { execute(it.jsonPrimitive.content) }
-    execute("PRAGMA user_version = 2")
+    execute("PRAGMA user_version = $version")
 }

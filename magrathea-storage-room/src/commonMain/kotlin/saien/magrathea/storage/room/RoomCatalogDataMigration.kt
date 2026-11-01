@@ -141,6 +141,7 @@ internal class RoomCatalogDataMigration(
             if (previous.complete || batchIndex != previous.nextBatch) fail(SessionCatalogFailure.MIGRATION_CONFLICT)
             var imported = 0L
             var skipped = 0L
+            var collectionsChanged = false
             val revision = catalog.advanceRevision()
             collections.forEach { value ->
                 val old = dao.collection(value.id)
@@ -148,9 +149,22 @@ internal class RoomCatalogDataMigration(
                     fail(SessionCatalogFailure.COLLECTION_CONFLICT)
                 }
                 if (dao.collectionByUniqueKey(value.nameUniqueKey)?.collectionId?.let { it != value.id } == true) fail(SessionCatalogFailure.COLLECTION_CONFLICT)
-                if (old == null) dao.upsertCollection(SessionCollectionEntity(value.id, value.name, value.nameSortKey,
-                    CatalogKeyEncoding.stringKey(value.id), normalized.getValue(value.id), value.nameUniqueKey, revision))
+                if (old == null) {
+                    dao.upsertCollection(
+                        SessionCollectionEntity(
+                            collectionId = value.id,
+                            name = value.name,
+                            nameSortKey = value.nameSortKey,
+                            idSortKey = CatalogKeyEncoding.stringKey(value.id),
+                            normalizedName = normalized.getValue(value.id),
+                            uniqueKey = value.nameUniqueKey,
+                            revision = revision,
+                        ),
+                    )
+                    collectionsChanged = true
+                }
             }
+            if (collectionsChanged) catalog.markCollectionsChanged(revision)
             organizations.forEach { value ->
                 val canonical = sessions.identity(value.sessionId.value)
                 if (canonical == null || canonical.incarnation != "legacy") {

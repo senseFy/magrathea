@@ -44,6 +44,7 @@ class JvmRoomRecoveryIndexTest {
     @Test
     fun canonicalCommitUpdatesItsRowOnceAndDoesNotRewriteUnchangedBackgroundFactsOrBackups() = runTest {
         withStore { store, database, path ->
+            val collectionsRevision = store.catalog.state().collectionsRevision
             val original = completed("one-write")
             store.persistence.commit(original, null)
             store.backgroundStore.upsert(terminal(background("one-write", "work", BackgroundExecutionState.RUNNING)))
@@ -66,6 +67,7 @@ class JvmRoomRecoveryIndexTest {
             }
             assertEquals("opaque original backup", database.catalogDao().attachmentNameBackup("one-write")?.payload)
             assertEquals(AgentStatus.COMPLETED.name, database.sessionDao().recovery("one-write")?.catalogRecoveryStatus)
+            assertEquals(collectionsRevision, store.catalog.state().collectionsRevision)
         }
     }
 

@@ -3,6 +3,18 @@ package saien.magrathea.storage.room
 import androidx.room.migration.Migration
 import androidx.sqlite.SQLiteConnection
 
+/**
+ * Starts the collection revision protocol without rewriting any table or canonical envelope.
+ * Hosts must drain older handles before upgrading; the version rejects later older-SDK reopen.
+ */
+internal val MAGRATHEA_ROOM_MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(connection: SQLiteConnection) {
+        connection.prepare(
+            "INSERT INTO catalog_state (`key`, value) VALUES ('collectionsRevision', '0')",
+        ).use { it.step() }
+    }
+}
+
 /** Structural upgrade only: legacy payloads are decoded by resumable maintenance, never here. */
 internal val MAGRATHEA_ROOM_MIGRATION_2_3 = object : Migration(2, 3) {
     override fun migrate(connection: SQLiteConnection) {

@@ -385,6 +385,8 @@ public abstract interface class saien/magrathea/catalog/SessionCatalog {
 	public abstract fun state (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun updateOrganization (Lsaien/magrathea/catalog/SessionIdentity;Lsaien/magrathea/catalog/SessionOrganizationMutation;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun windowAround (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/catalog/SessionCatalogQuery;ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun windowAroundCollection (Ljava/lang/String;Lsaien/magrathea/catalog/SessionCollectionQuery;ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun windowAroundCollection$default (Lsaien/magrathea/catalog/SessionCatalog;Ljava/lang/String;Lsaien/magrathea/catalog/SessionCollectionQuery;ILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 
 public final class saien/magrathea/catalog/SessionCatalog$DefaultImpls {
@@ -392,6 +394,7 @@ public final class saien/magrathea/catalog/SessionCatalog$DefaultImpls {
 	public static synthetic fun pageRecoveryCandidates$default (Lsaien/magrathea/catalog/SessionCatalog;Lsaien/magrathea/catalog/SessionRecoveryCursor;ILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public static synthetic fun pageSessions$default (Lsaien/magrathea/catalog/SessionCatalog;Lsaien/magrathea/catalog/SessionCatalogQuery;Lsaien/magrathea/catalog/SessionCatalogCursor;Lsaien/magrathea/catalog/CatalogPageDirection;ILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public static synthetic fun prepareNewSession$default (Lsaien/magrathea/catalog/SessionCatalog;Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Lsaien/magrathea/catalog/SessionOrganization;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static synthetic fun windowAroundCollection$default (Lsaien/magrathea/catalog/SessionCatalog;Ljava/lang/String;Lsaien/magrathea/catalog/SessionCollectionQuery;ILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 
 public final class saien/magrathea/catalog/SessionCatalogCursor {
@@ -780,14 +783,17 @@ public final class saien/magrathea/catalog/SessionCatalogSortKey : java/lang/Com
 }
 
 public final class saien/magrathea/catalog/SessionCatalogState {
-	public fun <init> (Lsaien/magrathea/catalog/SessionCatalogPolicy;JJLsaien/magrathea/catalog/CatalogCoverage;)V
+	public fun <init> (Lsaien/magrathea/catalog/SessionCatalogPolicy;JJLsaien/magrathea/catalog/CatalogCoverage;J)V
+	public synthetic fun <init> (Lsaien/magrathea/catalog/SessionCatalogPolicy;JJLsaien/magrathea/catalog/CatalogCoverage;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Lsaien/magrathea/catalog/SessionCatalogPolicy;
 	public final fun component2 ()J
 	public final fun component3 ()J
 	public final fun component4 ()Lsaien/magrathea/catalog/CatalogCoverage;
-	public final fun copy (Lsaien/magrathea/catalog/SessionCatalogPolicy;JJLsaien/magrathea/catalog/CatalogCoverage;)Lsaien/magrathea/catalog/SessionCatalogState;
-	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionCatalogState;Lsaien/magrathea/catalog/SessionCatalogPolicy;JJLsaien/magrathea/catalog/CatalogCoverage;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionCatalogState;
+	public final fun component5 ()J
+	public final fun copy (Lsaien/magrathea/catalog/SessionCatalogPolicy;JJLsaien/magrathea/catalog/CatalogCoverage;J)Lsaien/magrathea/catalog/SessionCatalogState;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionCatalogState;Lsaien/magrathea/catalog/SessionCatalogPolicy;JJLsaien/magrathea/catalog/CatalogCoverage;JILjava/lang/Object;)Lsaien/magrathea/catalog/SessionCatalogState;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCollectionsRevision ()J
 	public final fun getCoverage ()Lsaien/magrathea/catalog/CatalogCoverage;
 	public final fun getGeneration ()J
 	public final fun getPolicy ()Lsaien/magrathea/catalog/SessionCatalogPolicy;

@@ -81,8 +81,12 @@ index, session, and run identities pass together, using one Room transaction or 
 
 Each schema revision updates the logical format version, immutable old and current fixtures,
 migration registry, ABI where applicable, upgrade policy, and cross-platform tests as one reviewed
-contract change. The Room/IndexedDB physical version changes only when their table/object-store
-shape changes; a JSON-envelope migration alone does not require a physical database migration.
+contract change. The Room/IndexedDB physical version changes when their table/object-store shape
+changes or when a storage writer protocol requires excluding older adapters. A protocol-only upgrade
+may initialize fixed control metadata without rewriting payloads or changing table/store shape.
+A JSON-envelope migration alone does not require a physical database migration. Native hosts must
+drain and close old handles before upgrading; a physical version boundary rejects subsequent old
+opens but does not revoke an already-open SQLite connection.
 
 Schema 6 has an explicit `StorageSchemaV6Adapter` and private envelope DTOs, so the production codec
 for that release could not silently switch to a generic envelope serializer. Its payload mapper

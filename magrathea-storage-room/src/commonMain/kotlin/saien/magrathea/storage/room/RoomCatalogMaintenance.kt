@@ -127,7 +127,7 @@ internal class RoomCatalogMaintenance(
                     put("generation", generation.toString())
                     put("coverage", "incomplete")
                     resetRoomMaintenanceProgress(dao, generation, complete = false)
-                    catalog.advanceRevision()
+                    catalog.markCollectionsChanged(catalog.advanceRevision())
                     progress(position(catalog.readState()))
                 }
             }
@@ -183,9 +183,14 @@ internal class RoomCatalogMaintenance(
             var raced = false
             expected = writeStep(expected) {
                 if (dao.collection(id) != source) raced = true else {
-                    if (source != null) dao.upsertCollection(source.copy(normalizedName = requireNotNull(normalized)))
+                    val revision = catalog.advanceRevision()
+                    if (source != null && source.normalizedName != normalized) {
+                        dao.upsertCollection(
+                            source.copy(normalizedName = requireNotNull(normalized), revision = revision),
+                        )
+                        catalog.markCollectionsChanged(revision)
+                    }
                     put(COLLECTION_CURSOR, id)
-                    catalog.advanceRevision()
                 }
             }
             if (raced) return SessionCatalogMaintenanceBatch(currentProgress(expected), indexed, skipped, issues)
