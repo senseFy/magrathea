@@ -5,6 +5,13 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## [0.1.0-alpha.23](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.22...v0.1.0-alpha.23) (2026-11-01)
+
+
+### Features
+
+* isolate the SDK version in magrathea-build-info ([#36](https://github.com/senseFy/magrathea/issues/36)) ([53b7362](https://github.com/senseFy/magrathea/commit/53b7362862de6cc2cc815546edfad72033662391))
+
 ## [0.1.0-alpha.22](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.21...v0.1.0-alpha.22) (2026-11-01)
 
 
