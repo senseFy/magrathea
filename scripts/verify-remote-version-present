@@ -8,6 +8,7 @@ MAX_ATTEMPTS="${MAGRATHEA_REMOTE_VERIFY_ATTEMPTS:-12}"
 RETRY_SECONDS="${MAGRATHEA_REMOTE_VERIFY_RETRY_SECONDS:-5}"
 TRANSPORT_ATTEMPTS="${MAGRATHEA_REMOTE_TRANSPORT_ATTEMPTS:-4}"
 TRANSPORT_RETRY_SECONDS="${MAGRATHEA_REMOTE_TRANSPORT_RETRY_SECONDS:-2}"
+PROBE_WORKERS="${MAGRATHEA_REMOTE_PROBE_WORKERS:-8}"
 
 if [[ ! "$GROUP" =~ ^[A-Za-z0-9_.-]+$ || ! "$VERSION" =~ ^[A-Za-z0-9_.-]+$ ]]; then
   printf 'remote verification failed: invalid group or version\n' >&2
@@ -17,6 +18,10 @@ if [[ ! "$MAX_ATTEMPTS" =~ ^[1-9][0-9]*$ || ! "$RETRY_SECONDS" =~ ^[0-9]+$ ||
   ! "$TRANSPORT_ATTEMPTS" =~ ^[1-9][0-9]*$ ||
   ! "$TRANSPORT_RETRY_SECONDS" =~ ^[0-9]+$ ]]; then
   printf 'remote verification failed: retry settings must be non-negative integers\n' >&2
+  exit 2
+fi
+if [[ ! "$PROBE_WORKERS" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'remote verification failed: probe workers must be a positive integer\n' >&2
   exit 2
 fi
 
@@ -32,8 +37,11 @@ esac
 credentials_file=""
 coordinates_file="$(mktemp)"
 missing_file="$(mktemp)"
+pending_file="$(mktemp)"
+unavailable_file="$(mktemp)"
+status_directory="$(mktemp -d)"
 cleanup() {
-  rm -f "$coordinates_file" "$missing_file"
+  rm -rf "$coordinates_file" "$missing_file" "$pending_file" "$unavailable_file" "$status_directory"
   if [[ -n "$credentials_file" ]]; then
     rm -f "$credentials_file"
   fi
@@ -89,6 +97,23 @@ fetch_status() {
   return 1
 }
 
+probe_poms() {
+  local index=0
+  local artifact=""
+  while IFS=: read -r ignored_group artifact ignored_version; do
+    index=$((index + 1))
+    (
+      fetch_status "${REPOSITORY_URL%/}/$group_path/$artifact/$VERSION/$artifact-$VERSION.pom" \
+        > "$status_directory/$index" ||
+        printf 'transport' > "$status_directory/$index"
+    ) < /dev/null &
+    if [[ $((index % PROBE_WORKERS)) -eq 0 ]]; then
+      wait
+    fi
+  done < "$pending_file"
+  wait
+}
+
 coordinate_count=0
 while IFS=: read -r coordinate_group artifact coordinate_version; do
   [[ -n "$coordinate_group" && -n "$artifact" && -n "$coordinate_version" ]] || {
@@ -114,20 +139,26 @@ done
 }
 
 group_path="$(printf '%s' "$GROUP" | tr '.' '/')"
+cp "$coordinates_file" "$pending_file"
 attempt=1
 while [[ "$attempt" -le "$MAX_ATTEMPTS" ]]; do
   : > "$missing_file"
-  while IFS=: read -r ignored_group artifact ignored_version; do
-    pom_url="${REPOSITORY_URL%/}/$group_path/$artifact/$VERSION/$artifact-$VERSION.pom"
-    if ! status="$(fetch_status "$pom_url")"; then
-      printf 'remote verification failed: repository transport failed for %s after %s attempts\n' \
-        "$artifact" "$TRANSPORT_ATTEMPTS" >&2
-      exit 2
-    fi
+  : > "$unavailable_file"
+  probe_poms
+  index=0
+  while IFS=: read -r coordinate_group artifact coordinate_version; do
+    index=$((index + 1))
+    status="$(<"$status_directory/$index")"
     case "$status" in
+      transport)
+        printf 'remote verification failed: repository transport failed for %s after %s attempts\n' \
+          "$artifact" "$TRANSPORT_ATTEMPTS" >&2
+        exit 2
+        ;;
       200) ;;
       404|408|429|5??)
         printf '%s HTTP %s\n' "$artifact" "$status" >> "$missing_file"
+        printf '%s:%s:%s\n' "$coordinate_group" "$artifact" "$coordinate_version" >> "$unavailable_file"
         ;;
       401|403)
         printf 'remote verification failed: repository authentication was rejected for %s\n' "$artifact" >&2
@@ -138,13 +169,14 @@ while [[ "$attempt" -le "$MAX_ATTEMPTS" ]]; do
         exit 2
         ;;
     esac
-  done < "$coordinates_file"
+  done < "$pending_file"
 
   if [[ ! -s "$missing_file" ]]; then
     printf 'MAGRATHEA_REMOTE_VERSION_PRESENT coordinates=%s version=%s\n' \
       "$coordinate_count" "$VERSION"
     exit 0
   fi
+  cp "$unavailable_file" "$pending_file"
   if [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; then
     sleep "$RETRY_SECONDS"
   fi

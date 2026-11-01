@@ -6,6 +6,7 @@ GROUP="${2:?usage: verify-remote-version-absent REPOSITORY_URL GROUP VERSION}"
 VERSION="${3:?usage: verify-remote-version-absent REPOSITORY_URL GROUP VERSION}"
 TRANSPORT_ATTEMPTS="${MAGRATHEA_REMOTE_TRANSPORT_ATTEMPTS:-4}"
 TRANSPORT_RETRY_SECONDS="${MAGRATHEA_REMOTE_TRANSPORT_RETRY_SECONDS:-2}"
+PROBE_WORKERS="${MAGRATHEA_REMOTE_PROBE_WORKERS:-8}"
 
 if [[ ! "$GROUP" =~ ^[A-Za-z0-9_.-]+$ || ! "$VERSION" =~ ^[A-Za-z0-9_.-]+$ ]]; then
   printf 'remote preflight failed: invalid group or version\n' >&2
@@ -13,6 +14,10 @@ if [[ ! "$GROUP" =~ ^[A-Za-z0-9_.-]+$ || ! "$VERSION" =~ ^[A-Za-z0-9_.-]+$ ]]; t
 fi
 if [[ ! "$TRANSPORT_ATTEMPTS" =~ ^[1-9][0-9]*$ || ! "$TRANSPORT_RETRY_SECONDS" =~ ^[0-9]+$ ]]; then
   printf 'remote preflight failed: transport retry settings must be non-negative integers\n' >&2
+  exit 2
+fi
+if [[ ! "$PROBE_WORKERS" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'remote preflight failed: probe workers must be a positive integer\n' >&2
   exit 2
 fi
 
@@ -26,7 +31,10 @@ case "$REPOSITORY_URL" in
 esac
 
 credentials_file=""
+coordinates_file="$(mktemp)"
+status_directory="$(mktemp -d)"
 cleanup() {
+  rm -rf "$coordinates_file" "$status_directory"
   if [[ -n "$credentials_file" ]]; then
     rm -f "$credentials_file"
   fi
@@ -82,6 +90,23 @@ fetch_status() {
   return 1
 }
 
+probe_poms() {
+  local index=0
+  local artifact=""
+  while IFS=: read -r ignored_group artifact ignored_version; do
+    index=$((index + 1))
+    (
+      fetch_status "${REPOSITORY_URL%/}/$group_path/$artifact/$VERSION/$artifact-$VERSION.pom" \
+        > "$status_directory/$index" ||
+        printf 'transport' > "$status_directory/$index"
+    ) < /dev/null &
+    if [[ $((index % PROBE_WORKERS)) -eq 0 ]]; then
+      wait
+    fi
+  done < "$coordinates_file"
+  wait
+}
+
 group_path="$(printf '%s' "$GROUP" | tr '.' '/')"
 coordinate_count=0
 while IFS=: read -r coordinate_group artifact coordinate_version; do
@@ -98,14 +123,26 @@ while IFS=: read -r coordinate_group artifact coordinate_version; do
       "$coordinate_group" "$artifact" "$coordinate_version" >&2
     exit 2
   }
+  printf '%s:%s:%s\n' "$coordinate_group" "$artifact" "$coordinate_version" >> "$coordinates_file"
   coordinate_count=$((coordinate_count + 1))
-  pom_url="${REPOSITORY_URL%/}/$group_path/$artifact/$VERSION/$artifact-$VERSION.pom"
-  if ! status="$(fetch_status "$pom_url")"; then
-    printf 'remote preflight failed: repository transport failed for %s after %s attempts\n' \
-      "$artifact" "$TRANSPORT_ATTEMPTS" >&2
-    exit 2
-  fi
+done
+
+if [[ "$coordinate_count" -eq 0 ]]; then
+  printf 'remote preflight failed: no publication coordinates were provided\n' >&2
+  exit 2
+fi
+
+probe_poms
+index=0
+while IFS=: read -r ignored_group artifact ignored_version; do
+  index=$((index + 1))
+  status="$(<"$status_directory/$index")"
   case "$status" in
+    transport)
+      printf 'remote preflight failed: repository transport failed for %s after %s attempts\n' \
+        "$artifact" "$TRANSPORT_ATTEMPTS" >&2
+      exit 2
+      ;;
     404) ;;
     200)
       printf 'remote preflight failed: immutable coordinate already exists: %s:%s:%s\n' \
@@ -121,11 +158,6 @@ while IFS=: read -r coordinate_group artifact coordinate_version; do
       exit 2
       ;;
   esac
-done
-
-if [[ "$coordinate_count" -eq 0 ]]; then
-  printf 'remote preflight failed: no publication coordinates were provided\n' >&2
-  exit 2
-fi
+done < "$coordinates_file"
 
 printf 'MAGRATHEA_REMOTE_VERSION_ABSENT coordinates=%s version=%s\n' "$coordinate_count" "$VERSION"

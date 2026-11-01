@@ -352,6 +352,7 @@ jobs:
         env:
           GITHUB_SAIEN_MAVEN_USERNAME: ${{ github.actor }}
           GITHUB_SAIEN_MAVEN_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAGRATHEA_MAVEN_WORKERS: "4"
           RELEASE_VERSION: ${{ needs.prepare-publish.outputs.version }}
           PUBLISH_MODE: ${{ needs.prepare-publish.outputs.publish_mode }}
           RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}

@@ -122,12 +122,16 @@ set -euo pipefail
 
 state_file="${MAGRATHEA_FAKE_CURL_STATE:?missing fake curl state}"
 failure_count="${MAGRATHEA_FAKE_CURL_FAILURES:-1}"
+until mkdir "$state_file.lock" 2>/dev/null; do
+  sleep 0.01
+done
 attempt=0
 if [[ -s "$state_file" ]]; then
   attempt="$(<"$state_file")"
 fi
 attempt=$((attempt + 1))
 printf '%s\n' "$attempt" > "$state_file"
+rmdir "$state_file.lock"
 if [[ "$attempt" -le "$failure_count" ]]; then
   printf 'curl: (28) simulated transient transport failure\n' >&2
   exit 28
