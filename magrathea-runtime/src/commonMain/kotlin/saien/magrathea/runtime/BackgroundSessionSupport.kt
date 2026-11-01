@@ -21,7 +21,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 
 /** Model-facing Tool definitions and system prompt section declared while background is enabled. */
 object BackgroundToolInstructions {
@@ -378,10 +377,10 @@ internal fun List<AgentMessage>.pendingReadResultCount(handle: String, runId: Ag
         .count { part ->
             !part.isError &&
                 part.toolName == BackgroundToolInstructions.READ_TOOL &&
-                part.metadata[BackgroundToolProtocol.HANDLE_METADATA_KEY]?.jsonPrimitive?.contentOrNull ==
-                handle &&
-                (part.result as? JsonObject)?.get("status")?.jsonPrimitive?.contentOrNull in
-                PENDING_READ_STATUSES
+                (part.metadata[BackgroundToolProtocol.HANDLE_METADATA_KEY] as? JsonPrimitive)
+                    ?.contentOrNull == handle &&
+                ((part.result as? JsonObject)?.get("status") as? JsonPrimitive)
+                    ?.contentOrNull in PENDING_READ_STATUSES
         }
 
 /**
@@ -393,8 +392,8 @@ internal fun List<AgentMessage>.awaitAllowanceExhaustedEarlier(runId: AgentRunId
         .any { part ->
             !part.isError &&
                 part.toolName == BackgroundToolInstructions.AWAIT_TOOL &&
-                (part.result as? JsonObject)
-                    ?.get("wait_allowance_exhausted")?.jsonPrimitive?.booleanOrNull == true
+                ((part.result as? JsonObject)?.get("wait_allowance_exhausted") as? JsonPrimitive)
+                    ?.booleanOrNull == true
         }
 
 // A Session history spans multiple Runs. Message positions and the last USER message cannot
