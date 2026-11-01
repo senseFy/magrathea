@@ -5,6 +5,13 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## [0.1.0-alpha.24](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.23...v0.1.0-alpha.24) (2026-11-01)
+
+
+### Bug Fixes
+
+* count every published module in release notes ([#40](https://github.com/senseFy/magrathea/issues/40)) ([7a440a2](https://github.com/senseFy/magrathea/commit/7a440a25ab001a6bf75a7f716ae1939b40b2b65d))
+
 ## [0.1.0-alpha.23](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.22...v0.1.0-alpha.23) (2026-11-01)
 
 
