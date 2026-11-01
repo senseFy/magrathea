@@ -90,7 +90,10 @@ class ChatbotSession internal constructor(
         }
     }
 
-    /** Captures a user input and its canonical ID without starting execution or changing history. */
+    /**
+     * Captures a user input, canonical ID and preparation-time timestamp without starting
+     * execution or changing history. Sending later preserves that timestamp.
+     */
     @Throws(ChatbotException::class, CancellationException::class)
     suspend fun prepareMessage(
         text: String,
@@ -108,8 +111,9 @@ class ChatbotSession internal constructor(
 
     /**
      * Sends [prepared] once on its originating facade, appending to the current authoritative
-     * history. Cancellation while waiting for command admission leaves it unused; after the
-     * attempt starts, failure or cancellation does not make it reusable. See [ChatbotPreparedMessage].
+     * history. Cancellation while waiting for command admission or for the previous execution
+     * to settle leaves it unused; after the new send attempt starts, failure or cancellation
+     * does not make it reusable. See [ChatbotPreparedMessage].
      */
     @Throws(ChatbotException::class, CancellationException::class)
     suspend fun sendPrepared(prepared: ChatbotPreparedMessage) = facadeOperation {

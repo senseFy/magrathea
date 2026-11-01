@@ -272,6 +272,78 @@ class ChatbotPreparedMessageContractTest {
     }
 
     @Test
+    fun cancellationWhileThePreviousCollectorSettlesLeavesPreparedInputUnused() = runTest {
+        val fixture = fixture(StandardTestDispatcher(testScheduler))
+        val cleanup = CompletableDeferred<Unit>()
+        fixture.runner.afterCompleted = cleanup
+        val session = fixture.client.createSession(testChatbotConfiguration())
+        try {
+            session.send("previous execution")
+            runCurrent()
+            assertEquals(ChatbotStatus.COMPLETED, session.snapshot().status)
+            val previous = fixture.store.load(session.sessionId)
+            val prepared = session.prepareMessage("next execution")
+
+            val waiting = async { session.sendPrepared(prepared) }
+            runCurrent()
+            assertFalse(waiting.isCompleted)
+            waiting.cancel()
+            waiting.join()
+
+            assertFalse(cleanup.isCompleted)
+            assertEquals(1, fixture.runner.requests.size)
+            assertEquals(previous, fixture.store.load(session.sessionId))
+            cleanup.complete(Unit)
+            advanceUntilIdle()
+            session.sendPrepared(prepared)
+            advanceUntilIdle()
+
+            assertEquals(2, fixture.runner.requests.size)
+            assertEquals(prepared.messageId, fixture.runner.requests.last().messages.last().id)
+        } finally {
+            cleanup.complete(Unit)
+            fixture.client.close()
+        }
+    }
+
+    @Test
+    fun unusablePreparedInputsDoNotStopAnActiveExecution() = runTest {
+        val fixture = fixture(StandardTestDispatcher(testScheduler))
+        val response = CompletableDeferred<Unit>()
+        val session = fixture.client.createSession(testChatbotConfiguration())
+        val foreign = fixture.client.createSession(testChatbotConfiguration())
+        try {
+            val consumed = session.prepareMessage("already sent")
+            session.sendPrepared(consumed)
+            advanceUntilIdle()
+            val foreignInput = foreign.prepareMessage("another facade")
+            fixture.runner.beforeCommit = response
+            session.send("active execution")
+            runCurrent()
+
+            for (input in listOf(consumed, foreignInput)) {
+                assertEquals(
+                    ChatbotFailure.INVALID_ARGUMENT,
+                    assertFailsWith<ChatbotException> { session.sendPrepared(input) }.failure,
+                )
+            }
+
+            assertTrue(fixture.runner.cancelledSessions.isEmpty())
+            assertEquals(2, fixture.runner.requests.size)
+            assertEquals(ChatbotStatus.RUNNING, session.snapshot().status)
+            assertFalse(response.isCompleted)
+            response.complete(Unit)
+            advanceUntilIdle()
+            foreign.sendPrepared(foreignInput)
+            advanceUntilIdle()
+            assertEquals(foreignInput.messageId, fixture.runner.requests.last().messages.last().id)
+        } finally {
+            response.complete(Unit)
+            fixture.client.close()
+        }
+    }
+
+    @Test
     fun failedAttemptIsNotReusableAndItsFailureDoesNotExposeInput() = runTest {
         var failFactory = true
         val delegate = DefaultChatbotRequestFactory()

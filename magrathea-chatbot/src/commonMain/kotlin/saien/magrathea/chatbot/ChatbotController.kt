@@ -94,8 +94,10 @@ internal class ChatbotController(
     suspend fun sendPreparedMessage(prepared: ChatbotPreparedMessage) = commandMutex.withLock {
         ensureOpen()
         currentCoroutineContext().ensureActive()
-        val message = prepared.claim(this)
+        prepared.validateUsable(this)
         stopPendingExecution()
+        currentCoroutineContext().ensureActive()
+        val message = prepared.claim(this)
         startUserMessage(message)
     }
 

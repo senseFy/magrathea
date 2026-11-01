@@ -11,10 +11,13 @@ import saien.magrathea.core.AgentSessionId
  *
  * Preparing an input neither appends it to history nor starts execution. [messageId] is the
  * canonical message ID that [ChatbotSession.sendPrepared] will use, including on the first send.
+ * Its canonical timestamp is captured at preparation time, not refreshed when sent.
  * The input does not capture history or model configuration; those are resolved when sent.
  *
- * A prepared input permits one send attempt on its originating facade. Once that attempt starts,
- * it remains consumed even if sending fails or is cancelled: admission may already have happened.
+ * A prepared input permits one send attempt on its originating facade. Cancellation while waiting
+ * for command admission or for the previous execution to settle leaves it unused. Once the new
+ * send attempt starts, it remains consumed even if sending fails or is cancelled: admission may
+ * already have happened.
  * Reusing it fails with [ChatbotFailure.INVALID_ARGUMENT], rather than risking a duplicate send.
  * This is an admission guard, not a durable idempotency key or a guarantee of persistence.
  * Preparing another input after an uncertain outcome is a new send and must be an explicit choice.
@@ -29,11 +32,16 @@ class ChatbotPreparedMessage internal constructor(
 
     private var consumed = false
 
-    /** Only the originating controller may claim, while holding its command mutex. */
-    internal fun claim(requestingOwner: Any): AgentMessage {
+    /** The originating controller holds its command mutex across validation and claim. */
+    internal fun validateUsable(requestingOwner: Any) {
         if (owner !== requestingOwner || consumed) {
             throw ChatbotException(ChatbotFailure.INVALID_ARGUMENT)
         }
+    }
+
+    /** Only the originating controller may claim, while holding its command mutex. */
+    internal fun claim(requestingOwner: Any): AgentMessage {
+        validateUsable(requestingOwner)
         consumed = true
         return message
     }
