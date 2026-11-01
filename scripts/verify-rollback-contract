@@ -122,16 +122,12 @@ set -euo pipefail
 
 state_file="${MAGRATHEA_FAKE_CURL_STATE:?missing fake curl state}"
 failure_count="${MAGRATHEA_FAKE_CURL_FAILURES:-1}"
-until mkdir "$state_file.lock" 2>/dev/null; do
-  sleep 0.01
-done
 attempt=0
 if [[ -s "$state_file" ]]; then
   attempt="$(<"$state_file")"
 fi
 attempt=$((attempt + 1))
 printf '%s\n' "$attempt" > "$state_file"
-rmdir "$state_file.lock"
 if [[ "$attempt" -le "$failure_count" ]]; then
   printf 'curl: (28) simulated transient transport failure\n' >&2
   exit 28
@@ -181,6 +177,7 @@ without_repository_credentials env \
   PATH="$TRANSIENT_CURL_DIR:$PATH" \
   MAGRATHEA_REAL_CURL="$REAL_CURL" \
   MAGRATHEA_FAKE_CURL_STATE="$absent_transport_state" \
+  MAGRATHEA_REMOTE_PROBE_WORKERS=1 \
   MAGRATHEA_REMOTE_TRANSPORT_ATTEMPTS=2 \
   MAGRATHEA_REMOTE_TRANSPORT_RETRY_SECONDS=0 \
   /bin/bash "$ROOT_DIR/scripts/verify-remote-version-absent" \
@@ -200,6 +197,7 @@ if output="$(
     MAGRATHEA_REAL_CURL="$REAL_CURL" \
     MAGRATHEA_FAKE_CURL_STATE="$exhausted_transport_state" \
     MAGRATHEA_FAKE_CURL_FAILURES=2 \
+    MAGRATHEA_REMOTE_PROBE_WORKERS=1 \
     MAGRATHEA_REMOTE_TRANSPORT_ATTEMPTS=2 \
     MAGRATHEA_REMOTE_TRANSPORT_RETRY_SECONDS=0 \
     /bin/bash "$ROOT_DIR/scripts/verify-remote-version-absent" \
@@ -237,6 +235,7 @@ without_repository_credentials env \
   PATH="$TRANSIENT_CURL_DIR:$PATH" \
   MAGRATHEA_REAL_CURL="$REAL_CURL" \
   MAGRATHEA_FAKE_CURL_STATE="$present_transport_state" \
+  MAGRATHEA_REMOTE_PROBE_WORKERS=1 \
   MAGRATHEA_REMOTE_TRANSPORT_ATTEMPTS=2 \
   MAGRATHEA_REMOTE_TRANSPORT_RETRY_SECONDS=0 \
   MAGRATHEA_REMOTE_VERIFY_ATTEMPTS=1 \
