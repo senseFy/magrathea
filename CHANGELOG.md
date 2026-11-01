@@ -5,6 +5,17 @@ Notable changes to Magrathea are documented here. The project follows
 
 ## Unreleased
 
+## [0.1.0-alpha.22](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.21...v0.1.0-alpha.22) (2026-11-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* SessionCatalog implementations must provide windowAroundCollection, and SessionCatalogState gains collectionsRevision; consumers must rebuild against consistent SDK module versions. Room upgrades 3 to 4 and IndexedDB upgrades 2 to 3 to exclude older writers. These upgrades only initialize existing control records; they add no tables or stores and never copy canonical payloads. Drain and close older native handles before upgrading; already-open SQLite handles cannot be revoked. Close or refresh old browser tabs when IndexedDB upgrade is blocked. Older SDKs cannot reopen upgraded databases; rollback requires a compatible pre-upgrade backup.
+
+### Features
+
+* add collection-specific catalog invalidation and anchored windows ([#33](https://github.com/senseFy/magrathea/issues/33)) ([b5d629a](https://github.com/senseFy/magrathea/commit/b5d629acb2595fc6828c964d443ee0db77d21c15))
+
 ## [0.1.0-alpha.21](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.20...v0.1.0-alpha.21) (2026-11-01)
 
 
