@@ -2,21 +2,15 @@
   "formatVersion": 1,
   "database": {
     "version": 3,
-    "identityHash": "b2c164b042542be98f859da9184b3c05",
+    "identityHash": "7696e8102a7b49d84dca7909f4a45eab",
     "entities": [
       {
         "tableName": "agent_sessions",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sessionId` TEXT NOT NULL, `payload` TEXT NOT NULL, `updatedAtEpochMs` INTEGER NOT NULL, `incarnation` TEXT NOT NULL DEFAULT 'legacy', `rowVersion` INTEGER NOT NULL DEFAULT 0, `catalogObservedActivityIdentity` TEXT, `catalogActivityIdentity` TEXT, `catalogActivityOrder` TEXT, `catalogRecoveryStatus` TEXT, `catalogRecoveryCandidate` INTEGER NOT NULL DEFAULT 1, `catalogAttachmentNameBackup` TEXT, PRIMARY KEY(`sessionId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sessionId` TEXT NOT NULL, `updatedAtEpochMs` INTEGER NOT NULL, `incarnation` TEXT NOT NULL DEFAULT 'legacy', `rowVersion` INTEGER NOT NULL DEFAULT 0, `catalogObservedActivityIdentity` TEXT, `catalogActivityIdentity` TEXT, `catalogActivityOrder` TEXT, `catalogRecoveryStatus` TEXT, `catalogRecoveryCandidate` INTEGER NOT NULL DEFAULT 1, `payload` TEXT NOT NULL, PRIMARY KEY(`sessionId`))",
         "fields": [
           {
             "fieldPath": "sessionId",
             "columnName": "sessionId",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "payload",
-            "columnName": "payload",
             "affinity": "TEXT",
             "notNull": true
           },
@@ -68,9 +62,10 @@
             "defaultValue": "1"
           },
           {
-            "fieldPath": "catalogAttachmentNameBackup",
-            "columnName": "catalogAttachmentNameBackup",
-            "affinity": "TEXT"
+            "fieldPath": "payload",
+            "columnName": "payload",
+            "affinity": "TEXT",
+            "notNull": true
           }
         ],
         "primaryKey": {
@@ -81,14 +76,30 @@
         },
         "indices": [
           {
+            "name": "index_agent_sessions_catalog_identity",
+            "unique": false,
+            "columnNames": [
+              "sessionId",
+              "incarnation",
+              "rowVersion",
+              "catalogObservedActivityIdentity",
+              "catalogActivityIdentity",
+              "catalogActivityOrder",
+              "catalogRecoveryStatus"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_agent_sessions_catalog_identity` ON `${TABLE_NAME}` (`sessionId`, `incarnation`, `rowVersion`, `catalogObservedActivityIdentity`, `catalogActivityIdentity`, `catalogActivityOrder`, `catalogRecoveryStatus`)"
+          },
+          {
             "name": "index_agent_sessions_catalogRecoveryCandidate_sessionId",
             "unique": false,
             "columnNames": [
               "catalogRecoveryCandidate",
-              "sessionId"
+              "sessionId",
+              "catalogRecoveryStatus"
             ],
             "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_agent_sessions_catalogRecoveryCandidate_sessionId` ON `${TABLE_NAME}` (`catalogRecoveryCandidate`, `sessionId`)"
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_agent_sessions_catalogRecoveryCandidate_sessionId` ON `${TABLE_NAME}` (`catalogRecoveryCandidate`, `sessionId`, `catalogRecoveryStatus`)"
           }
         ]
       },
@@ -124,7 +135,7 @@
       },
       {
         "tableName": "agent_background_executions",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sessionId` TEXT NOT NULL, `executionId` TEXT NOT NULL, `envelope` TEXT NOT NULL, `updatedAtEpochMs` INTEGER NOT NULL, `rowVersion` INTEGER NOT NULL DEFAULT 0, `catalogHandle` TEXT, `catalogState` TEXT, `catalogResultVersion` INTEGER, `catalogAcknowledged` INTEGER, `catalogRecoveryCandidate` INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(`sessionId`, `executionId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sessionId` TEXT NOT NULL, `executionId` TEXT NOT NULL, `updatedAtEpochMs` INTEGER NOT NULL, `rowVersion` INTEGER NOT NULL DEFAULT 0, `catalogHandle` TEXT, `catalogState` TEXT, `catalogResultVersion` INTEGER, `catalogAcknowledged` INTEGER, `catalogRecoveryCandidate` INTEGER NOT NULL DEFAULT 1, `envelope` TEXT NOT NULL, PRIMARY KEY(`sessionId`, `executionId`))",
         "fields": [
           {
             "fieldPath": "sessionId",
@@ -135,12 +146,6 @@
           {
             "fieldPath": "executionId",
             "columnName": "executionId",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "envelope",
-            "columnName": "envelope",
             "affinity": "TEXT",
             "notNull": true
           },
@@ -183,6 +188,12 @@
             "affinity": "INTEGER",
             "notNull": true,
             "defaultValue": "1"
+          },
+          {
+            "fieldPath": "envelope",
+            "columnName": "envelope",
+            "affinity": "TEXT",
+            "notNull": true
           }
         ],
         "primaryKey": {
@@ -194,14 +205,34 @@
         },
         "indices": [
           {
+            "name": "index_agent_background_executions_catalog_facts",
+            "unique": false,
+            "columnNames": [
+              "sessionId",
+              "executionId",
+              "rowVersion",
+              "catalogHandle",
+              "catalogState",
+              "catalogResultVersion",
+              "catalogAcknowledged",
+              "catalogRecoveryCandidate"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_agent_background_executions_catalog_facts` ON `${TABLE_NAME}` (`sessionId`, `executionId`, `rowVersion`, `catalogHandle`, `catalogState`, `catalogResultVersion`, `catalogAcknowledged`, `catalogRecoveryCandidate`)"
+          },
+          {
             "name": "index_agent_background_executions_catalogRecoveryCandidate_sessionId",
             "unique": false,
             "columnNames": [
               "catalogRecoveryCandidate",
-              "sessionId"
+              "sessionId",
+              "catalogHandle",
+              "catalogState",
+              "catalogResultVersion",
+              "catalogAcknowledged"
             ],
             "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_agent_background_executions_catalogRecoveryCandidate_sessionId` ON `${TABLE_NAME}` (`catalogRecoveryCandidate`, `sessionId`)"
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_agent_background_executions_catalogRecoveryCandidate_sessionId` ON `${TABLE_NAME}` (`catalogRecoveryCandidate`, `sessionId`, `catalogHandle`, `catalogState`, `catalogResultVersion`, `catalogAcknowledged`)"
           }
         ]
       },
@@ -698,11 +729,41 @@
             "key"
           ]
         }
+      },
+      {
+        "tableName": "session_attachment_name_backups",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sessionId` TEXT NOT NULL, `incarnation` TEXT NOT NULL, `payload` TEXT NOT NULL, PRIMARY KEY(`sessionId`))",
+        "fields": [
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "incarnation",
+            "columnName": "incarnation",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payload",
+            "columnName": "payload",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "sessionId"
+          ]
+        }
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'b2c164b042542be98f859da9184b3c05')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '7696e8102a7b49d84dca7909f4a45eab')"
     ]
   }
 }

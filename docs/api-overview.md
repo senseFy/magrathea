@@ -25,6 +25,7 @@ and UI.
 pages, primary-key organization lookup, flat collections, conditional title writes, and candidate
 attachment-reference lookup. It never restores or executes a session. `SessionCatalogProjector`
 provides deterministic scalar projection and normalization; the default supports headless sessions.
+Projectors may be called concurrently and must be safe to share between operations.
 
 `InMemorySessionCatalogStore` is an atomic reference backend with separate `persistence`, `catalog`,
 `maintenance` and `migration` capabilities. Room and IndexedDB expose these from their store handles
@@ -69,12 +70,13 @@ both maintain those facts. A completed snapshot can remain a candidate while bac
 or its result is unacknowledged. Regenerating history can revoke an acknowledgement. Unknown sources
 remain conservative candidates, with coverage separate from ordinary header coverage.
 
-Room upgrades its physical database to version 4, including databases created with the earlier
-version 3 catalog layout; IndexedDB upgrades from version 1 to 2. Room keeps attachment-name backups
-in a separate table and places lightweight session and background facts before their opaque payloads.
-These structural upgrades retain canonical data and backups without decoding them, and do not change
-envelope schema 9. Earlier SDK versions cannot reopen the upgraded databases; downgrading requires a
-compatible pre-upgrade backup.
+Room upgrades its physical database from version 2 to 3; IndexedDB upgrades from version 1 to 2.
+Room adds scalar columns and covering indexes for lightweight session and background facts without
+copying or decoding canonical payloads. Existing tables retain their physical column order, and
+attachment-name backups live in a separate table. Index creation is synchronous during the upgrade
+and its cost grows with the number of records; bounded catalog maintenance runs afterward.
+These structural upgrades retain canonical data and do not change envelope schema 9. Earlier SDK
+versions cannot reopen the upgraded databases; downgrading requires a compatible pre-upgrade backup.
 
 Room `persistence.deleteSession` also deletes that session's background executions, origins, migration
 backup and derived catalog records in the same transaction. `persistence.clear` does so for every
@@ -228,7 +230,10 @@ known result. See [History replay and exclusions](replay.md).
 | `magrathea-credentials` | Android Keystore and iOS Keychain adapters |
 
 JVM credentials remain host-owned. Store handles and clients close idempotently and reject
-subsequent operations once closed.
+subsequent operations once closed. Room rejects new work before waiting for admitted operations to
+finish and closing its database. Cancelling the closing coroutine does not abandon this wait or cancel
+admitted work. Hosts should stop producers and cancel/join maintenance first; a slow or non-returning
+projector or decoder can delay close completion.
 
 Logical session and checkpoint envelopes use schema 9, with schema 6 as the minimum readable
 migration baseline.

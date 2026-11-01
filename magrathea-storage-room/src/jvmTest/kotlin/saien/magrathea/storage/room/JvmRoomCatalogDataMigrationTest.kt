@@ -10,10 +10,12 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import saien.magrathea.catalog.LegacySessionOrganization
 import saien.magrathea.catalog.SessionAttachmentName
+import saien.magrathea.catalog.SessionAttachmentNameBackup
 import saien.magrathea.catalog.SessionAttachmentNameScanOutcome
 import saien.magrathea.catalog.SessionCatalogException
 import saien.magrathea.catalog.SessionCatalogFailure
 import saien.magrathea.catalog.SessionCatalogMaintenanceIssueKind
+import saien.magrathea.catalog.SessionCatalogMigrationEncoding
 import saien.magrathea.catalog.SessionCatalogPolicy
 import saien.magrathea.catalog.SessionCatalogProjection
 import saien.magrathea.catalog.SessionCatalogProjector
@@ -41,6 +43,34 @@ import kotlin.test.assertTrue
 
 class JvmRoomCatalogDataMigrationTest {
     private val reporter = StoredRecordCorruptionReporter { error("Unexpected corruption callback") }
+
+    @Test
+    fun backupReadRejectsMismatchedEntityOrEnvelopeIdentity() = runTest {
+        fixture { database, store, _ ->
+            val original = snapshot()
+            store.persistence.commit(original, null)
+            val identity = assertNotNull(store.catalog.sessionIdentity(original.sessionId))
+            val backup = SessionAttachmentNameBackup(identity, 1, AgentSessionSnapshotCodec().encode(original), null)
+            val encoded = SessionCatalogMigrationEncoding.backup(backup)
+            database.catalogDao().upsertAttachmentNameBackup(
+                SessionAttachmentNameBackupEntity(original.sessionId.value, "wrong-incarnation", encoded),
+            )
+            assertEquals(SessionCatalogFailure.UNREADABLE_MIGRATION_SOURCE, assertFailsWith<SessionCatalogException> {
+                store.migration.attachmentNameBackup(identity)
+            }.failure)
+            val mismatched = backup.copy(identity = SessionIdentity(AgentSessionId("other-session"), identity.incarnation))
+            database.catalogDao().upsertAttachmentNameBackup(
+                SessionAttachmentNameBackupEntity(original.sessionId.value, identity.incarnation, SessionCatalogMigrationEncoding.backup(mismatched)),
+            )
+            assertEquals(SessionCatalogFailure.UNREADABLE_MIGRATION_SOURCE, assertFailsWith<SessionCatalogException> {
+                store.migration.attachmentNameBackup(identity)
+            }.failure)
+            database.catalogDao().upsertAttachmentNameBackup(
+                SessionAttachmentNameBackupEntity(original.sessionId.value, identity.incarnation, encoded),
+            )
+            assertEquals(backup, store.migration.attachmentNameBackup(identity))
+        }
+    }
 
     @Test
     fun nameScanUsesSqlitePhysicalOrderForSupplementaryUnicodeSessionIds() = runTest {

@@ -320,7 +320,13 @@ internal class RoomCatalogDataMigration(
     override suspend fun attachmentNameBackup(identity: SessionIdentity): SessionAttachmentNameBackup? = read {
         val current = sessions.identity(identity.sessionId.value) ?: return@read null
         if (current.incarnation != identity.incarnation) fail(SessionCatalogFailure.STALE_IDENTITY)
-        dao.attachmentNameBackup(identity.sessionId.value)?.payload?.let(SessionCatalogMigrationEncoding::backup)
+        val entity = dao.attachmentNameBackup(identity.sessionId.value) ?: return@read null
+        decode {
+            require(entity.incarnation == identity.incarnation)
+            SessionCatalogMigrationEncoding.backup(entity.payload).also {
+                require(it.identity == identity)
+            }
+        }
     }
     override suspend fun restoreAttachmentNameBackup(target: SessionAttachmentNameTarget): SessionAttachmentNamePatchResult {
         val source = source(target.identity.sessionId) ?: fail(SessionCatalogFailure.STALE_MIGRATION)

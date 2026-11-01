@@ -131,6 +131,12 @@ class MagratheaRoomStoreHandle internal constructor(
     val maintenance: SessionCatalogMaintenance = RoomCatalogMaintenance(database, roomCatalog, json)
     val migration: SessionCatalogMigration = RoomCatalogDataMigration(database, roomCatalog, json)
 
+    /**
+     * Rejects new operations, drains admitted work, and closes the database. Repeated calls join the same close.
+     * Cancelling the closing coroutine does not cancel admitted operations or abandon their drain.
+     * A slow or non-returning host projector/decoder can delay completion. Stop producers and
+     * cancel/join maintenance before closing; caller cancellation is not a close timeout.
+     */
     suspend fun close() = roomCatalog.close()
 }
 
@@ -149,7 +155,7 @@ internal fun buildMagratheaRoomDatabase(
     return builder
         .setDriver(BundledSQLiteDriver())
         .setQueryCoroutineContext(Dispatchers.Default)
-        .addMigrations(MAGRATHEA_ROOM_MIGRATION_1_2, MAGRATHEA_ROOM_MIGRATION_2_3, MAGRATHEA_ROOM_MIGRATION_3_4)
+        .addMigrations(MAGRATHEA_ROOM_MIGRATION_1_2, MAGRATHEA_ROOM_MIGRATION_2_3)
         .build()
 }
 

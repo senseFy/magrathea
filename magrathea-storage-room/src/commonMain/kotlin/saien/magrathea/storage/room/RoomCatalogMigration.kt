@@ -14,8 +14,11 @@ internal val MAGRATHEA_ROOM_MIGRATION_2_3 = object : Migration(2, 3) {
             "ALTER TABLE agent_sessions ADD COLUMN catalogActivityOrder TEXT",
             "ALTER TABLE agent_sessions ADD COLUMN catalogRecoveryStatus TEXT",
             "ALTER TABLE agent_sessions ADD COLUMN catalogRecoveryCandidate INTEGER NOT NULL DEFAULT 1",
-            "ALTER TABLE agent_sessions ADD COLUMN catalogAttachmentNameBackup TEXT",
-            "CREATE INDEX IF NOT EXISTS index_agent_sessions_catalogRecoveryCandidate_sessionId ON agent_sessions(catalogRecoveryCandidate, sessionId)",
+            "CREATE INDEX IF NOT EXISTS index_agent_sessions_catalog_identity ON agent_sessions(" +
+                "sessionId, incarnation, rowVersion, catalogObservedActivityIdentity, " +
+                "catalogActivityIdentity, catalogActivityOrder, catalogRecoveryStatus)",
+            "CREATE INDEX IF NOT EXISTS index_agent_sessions_catalogRecoveryCandidate_sessionId " +
+                "ON agent_sessions(catalogRecoveryCandidate, sessionId, catalogRecoveryStatus)",
             "ALTER TABLE agent_background_executions ADD COLUMN rowVersion INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE agent_background_executions ADD COLUMN catalogHandle TEXT",
             "ALTER TABLE agent_background_executions ADD COLUMN catalogState TEXT",
@@ -23,7 +26,13 @@ internal val MAGRATHEA_ROOM_MIGRATION_2_3 = object : Migration(2, 3) {
             "ALTER TABLE agent_background_executions ADD COLUMN catalogAcknowledged INTEGER",
             "ALTER TABLE agent_background_executions ADD COLUMN catalogRecoveryCandidate INTEGER NOT NULL DEFAULT 1",
             "CREATE INDEX IF NOT EXISTS index_agent_background_executions_catalogRecoveryCandidate_sessionId " +
-                "ON agent_background_executions(catalogRecoveryCandidate, sessionId)",
+                "ON agent_background_executions(catalogRecoveryCandidate, sessionId, " +
+                "catalogHandle, catalogState, catalogResultVersion, catalogAcknowledged)",
+            "CREATE INDEX IF NOT EXISTS index_agent_background_executions_catalog_facts " +
+                "ON agent_background_executions(sessionId, executionId, rowVersion, catalogHandle, catalogState, " +
+                "catalogResultVersion, catalogAcknowledged, catalogRecoveryCandidate)",
+            "CREATE TABLE IF NOT EXISTS session_attachment_name_backups (" +
+                "sessionId TEXT NOT NULL PRIMARY KEY, incarnation TEXT NOT NULL, payload TEXT NOT NULL)",
             "CREATE TABLE IF NOT EXISTS session_catalog (" +
                 "sessionId TEXT NOT NULL PRIMARY KEY, incarnation TEXT NOT NULL, rowVersion INTEGER NOT NULL, " +
                 "policyId TEXT NOT NULL, policyVersion INTEGER NOT NULL, fallbackLabel TEXT NOT NULL, " +

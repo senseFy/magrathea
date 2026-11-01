@@ -20,6 +20,9 @@ Magrathea is Alpha. Its APIs and persisted formats may change before the stable 
   typed organization import, canonical attachment-name migration and recovery-fact queries. Hosts own
   Worker scheduling and runtime fence/drain barriers. Unreadable persisted sources keep reference
   coverage incomplete; file deletion additionally requires the host's live/draft/submission protection.
+- Room's structural upgrade builds scalar indexes synchronously before bounded maintenance begins.
+  It avoids copying canonical payloads, but index creation still scales with record count and can delay
+  the first store access on large histories. See the [migration contract](api-overview.md#session-catalog).
 - Desktop means the JVM artifact, not a Kotlin/Native desktop target or an official UI/application
   shell. Recorded evidence includes a macOS-hosted JVM run and a defined Ubuntu CI gate, but no
   Windows host gate; Linux/Windows remain JVM-compatible rather than equally validated environments.

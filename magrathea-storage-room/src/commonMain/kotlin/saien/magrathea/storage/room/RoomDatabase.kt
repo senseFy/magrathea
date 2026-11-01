@@ -15,7 +15,31 @@ import androidx.room.RoomDatabaseConstructor
 import androidx.room.Upsert
 import androidx.room.migration.Migration
 
-@Entity(tableName = "agent_sessions", indices = [Index(value = ["catalogRecoveryCandidate", "sessionId"])])
+@Entity(
+    tableName = "agent_sessions",
+    indices = [
+        Index(
+            name = "index_agent_sessions_catalog_identity",
+            value = [
+                "sessionId",
+                "incarnation",
+                "rowVersion",
+                "catalogObservedActivityIdentity",
+                "catalogActivityIdentity",
+                "catalogActivityOrder",
+                "catalogRecoveryStatus",
+            ],
+        ),
+        Index(
+            name = "index_agent_sessions_catalogRecoveryCandidate_sessionId",
+            value = [
+                "catalogRecoveryCandidate",
+                "sessionId",
+                "catalogRecoveryStatus",
+            ],
+        ),
+    ],
+)
 internal data class AgentSessionEntity(
     @PrimaryKey val sessionId: String,
     val updatedAtEpochMs: Long,
@@ -71,10 +95,12 @@ internal interface AgentSessionDao {
     suspend fun findById(sessionId: String): AgentSessionEntity?
 
     @Query("SELECT sessionId, incarnation, rowVersion, catalogObservedActivityIdentity, " +
-        "catalogActivityIdentity, catalogActivityOrder FROM agent_sessions WHERE sessionId = :sessionId")
+        "catalogActivityIdentity, catalogActivityOrder FROM agent_sessions " +
+        "INDEXED BY index_agent_sessions_catalog_identity WHERE sessionId = :sessionId")
     suspend fun identity(sessionId: String): AgentSessionIdentityEntity?
 
-    @Query("SELECT sessionId, incarnation, rowVersion, catalogRecoveryStatus FROM agent_sessions WHERE sessionId = :sessionId")
+    @Query("SELECT sessionId, incarnation, rowVersion, catalogRecoveryStatus FROM agent_sessions " +
+        "INDEXED BY index_agent_sessions_catalog_identity WHERE sessionId = :sessionId")
     suspend fun recovery(sessionId: String): AgentSessionRecoveryEntity?
 
     @Query("SELECT EXISTS(SELECT 1 FROM agent_sessions WHERE catalogRecoveryCandidate = 1 AND (catalogRecoveryStatus IS NULL OR " +
@@ -133,7 +159,32 @@ internal interface AgentCheckpointDao {
 @Entity(
     tableName = "agent_background_executions",
     primaryKeys = ["sessionId", "executionId"],
-    indices = [Index(value = ["catalogRecoveryCandidate", "sessionId"])],
+    indices = [
+        Index(
+            name = "index_agent_background_executions_catalog_facts",
+            value = [
+                "sessionId",
+                "executionId",
+                "rowVersion",
+                "catalogHandle",
+                "catalogState",
+                "catalogResultVersion",
+                "catalogAcknowledged",
+                "catalogRecoveryCandidate",
+            ],
+        ),
+        Index(
+            name = "index_agent_background_executions_catalogRecoveryCandidate_sessionId",
+            value = [
+                "catalogRecoveryCandidate",
+                "sessionId",
+                "catalogHandle",
+                "catalogState",
+                "catalogResultVersion",
+                "catalogAcknowledged",
+            ],
+        ),
+    ],
 )
 internal data class AgentBackgroundExecutionEntity(
     val sessionId: String,
@@ -294,7 +345,7 @@ internal val MAGRATHEA_ROOM_MIGRATION_1_2 = object : Migration(1, 2) {
         CatalogStateEntity::class,
         SessionAttachmentNameBackupEntity::class,
     ],
-    version = 4,
+    version = 3,
     exportSchema = true,
 )
 @ConstructedBy(MagratheaDatabaseConstructor::class)

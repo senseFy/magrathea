@@ -70,7 +70,7 @@ class JvmRoomCatalogMigrationTest {
             }
 
             BundledSQLiteDriver().open(path).use { db ->
-                assertEquals("4", db.single("PRAGMA user_version"))
+                assertEquals("3", db.single("PRAGMA user_version"))
                 assertEquals(sessionPayload, db.single("SELECT payload FROM agent_sessions WHERE sessionId = 'existing'"))
                 assertEquals(opaquePayload, db.single("SELECT payload FROM agent_sessions WHERE sessionId = 'unreadable'"))
                 assertEquals(checkpointPayload, db.single("SELECT payload FROM agent_checkpoints WHERE sessionId = 'existing'"))
