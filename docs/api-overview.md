@@ -27,6 +27,14 @@ attachment-reference lookup. It never restores or executes a session. `SessionCa
 provides deterministic scalar projection and normalization; the default supports headless sessions.
 Projectors may be called concurrently and must be safe to share between operations.
 
+`state().collectionsRevision` is a durable invalidation token for collection lists. It changes with
+collection creation, edits, deletion, import additions and search normalization, and with clear/rebuild
+boundaries that invalidate collection cursors. Ordinary session commits, session deletion, and
+membership/title/pin changes leave it unchanged. Compare tokens for equality; they are global revision
+values at the last relevant change, not counts of collection edits. `windowAroundCollection` resolves
+an anchor and its bounded neighbors consistently and returns SDK-owned cursors. A missing or filtered
+anchor returns an empty terminal page; hosts may then choose to load the first page.
+
 `InMemorySessionCatalogStore` is an atomic reference backend with separate `persistence`, `catalog`,
 `maintenance` and `migration` capabilities. Room and IndexedDB expose these from their store handles
 as well. Structural upgrades leave old history at `INDEXING`; `maintenance.runBatch` advances a
@@ -70,13 +78,20 @@ both maintain those facts. A completed snapshot can remain a candidate while bac
 or its result is unacknowledged. Regenerating history can revoke an acknowledgement. Unknown sources
 remain conservative candidates, with coverage separate from ordinary header coverage.
 
-Room upgrades its physical database from version 2 to 3; IndexedDB upgrades from version 1 to 2.
-Room adds scalar columns and covering indexes for lightweight session and background facts without
+Room's 2-to-3 migration adds scalar columns and covering indexes for lightweight session and background facts without
 copying or decoding canonical payloads. Existing tables retain their physical column order, and
 attachment-name backups live in a separate table. Index creation is synchronous during the upgrade
 and its cost grows with the number of records; bounded catalog maintenance runs afterward.
-These structural upgrades retain canonical data and do not change envelope schema 9. Earlier SDK
-versions cannot reopen the upgraded databases; downgrading requires a compatible pre-upgrade backup.
+IndexedDB's 1-to-2 migration adds the corresponding catalog stores and indexes.
+
+Current physical versions are Room 4 and IndexedDB 3. Room 3-to-4 and IndexedDB 2-to-3 initialize only
+the collection invalidation token in existing control records: no tables/stores are added and no
+canonical payloads or collections are copied or decoded. These version boundaries also reject later
+opens by older writers that cannot maintain the token. Drain and close all old Room handles before
+upgrading; SQLite does not revoke an already-open older handle. IndexedDB closes old connections on
+`versionchange`, and hosts must close/refresh old tabs when an upgrade is blocked.
+All these upgrades retain canonical data and leave envelope schema 9 unchanged. Downgrading requires
+a compatible pre-upgrade backup; destructive downgrade is not enabled.
 
 Room `persistence.deleteSession` also deletes that session's background executions, origins, migration
 backup and derived catalog records in the same transaction. `persistence.clear` does so for every

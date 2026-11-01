@@ -19,6 +19,7 @@ import saien.magrathea.catalog.SessionCatalogQuery
 import saien.magrathea.catalog.SessionCatalogScope
 import saien.magrathea.catalog.SessionCatalogSort
 import saien.magrathea.catalog.SessionCollection
+import saien.magrathea.catalog.SessionCollectionQuery
 import saien.magrathea.catalog.SessionOrganizationMutation
 import saien.magrathea.catalog.SessionPinFilter
 import saien.magrathea.catalog.sessionCatalogSortKey
@@ -26,10 +27,115 @@ import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class JvmRoomCatalogPagingTest {
+    @Test
+    fun collectionWindowsUseBoundedIndexedNeighborsAndProduceBothContinuationCursors() = runTest {
+        val directory = Files.createTempDirectory("room-collection-window-")
+        val path = directory.resolve("store.db").toString()
+        val queries = CopyOnWriteArrayList<String>()
+        val database = Room.databaseBuilder<MagratheaDatabase>(name = path)
+            .setDriver(RecordingDriver(queries))
+            .setQueryCoroutineContext(Dispatchers.Default)
+            .build()
+        val store = MagratheaRoomStoreHandle(database, StoredRecordCorruptionReporter { error("Window decoded history") })
+        try {
+            val collections = (0 until 81).map { index ->
+                val id = "g-${index.toString().padStart(3, '0')}"
+                SessionCollection(id, if (index % 2 == 0) "Match $id" else "Other $id", "same-sort-key", id)
+            } + listOf("😀", "\uE000", "中文").map { id ->
+                SessionCollection(id, "Match $id", "same-sort-key", id)
+            }
+            collections.forEach { store.catalog.createCollection(it) }
+            val expected = collections.filter { it.name.startsWith("Match") }
+                .sortedBy { CatalogKeyEncoding.stringKey(it.id) }
+            val search = SessionCollectionQuery("  MATCH  ")
+            queries.clear()
+
+            for (limit in listOf(1, 2, 7, 200)) {
+                val window = store.catalog.windowAroundCollection("g-040", search, limit)
+                assertTrue(window.entries.size <= limit)
+                assertTrue(window.entries.any { it.id == "g-040" })
+                assertEquals(window.entries.sortedBy { CatalogKeyEncoding.stringKey(it.id) }, window.entries)
+                assertEquals(store.catalog.state().collectionsRevision, window.state.collectionsRevision)
+                if (limit == 1) {
+                    assertEquals(listOf("g-040"), window.entries.map { it.id })
+                    assertNotNull(window.previousCursor)
+                    assertNotNull(window.nextCursor)
+                    assertFalse(window.exhausted)
+                }
+                if (limit == 200) {
+                    assertEquals(expected, window.entries)
+                    assertTrue(window.exhausted)
+                    assertNull(window.previousCursor)
+                    assertNull(window.nextCursor)
+                }
+            }
+
+            val window = store.catalog.windowAroundCollection("g-040", search, 7)
+            val found = window.entries.toMutableList()
+            var before = window.previousCursor
+            var after = window.nextCursor
+            var pages = 0
+            while (before != null || after != null) {
+                before?.let { cursor ->
+                    val page = store.catalog.pageCollections(search, cursor, CatalogPageDirection.BEFORE, 5)
+                    found.addAll(0, page.entries)
+                    before = page.previousCursor
+                }
+                after?.let { cursor ->
+                    val page = store.catalog.pageCollections(search, cursor, CatalogPageDirection.AFTER, 5)
+                    found.addAll(page.entries)
+                    after = page.nextCursor
+                }
+                check(++pages < 20) { "Collection continuation did not terminate" }
+            }
+            assertEquals(expected, found)
+
+            val first = store.catalog.windowAroundCollection(expected.first().id, search, 1)
+            assertNull(first.previousCursor)
+            assertNotNull(first.nextCursor)
+            val last = store.catalog.windowAroundCollection(expected.last().id, search, 1)
+            assertNotNull(last.previousCursor)
+            assertNull(last.nextCursor)
+            for (id in listOf("missing", "g-001")) {
+                val absent = store.catalog.windowAroundCollection(id, search, 7)
+                assertTrue(absent.entries.isEmpty())
+                assertTrue(absent.exhausted)
+                assertNull(absent.previousCursor)
+                assertNull(absent.nextCursor)
+            }
+            for (limit in listOf(0, 201)) {
+                assertFailsWith<IllegalArgumentException> {
+                    store.catalog.windowAroundCollection("g-040", search, limit)
+                }
+            }
+            assertTrue(queries.none { it.contains("agent_sessions") || it.contains("payload") })
+            val neighborQueries = queries.filter {
+                it.startsWith("SELECT * FROM session_collections") && it.contains("ORDER BY")
+            }.distinct()
+            assertTrue(neighborQueries.isNotEmpty())
+            BundledSQLiteDriver().open(path).use { connection ->
+                neighborQueries.forEach { sql ->
+                    assertTrue(sql.endsWith("LIMIT ?"), sql)
+                    val plan = connection.prepare("EXPLAIN QUERY PLAN $sql").use { statement ->
+                        buildList { while (statement.step()) add(statement.getText(3)) }
+                    }
+                    assertTrue(plan.any { it.contains("index_session_collections_nameSortKey_idSortKey") }, "$sql: $plan")
+                    assertTrue(plan.none { it.contains("TEMP B-TREE") }, "$sql: $plan")
+                }
+            }
+        } finally {
+            store.close()
+            check(directory.toFile().deleteRecursively())
+        }
+    }
+
     @Test
     fun indexedPagesTraverseEveryScopeBothWaysWithoutReadingCanonicalPayloads() = runTest {
         val directory = Files.createTempDirectory("magrathea-catalog-paging-")
@@ -39,7 +145,11 @@ class JvmRoomCatalogPagingTest {
         val database = Room.databaseBuilder<MagratheaDatabase>(name = path)
             .setDriver(driver)
             .setQueryCoroutineContext(Dispatchers.Default)
-            .addMigrations(MAGRATHEA_ROOM_MIGRATION_1_2, MAGRATHEA_ROOM_MIGRATION_2_3)
+            .addMigrations(
+                MAGRATHEA_ROOM_MIGRATION_1_2,
+                MAGRATHEA_ROOM_MIGRATION_2_3,
+                MAGRATHEA_ROOM_MIGRATION_3_4,
+            )
             .build()
         val store = MagratheaRoomStoreHandle(database, StoredRecordCorruptionReporter { error("Page decoded a payload") })
         try {

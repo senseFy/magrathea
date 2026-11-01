@@ -380,7 +380,7 @@ private fun createNonJsonBridgeSources(name: String): Promise<JsString> = js("""
 
 private fun inspectNonJsonBridgeSources(name: String): Promise<JsString> = js("""
     new Promise((resolve) => {
-      const request = indexedDB.open(name, 2);
+      const request = indexedDB.open(name, 3);
       request.onsuccess = () => {
         const database = request.result;
         const tx = database.transaction(["sessions"], "readonly");
@@ -467,7 +467,7 @@ private fun restoreBridgeUpgradeFailure(): Unit = js("""
 
 private fun readBridgeControlDirectly(name: String): Promise<JsString> = js("""
     new Promise((resolve) => {
-      const request = indexedDB.open(name, 2);
+      const request = indexedDB.open(name, 3);
       request.onsuccess = () => {
         const database = request.result;
         const tx = database.transaction(["catalog_state"], "readonly");

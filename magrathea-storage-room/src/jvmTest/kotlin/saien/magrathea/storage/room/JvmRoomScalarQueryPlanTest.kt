@@ -34,7 +34,7 @@ class JvmRoomScalarQueryPlanTest {
         val database = Room.databaseBuilder<MagratheaDatabase>(name = path)
             .setDriver(RecordingDriver(queries))
             .setQueryCoroutineContext(Dispatchers.Default)
-            .addMigrations(MAGRATHEA_ROOM_MIGRATION_2_3)
+            .addMigrations(MAGRATHEA_ROOM_MIGRATION_2_3, MAGRATHEA_ROOM_MIGRATION_3_4)
             .build()
         val store = MagratheaRoomStoreHandle(database, StoredRecordCorruptionReporter { error("Scalar query decoded history") })
         try {

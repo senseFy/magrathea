@@ -26,6 +26,13 @@ internal fun runCatalogIndexedDbOperation(
       const owns = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
       const isObject = (value) => value !== null && typeof value === "object" &&
         (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+      const patchValue = (value, fields) => {
+        if (!isObject(value) || !isObject(fields)) throw new Error("Invalid internal patch");
+        const updated = Object.create(null);
+        for (const key of Object.keys(value)) updated[key] = value[key];
+        for (const key of Object.keys(fields)) updated[key] = fields[key];
+        return updated;
+      };
       let settled = false;
       const finish = (ok, code, result) => {
         if (settled) return;
@@ -131,18 +138,36 @@ internal fun runCatalogIndexedDbOperation(
         if (!isObject(input) || !["read", "keys", "page", "bulkSessions", "referenceLookup", "atomicWrite"].includes(operation)) {
           throw new Error("Invalid internal operation");
         }
-        open = globalThis.indexedDB.open(databaseName, 2);
+        open = globalThis.indexedDB.open(databaseName, 3);
       } catch (error) { finish(false, classify(error)); return; }
       open.onblocked = () => finish(false, "blocked");
       open.onerror = () => finish(false, openFailureCode || classify(open.error));
       open.onupgradeneeded = (event) => {
-        if (settled || (event.oldVersion !== 0 && event.oldVersion !== 1)) {
+        if (settled || ![0, 1, 2].includes(event.oldVersion)) {
           openFailureCode = "unsupported_database_version";
           try { open.transaction.abort(); } catch (_) {}
           return;
         }
         try {
           const database = open.result;
+          if (event.oldVersion === 2) {
+            // Fence v2 writers: their control serializer drops fields it does not know.
+            // Only control changes in v3; canonical records and all eight stores stay intact.
+            const control = open.transaction.objectStore("catalog_state");
+            const request = control.get("state");
+            request.onsuccess = () => {
+              try {
+                if (request.result !== undefined) {
+                  if (!isObject(request.result)) throw new Error("Invalid stored internal state");
+                  control.put(patchValue(request.result, { collectionsRevision: "0" }), "state");
+                }
+              } catch (error) {
+                openFailureCode = classify(error);
+                try { open.transaction.abort(); } catch (_) { finish(false, openFailureCode); }
+              }
+            };
+            return;
+          }
           for (const name of stores) {
             if (!database.objectStoreNames.contains(name)) database.createObjectStore(name);
           }
@@ -171,7 +196,7 @@ internal fun runCatalogIndexedDbOperation(
         const database = open.result;
         database.onversionchange = () => database.close();
         if (settled) { database.close(); return; }
-        if (database.version !== 2) { database.close(); finish(false, "unsupported_database_version"); return; }
+        if (database.version !== 3) { database.close(); finish(false, "unsupported_database_version"); return; }
         let transaction;
         let result;
         let failureCode = null;
@@ -196,13 +221,6 @@ internal fun runCatalogIndexedDbOperation(
           if (value === undefined) return [];
           if (!Array.isArray(value)) throw new Error("Invalid internal request list");
           return value;
-        };
-        const patchValue = (value, fields) => {
-          if (!isObject(value) || !isObject(fields)) throw new Error("Invalid internal patch");
-          const updated = Object.create(null);
-          for (const key of Object.keys(value)) updated[key] = value[key];
-          for (const key of Object.keys(fields)) updated[key] = fields[key];
-          return updated;
         };
         const readMetadata = (id, accept) => {
           if (typeof id !== "string") throw new Error("Invalid internal metadata identity");

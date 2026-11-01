@@ -203,6 +203,13 @@ data class SessionCatalogState(
     val revision: Long,
     val generation: Long,
     val coverage: CatalogCoverage,
+    /**
+     * Durable invalidation token for collection pages. Changes with collection definitions, their
+     * search projection, or cursor validity (including clear/rebuild), independently of ordinary
+     * session commits, deletions, and membership/title/pin changes. Compare for equality, not as a
+     * count: adapters store the global revision of the latest relevant change, initially zero.
+     */
+    val collectionsRevision: Long = 0,
 )
 
 /**
@@ -300,6 +307,18 @@ interface SessionCatalog {
         query: SessionCollectionQuery = SessionCollectionQuery(),
         cursor: SessionCollectionCursor? = null,
         direction: CatalogPageDirection = CatalogPageDirection.AFTER,
+        limit: Int,
+    ): SessionCollectionPage
+
+    /**
+     * Returns an anchored collection page from one consistent collection view, with at most [limit]
+     * entries (1..[MAX_CATALOG_PAGE_SIZE]). A missing anchor or one outside [query] returns an empty
+     * terminal page. The adapter need not fill both sides; use its cursors to continue, including
+     * short search pages. [SessionCollectionPage.exhausted] means neither direction has more.
+     */
+    suspend fun windowAroundCollection(
+        id: String,
+        query: SessionCollectionQuery = SessionCollectionQuery(),
         limit: Int,
     ): SessionCollectionPage
 

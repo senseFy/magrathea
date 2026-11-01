@@ -139,7 +139,10 @@ internal class WebCatalogDataMigration(
             if (!stable) return@repeat
             var imported = 0L
             var skipped = 0L
-            val plan = catalog.mutation(source)
+            val collectionsChanged = collectionValues.any { (id, value) ->
+                source.value(CATALOG_COLLECTIONS, id) != value
+            }
+            val plan = catalog.mutation(source, collectionsChanged = collectionsChanged)
             collections.forEach { value -> plan.puts += putRecord(CATALOG_COLLECTIONS, value.id, collectionValues.getValue(value.id)) }
             organizations.forEach { value ->
                 val id = value.sessionId.value

@@ -155,7 +155,11 @@ internal fun buildMagratheaRoomDatabase(
     return builder
         .setDriver(BundledSQLiteDriver())
         .setQueryCoroutineContext(Dispatchers.Default)
-        .addMigrations(MAGRATHEA_ROOM_MIGRATION_1_2, MAGRATHEA_ROOM_MIGRATION_2_3)
+        .addMigrations(
+            MAGRATHEA_ROOM_MIGRATION_1_2,
+            MAGRATHEA_ROOM_MIGRATION_2_3,
+            MAGRATHEA_ROOM_MIGRATION_3_4,
+        )
         .build()
 }
 

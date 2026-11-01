@@ -48,6 +48,7 @@ class InMemorySessionCatalogStore(
     private val intents = mutableMapOf<IntentKey, PreparedActivityIntent>()
     private var activityCounter = 0L
     private var revision = 0L
+    private var collectionsRevision = 0L
     private var generation = 0L
     private var closed = false
     private var coverage = CatalogCoverage.COMPLETE
@@ -174,6 +175,7 @@ class InMemorySessionCatalogStore(
             intents.clear()
             revision = nextRevision
             generation = nextGeneration
+            collectionsRevision = nextRevision
             resetMaintenance(complete = true)
             // Collection definitions and the global activity counter deliberately survive clear.
         }
@@ -303,29 +305,32 @@ class InMemorySessionCatalogStore(
                 (anchor?.let { collectionBound(it, afterEqual = false) } ?: sortedCollections.size) - 1
             }
             val selected = scanCollections(normalized, start, direction, limit)
-            val previous = selected.firstOrNull()?.let { first ->
-                val position = collectionBound(collectionSortKey(first), afterEqual = false)
-                if (scanCollections(normalized, position - 1, CatalogPageDirection.BEFORE, 1).isNotEmpty()) {
-                    collectionCursor(first, normalized, state)
-                } else {
-                    null
-                }
+            collectionPage(selected, normalized, state, direction)
+        }
+
+        override suspend fun windowAroundCollection(
+            id: String,
+            query: SessionCollectionQuery,
+            limit: Int,
+        ): SessionCollectionPage = mutex.withLock {
+            requireOpen()
+            validateCatalogPageLimit(limit)
+            val normalized = query.copy(search = projector.normalizeSearch(query.search))
+            val state = currentState()
+            val anchor = collections[id]?.takeIf {
+                normalized.search.isEmpty() || projector.normalizeSearch(it.name).contains(normalized.search)
+            } ?: return@withLock SessionCollectionPage(emptyList(), null, null, true, state)
+            val position = collectionBound(collectionSortKey(anchor), afterEqual = false)
+            val before = scanCollections(normalized, position - 1, CatalogPageDirection.BEFORE, (limit - 1) / 2)
+            val after = scanCollections(normalized, position, CatalogPageDirection.AFTER, limit - before.size)
+            val selected = if (before.size + after.size == limit) {
+                before + after
+            } else {
+                scanCollections(normalized, position - 1, CatalogPageDirection.BEFORE, limit - after.size) + after
             }
-            val next = selected.lastOrNull()?.let { last ->
-                val position = collectionBound(collectionSortKey(last), afterEqual = true)
-                if (scanCollections(normalized, position, CatalogPageDirection.AFTER, 1).isNotEmpty()) {
-                    collectionCursor(last, normalized, state)
-                } else {
-                    null
-                }
+            collectionPage(selected, normalized, state, CatalogPageDirection.AFTER).let {
+                it.copy(exhausted = it.previousCursor == null && it.nextCursor == null)
             }
-            SessionCollectionPage(
-                selected,
-                previous,
-                next,
-                if (direction == CatalogPageDirection.AFTER) next == null else previous == null,
-                state,
-            )
         }
 
         override suspend fun createCollection(collection: SessionCollection) = mutex.withLock {
@@ -338,6 +343,7 @@ class InMemorySessionCatalogStore(
             val nextRevision = increment(revision)
             collections[collection.id] = collection
             insertCollection(collection)
+            collectionsRevision = nextRevision
             revision = nextRevision
         }
 
@@ -358,6 +364,7 @@ class InMemorySessionCatalogStore(
             collections[id] = replacement
             sortedCollections.removeAll { it.id == id }
             insertCollection(replacement)
+            collectionsRevision = nextRevision
             revision = nextRevision
         }
 
@@ -369,6 +376,7 @@ class InMemorySessionCatalogStore(
                 Triple(sessionId, replacement, entryForOrganization(sessionId, replacement))
             }
             val nextRevision = increment(revision)
+            collectionsRevision = nextRevision
             collections.remove(id)
             sortedCollections.removeAll { it.id == id }
             replacements.forEach { (sessionId, organization, entry) ->
@@ -599,6 +607,7 @@ class InMemorySessionCatalogStore(
                 if (!this@InMemorySessionCatalogStore.collections.containsKey(value.id)) {
                     this@InMemorySessionCatalogStore.collections[value.id] = value
                     insertCollection(value)
+                    collectionsRevision = nextRevision
                 }
             }
             replacements.forEach { (id, organization, entry) ->
@@ -880,6 +889,7 @@ class InMemorySessionCatalogStore(
             references.clear()
             revision = nextRevision
             generation = nextGeneration
+            collectionsRevision = nextRevision
             resetMaintenance(complete = sessions.isEmpty())
             maintenanceProgress()
         }
@@ -1026,6 +1036,7 @@ class InMemorySessionCatalogStore(
             replacements.values.forEach(::replaceEntry)
             revision = nextRevision
             generation = nextGeneration
+            collectionsRevision = nextRevision
             resetMaintenance(complete = true)
         }
     }
@@ -1037,7 +1048,7 @@ class InMemorySessionCatalogStore(
         intents.clear()
     }
 
-    private fun currentState() = SessionCatalogState(projector.policy, revision, generation, coverage)
+    private fun currentState() = SessionCatalogState(projector.policy, revision, generation, coverage, collectionsRevision)
 
     private fun maintenanceProgress() = SessionCatalogMaintenanceProgress(
         currentState(),
@@ -1241,6 +1252,37 @@ class InMemorySessionCatalogStore(
         }
         if (direction == CatalogPageDirection.BEFORE) result.reverse()
         return result
+    }
+
+    private fun collectionPage(
+        selected: List<SessionCollection>,
+        query: SessionCollectionQuery,
+        state: SessionCatalogState,
+        direction: CatalogPageDirection,
+    ): SessionCollectionPage {
+        val previous = selected.firstOrNull()?.let { first ->
+            val position = collectionBound(collectionSortKey(first), afterEqual = false)
+            if (scanCollections(query, position - 1, CatalogPageDirection.BEFORE, 1).isNotEmpty()) {
+                collectionCursor(first, query, state)
+            } else {
+                null
+            }
+        }
+        val next = selected.lastOrNull()?.let { last ->
+            val position = collectionBound(collectionSortKey(last), afterEqual = true)
+            if (scanCollections(query, position, CatalogPageDirection.AFTER, 1).isNotEmpty()) {
+                collectionCursor(last, query, state)
+            } else {
+                null
+            }
+        }
+        return SessionCollectionPage(
+            selected,
+            previous,
+            next,
+            if (direction == CatalogPageDirection.AFTER) next == null else previous == null,
+            state,
+        )
     }
 
     private fun collectionCursor(

@@ -59,8 +59,9 @@ internal data class WebCatalogControl(
     val organizationImport: String? = null,
     val organizationImportLastBatch: String? = null,
     val attachmentNameScan: String? = null,
+    val collectionsRevision: Long = 0,
 ) {
-    fun state() = SessionCatalogState(policy, revision, generation, coverage)
+    fun state() = SessionCatalogState(policy, revision, generation, coverage, collectionsRevision)
     fun progress() = SessionCatalogMaintenanceProgress(
         state = state(),
         afterSessionId = afterSession?.let(::AgentSessionId),
@@ -90,6 +91,7 @@ internal data class WebCatalogControl(
         put("organizationImport", organizationImport)
         put("organizationImportLastBatch", organizationImportLastBatch)
         put("attachmentNameScan", attachmentNameScan)
+        put("collectionsRevision", collectionsRevision.toString())
     }
     companion object {
         fun from(value: JsonObject) = WebCatalogControl(
@@ -116,6 +118,7 @@ internal data class WebCatalogControl(
             organizationImport = value.optionalString("organizationImport"),
             organizationImportLastBatch = value.optionalString("organizationImportLastBatch"),
             attachmentNameScan = value.optionalString("attachmentNameScan"),
+            collectionsRevision = value.long("collectionsRevision"),
         )
     }
 }
