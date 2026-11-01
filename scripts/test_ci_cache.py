@@ -1,9 +1,11 @@
 """Task cache provenance, partial retries and filesystem round trips."""
 
 import copy
+import io
 import json
 import os
 from pathlib import Path
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -86,8 +88,18 @@ class CacheTransferTests(unittest.TestCase):
         path.write_bytes(contents)
         return path
 
-    def export(self):
-        return ci_cache.export(self.home, self.snapshot, self.metadata)
+    def gradle_entry(self, name, execution_time, payload):
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode='w:gz') as archive:
+            for member, data in (('METADATA', f'executionTime={execution_time}\n'.encode()),
+                                 ('tree-output', payload)):
+                info = tarfile.TarInfo(member)
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+        return self.write(name, buffer.getvalue())
+
+    def export(self, since=None):
+        return ci_cache.export(self.home, self.snapshot, self.metadata, since=since)
 
     def restore(self):
         return ci_cache.restore(self.target, self.snapshot.parent, self.selected)
@@ -114,16 +126,29 @@ class CacheTransferTests(unittest.TestCase):
         with patch.object(ci_cache, 'MAX_BYTES', 10):
             self.assertFalse(self.export())
 
-    def test_snapshot_budget_prefers_recent_outputs(self):
-        older = self.write(self.key, b'older')
-        newer_key = f'build-cache-1/{"b" * 32}'
-        self.write(newer_key, b'newer')
-        os.utime(older, (1, 1))
-        with patch.object(ci_cache, 'MAX_BYTES', 5):
+    def test_snapshot_budget_prefers_execution_time_saved_per_byte(self):
+        compile_key = f'build-cache-1/{"b" * 32}'
+        compiled = self.gradle_entry(compile_key, 30_000, b'klib')
+        linked = self.gradle_entry(self.key, 60_000, os.urandom(4096))
+        os.utime(compiled, (1, 1))
+        with patch.object(ci_cache, 'MAX_BYTES', linked.stat().st_size):
             self.assertTrue(self.export())
         self.assertEqual(self.restore(), 1)
         self.assertFalse((self.target / 'caches' / self.key).exists())
-        self.assertEqual((self.target / 'caches' / newer_key).read_bytes(), b'newer')
+        self.assertEqual((self.target / 'caches' / compile_key).read_bytes(), compiled.read_bytes())
+
+    def test_snapshot_skips_entries_restored_before_the_job_epoch(self):
+        stale = self.gradle_entry(self.key, 90_000, b'stale')
+        fresh_key = f'build-cache-1/{"b" * 32}'
+        self.gradle_entry(fresh_key, 10, b'fresh')
+        epoch = self.root / 'epoch'
+        epoch.touch()
+        os.utime(stale, (1, 1))
+        os.utime(epoch, (2, 2))
+        self.assertTrue(self.export(since=epoch))
+        self.assertEqual(self.restore(), 1)
+        self.assertFalse((self.target / 'caches' / self.key).exists())
+        self.assertTrue((self.target / 'caches' / fresh_key).exists())
 
     def test_damaged_snapshot_is_rejected_before_any_entries_are_installed(self):
         self.write(self.key)

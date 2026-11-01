@@ -322,15 +322,15 @@ jobs:
         include:
           - name: foundation
             modules: >-
-              magrathea-build-info magrathea-core magrathea-session-catalog magrathea-provider-api
-              magrathea-credentials magrathea-storage-web magrathea-gateway-server
+              magrathea-core magrathea-session-catalog magrathea-provider-api magrathea-credentials
+              magrathea-storage-web magrathea-gateway-server
           - name: runtime
             modules: >-
               magrathea-runtime magrathea-mcp magrathea-provider-openai
               magrathea-web-client
           - name: policy-protocol
             modules: >-
-              magrathea-policy magrathea-gateway-protocol magrathea-provider-gemini
+              magrathea-build-info magrathea-policy magrathea-gateway-protocol magrathea-provider-gemini
           - name: product
             modules: >-
               magrathea-provider-gateway magrathea-chatbot

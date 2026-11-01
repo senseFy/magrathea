@@ -19,6 +19,11 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Mark the job's task cache epoch
+      if: inputs.mode == 'restore'
+      shell: bash
+      run: touch "$RUNNER_TEMP/gradle-task-cache-epoch"
+
     - name: Select immutable task cache snapshots
       if: inputs.mode == 'restore' && inputs.run-id != ''
       id: select
@@ -53,7 +58,9 @@ runs:
       shell: bash
       env:
         CACHE_GATE: ${{ inputs.gate }}
-      run: scripts/release cache-export --gate "$CACHE_GATE" --output "$RUNNER_TEMP/gradle-cache-export"
+      run: |
+        scripts/release cache-export --gate "$CACHE_GATE" --output "$RUNNER_TEMP/gradle-cache-export" \
+          --since "$RUNNER_TEMP/gradle-task-cache-epoch"
 
     - name: Retain task cache snapshot
       if: steps.snapshot.outputs.available == 'true'

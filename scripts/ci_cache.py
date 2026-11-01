@@ -6,8 +6,10 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import zipfile
+import zlib
 
 import ci_evidence
 
@@ -20,6 +22,8 @@ GATE_KEYS = {
 }
 ENTRY = re.compile(r'build-cache-[0-9]+/[0-9a-f]{32}')
 MAX_BYTES = 256 * 1024 * 1024
+METADATA_BYTES = 16 * 1024
+EXECUTION_TIME = re.compile(r'^executionTime=([0-9]+)$', re.MULTILINE)
 
 
 def source(gh, root, commit):
@@ -75,8 +79,25 @@ def digest(path):
     return checksum.hexdigest()
 
 
-def export(home, output, metadata):
-    """Bound snapshot size; exclude dependency caches, configuration state and locks."""
+def execution_density(entry, length):
+    """Milliseconds of task execution that one stored byte of a Gradle cache entry saves."""
+    try:
+        with tarfile.open(entry, 'r|gz') as archive:
+            member = archive.next()
+            if member is None or member.name != 'METADATA' or not member.isfile():
+                return 0.0
+            text = archive.extractfile(member).read(METADATA_BYTES).decode('utf-8', 'replace')
+    except (OSError, EOFError, tarfile.TarError, zlib.error):
+        return 0.0
+    match = EXECUTION_TIME.search(text)
+    return int(match.group(1)) / length if match else 0.0
+
+
+def export(home, output, metadata, since=None):
+    """Keep entries restored or produced since the job epoch, preferring time saved per byte.
+
+    The snapshot is size-bounded and excludes dependency caches, configuration state and locks.
+    """
     if output.exists():
         raise ValueError('task cache export directory already exists')
     output.mkdir(parents=True)
@@ -84,10 +105,15 @@ def export(home, output, metadata):
     candidates = [p for p in cache.glob('build-cache-*/*')
                   if ENTRY.fullmatch(p.relative_to(cache).as_posix())
                   and p.is_file() and not p.is_symlink() and not p.parent.is_symlink()]
+    epoch = since.stat().st_mtime if since is not None and since.is_file() else None
+    eligible = []
+    for entry in candidates:
+        status = entry.stat()
+        if status.st_size and (epoch is None or status.st_mtime >= epoch):
+            eligible.append((execution_density(entry, status.st_size), status.st_mtime, entry, status.st_size))
     files, size = {}, 0
-    for entry in sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True):
-        length = entry.stat().st_size
-        if length == 0 or size + length > MAX_BYTES:
+    for _, _, entry, length in sorted(eligible, key=lambda item: (item[0], item[1]), reverse=True):
+        if size + length > MAX_BYTES:
             continue
         name = entry.relative_to(cache).as_posix()
         target = output / name
