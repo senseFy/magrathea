@@ -1,9 +1,9 @@
 package saien.magrathea.chatbot
 
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import saien.magrathea.core.AgentFailureCode
 import saien.magrathea.core.AgentInterruption
 import saien.magrathea.core.AgentInterruptionReason
@@ -670,13 +670,13 @@ internal fun isBackgroundControlTool(toolName: String): Boolean =
 
 /** A Tool result the Runtime authored as background control traffic. */
 internal fun ToolResultPart.isBackgroundControlResult(): Boolean =
-    metadata[BackgroundToolInstructions.CONTROL_RESULT_METADATA_KEY]
-        ?.jsonPrimitive?.booleanOrNull == true
+    (metadata[BackgroundToolInstructions.CONTROL_RESULT_METADATA_KEY] as? JsonPrimitive)
+        ?.booleanOrNull == true
 
 /** Same marker on an event-time result. */
 internal fun ToolExecutionResult.isBackgroundControlResult(): Boolean =
-    metadata[BackgroundToolInstructions.CONTROL_RESULT_METADATA_KEY]
-        ?.jsonPrimitive?.booleanOrNull == true
+    (metadata[BackgroundToolInstructions.CONTROL_RESULT_METADATA_KEY] as? JsonPrimitive)
+        ?.booleanOrNull == true
 
 internal fun AgentMessage.toChatbotMessageSnapshot(
     callIndex: ChatbotCallIndex? = null,

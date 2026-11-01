@@ -9,47 +9,45 @@ import saien.magrathea.core.BackgroundExecutionConfig
 import saien.magrathea.core.BackgroundExecutionRecord
 import saien.magrathea.core.BackgroundExecutionState
 import saien.magrathea.core.BackgroundOutcome
+import saien.magrathea.core.BackgroundToolProtocol
 import saien.magrathea.core.MessageRole
 import saien.magrathea.core.RuntimeNoticeDelivery
 import saien.magrathea.core.RuntimeNoticeEntry
 import saien.magrathea.core.RuntimeNoticePart
-import saien.magrathea.core.StopReason
 import saien.magrathea.core.ToolDefinition
 import saien.magrathea.core.ToolResultPart
+import saien.magrathea.core.backgroundResultDeliveryFacts
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 /** Model-facing Tool definitions and system prompt section declared while background is enabled. */
 object BackgroundToolInstructions {
-    internal const val READ_TOOL = "read_background_result"
-    internal const val AWAIT_TOOL = "await_background_results"
-    internal const val CANCEL_TOOL = "cancel_background_executions"
-    internal const val FINISH_TOOL = "finish_without_reply"
+    internal const val READ_TOOL = BackgroundToolProtocol.READ_TOOL
+    internal const val AWAIT_TOOL = BackgroundToolProtocol.AWAIT_TOOL
+    internal const val CANCEL_TOOL = BackgroundToolProtocol.CANCEL_TOOL
+    internal const val FINISH_TOOL = BackgroundToolProtocol.FINISH_TOOL
 
     /** Per-handle result slices carried in `await_background_results` metadata. */
-    internal const val AWAIT_RESULTS_METADATA_KEY = "magrathea.background.results"
+    internal const val AWAIT_RESULTS_METADATA_KEY = BackgroundToolProtocol.AWAIT_RESULTS_METADATA_KEY
 
     /**
      * Marker on every runtime-authored control Tool result, including control rejections. The
      * Chatbot hides results by this marker, not by name, so feature-off business Tools may use
      * the same names without disappearing.
      */
-    const val CONTROL_RESULT_METADATA_KEY = "magrathea.background.control"
+    const val CONTROL_RESULT_METADATA_KEY = BackgroundToolProtocol.CONTROL_RESULT_METADATA_KEY
 
     /** Owning Run of a control result; survives journal replay and Session persistence. */
-    internal const val CONTROL_RUN_ID_METADATA_KEY = "magrathea.background.control_run_id"
+    internal const val CONTROL_RUN_ID_METADATA_KEY = BackgroundToolProtocol.CONTROL_RUN_ID_METADATA_KEY
 
     /**
      * Stored-result error semantics carried by read/await retrievals so projections can restore
      * `isError`/`userErrorCode` on the originating activity.
      */
-    const val RESULT_IS_ERROR_METADATA_KEY = "magrathea.background.result_is_error"
-    const val RESULT_ERROR_CODE_METADATA_KEY = "magrathea.background.user_error_code"
+    const val RESULT_IS_ERROR_METADATA_KEY = BackgroundToolProtocol.RESULT_IS_ERROR_METADATA_KEY
+    const val RESULT_ERROR_CODE_METADATA_KEY = BackgroundToolProtocol.RESULT_ERROR_CODE_METADATA_KEY
 
     /** Model-facing names of the four runtime control Tools, in Provider-projection order. */
     val CONTROL_TOOL_NAMES: Set<String> = setOf(READ_TOOL, AWAIT_TOOL, CANCEL_TOOL, FINISH_TOOL)
@@ -367,10 +365,6 @@ internal fun pendingBackgroundRecords(
     }
 }
 
-/** `status` values in a retrieval result that mean the model has the outcome. */
-private val TERMINAL_DELIVERY_STATUSES =
-    setOf("succeeded", "failed", "timed_out", "interrupted", "cancelled")
-
 /** `status` values in a retrieval result that mean the model does not have the outcome yet. */
 private val PENDING_READ_STATUSES = setOf("queued", "running")
 
@@ -383,10 +377,10 @@ internal fun List<AgentMessage>.pendingReadResultCount(handle: String, runId: Ag
         .count { part ->
             !part.isError &&
                 part.toolName == BackgroundToolInstructions.READ_TOOL &&
-                part.metadata["magrathea.background.handle"]?.jsonPrimitive?.contentOrNull ==
-                handle &&
-                (part.result as? JsonObject)?.get("status")?.jsonPrimitive?.contentOrNull in
-                PENDING_READ_STATUSES
+                (part.metadata[BackgroundToolProtocol.HANDLE_METADATA_KEY] as? JsonPrimitive)
+                    ?.contentOrNull == handle &&
+                ((part.result as? JsonObject)?.get("status") as? JsonPrimitive)
+                    ?.contentOrNull in PENDING_READ_STATUSES
         }
 
 /**
@@ -398,8 +392,8 @@ internal fun List<AgentMessage>.awaitAllowanceExhaustedEarlier(runId: AgentRunId
         .any { part ->
             !part.isError &&
                 part.toolName == BackgroundToolInstructions.AWAIT_TOOL &&
-                (part.result as? JsonObject)
-                    ?.get("wait_allowance_exhausted")?.jsonPrimitive?.booleanOrNull == true
+                ((part.result as? JsonObject)?.get("wait_allowance_exhausted") as? JsonPrimitive)
+                    ?.booleanOrNull == true
         }
 
 // A Session history spans multiple Runs. Message positions and the last USER message cannot
@@ -416,64 +410,17 @@ private fun List<AgentMessage>.backgroundControlResults(runId: AgentRunId): Sequ
         }
 
 /**
- * Whether a non-error control result in this part delivered [handle]'s terminal outcome to the
- * model: a `read_background_result` tagged with the handle, or an `await_background_results`
- * entry for it carrying a terminal status.
- */
-private fun ToolResultPart.deliversTerminalBackgroundResult(handle: String): Boolean {
-    if (isError) return false
-    return when (toolName) {
-        BackgroundToolInstructions.READ_TOOL ->
-            metadata["magrathea.background.handle"]?.jsonPrimitive?.contentOrNull == handle &&
-                (result as? JsonObject)
-                    ?.get("status")?.jsonPrimitive?.contentOrNull in TERMINAL_DELIVERY_STATUSES
-        BackgroundToolInstructions.AWAIT_TOOL ->
-            (result as? JsonObject)?.get("results")?.jsonArray?.any { entry ->
-                val fields = entry as? JsonObject ?: return@any false
-                fields["handle"]?.jsonPrimitive?.contentOrNull == handle &&
-                    fields["status"]?.jsonPrimitive?.contentOrNull in TERMINAL_DELIVERY_STATUSES
-            } ?: false
-        else -> false
-    }
-}
-
-/**
- * Message indices where a record reached the model: a RUNTIME notice listing
- * (handle, resultVersion), or a TOOL message carrying a terminal retrieval result for the
- * handle.
- */
-private fun backgroundDeliveryIndices(
-    handle: String,
-    resultVersion: Int,
-    messages: List<AgentMessage>,
-): List<Int> = messages.mapIndexedNotNull { index, message ->
-    when {
-        message.role == MessageRole.RUNTIME &&
-            message.parts.filterIsInstance<RuntimeNoticePart>().any { part ->
-                part.entries.any {
-                    it.handle == handle && it.resultVersion == resultVersion
-                }
-            } -> index
-        message.role == MessageRole.TOOL &&
-            message.parts.filterIsInstance<ToolResultPart>().any { part ->
-                part.deliversTerminalBackgroundResult(handle)
-            } -> index
-        else -> null
-    }
-}
-
-/**
  * A record is delivered when a Runtime notice listed its current result version or a terminal
  * retrieval result reached the model; a non-terminal retrieval leaves it undelivered.
  */
 internal fun isBackgroundRecordDelivered(
     record: BackgroundExecutionRecord,
     messages: List<AgentMessage>,
-): Boolean = backgroundDeliveryIndices(
+): Boolean = backgroundResultDeliveryFacts(
     record.handle,
     record.resultVersion,
     messages,
-).isNotEmpty()
+).delivered
 
 /**
  * A terminal record is acknowledged when its latest delivery point — a Runtime notice or a
@@ -483,22 +430,11 @@ internal fun isBackgroundRecordDelivered(
 internal fun isBackgroundRecordAcknowledged(
     record: BackgroundExecutionRecord,
     messages: List<AgentMessage>,
-): Boolean {
-    val latestDeliveryIndex = backgroundDeliveryIndices(
-        record.handle,
-        record.resultVersion,
-        messages,
-    ).lastOrNull() ?: return false
-    return messages.drop(latestDeliveryIndex + 1).any { message ->
-        when {
-            message.role == MessageRole.ASSISTANT && message.stopReason == StopReason.COMPLETED -> true
-            message.role == MessageRole.TOOL -> message.parts.filterIsInstance<ToolResultPart>().any {
-                it.toolName == BackgroundToolInstructions.FINISH_TOOL && !it.isError
-            }
-            else -> false
-        }
-    }
-}
+): Boolean = backgroundResultDeliveryFacts(
+    record.handle,
+    record.resultVersion,
+    messages,
+).acknowledged
 
 /** Per-source count of CONTINUATION notices listing any record of that source. */
 private fun continuationCountsBySource(

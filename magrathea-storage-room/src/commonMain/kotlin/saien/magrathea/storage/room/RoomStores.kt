@@ -7,13 +7,24 @@ import androidx.room.useReaderConnection
 import androidx.room.useWriterConnection
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import saien.magrathea.core.AgentPersistence
-import saien.magrathea.core.AgentPersistenceRecord
+import saien.magrathea.catalog.DefaultSessionCatalogProjector
+import saien.magrathea.catalog.SessionActivityMode
+import saien.magrathea.catalog.SessionCatalog
+import saien.magrathea.catalog.SessionCatalogMaintenance
+import saien.magrathea.catalog.SessionCatalogMigration
+import saien.magrathea.catalog.SessionCatalogProjector
+import saien.magrathea.catalog.extractBackgroundExecutionAttachmentUris
+import saien.magrathea.catalog.extractBackgroundOriginAttachmentUris
+import saien.magrathea.catalog.extractSessionAttachmentUris
 import saien.magrathea.core.AgentCheckpoint
 import saien.magrathea.core.AgentCheckpointCodec
+import saien.magrathea.core.AgentPersistence
+import saien.magrathea.core.AgentPersistenceRecord
 import saien.magrathea.core.AgentRunId
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.AgentSessionSnapshot
@@ -110,30 +121,32 @@ class MagratheaRoomStoreHandle internal constructor(
     private val database: MagratheaDatabase,
     reporter: StoredRecordCorruptionReporter,
     json: Json = Json,
+    projector: SessionCatalogProjector = DefaultSessionCatalogProjector(),
 ) {
-    val persistence: AgentPersistence = RoomAgentPersistence(database, reporter, json)
+    private val roomCatalog = RoomSessionCatalog(database, projector)
+    val catalog: SessionCatalog = roomCatalog
+    val persistence: AgentPersistence = RoomAgentPersistence(database, reporter, json, catalog = roomCatalog)
     val backgroundStore: BackgroundExecutionStore =
-        RoomBackgroundExecutionStore(database, reporter, json)
+        RoomBackgroundExecutionStore(database, reporter, json, catalog = roomCatalog)
+    val maintenance: SessionCatalogMaintenance = RoomCatalogMaintenance(database, roomCatalog, json)
+    val migration: SessionCatalogMigration = RoomCatalogDataMigration(database, roomCatalog, json)
 
-    private val closeMutex = Mutex()
-    private var closed = false
-
-    suspend fun close() {
-        closeMutex.withLock {
-            if (!closed) {
-                closed = true
-                database.close()
-            }
-        }
-    }
+    /**
+     * Rejects new operations, drains admitted work, and closes the database. Repeated calls join the same close.
+     * Cancelling the closing coroutine does not cancel admitted operations or abandon their drain.
+     * A slow or non-returning host projector/decoder can delay completion. Stop producers and
+     * cancel/join maintenance before closing; caller cancellation is not a close timeout.
+     */
+    suspend fun close() = roomCatalog.close()
 }
 
 internal fun buildMagratheaRoomStore(
     builder: RoomDatabase.Builder<MagratheaDatabase>,
     reporter: StoredRecordCorruptionReporter,
     json: Json = Json,
+    projector: SessionCatalogProjector = DefaultSessionCatalogProjector(),
 ): MagratheaRoomStoreHandle {
-    return MagratheaRoomStoreHandle(buildMagratheaRoomDatabase(builder), reporter, json)
+    return MagratheaRoomStoreHandle(buildMagratheaRoomDatabase(builder), reporter, json, projector)
 }
 
 internal fun buildMagratheaRoomDatabase(
@@ -142,11 +155,11 @@ internal fun buildMagratheaRoomDatabase(
     return builder
         .setDriver(BundledSQLiteDriver())
         .setQueryCoroutineContext(Dispatchers.Default)
-        .addMigrations(MAGRATHEA_ROOM_MIGRATION_1_2)
+        .addMigrations(MAGRATHEA_ROOM_MIGRATION_1_2, MAGRATHEA_ROOM_MIGRATION_2_3)
         .build()
 }
 
-/** Room-backed [BackgroundExecutionStore]; every write/deletes runs in its own transaction. */
+/** Room-backed [BackgroundExecutionStore]; every write and delete runs in its own transaction. */
 internal class RoomBackgroundExecutionStore(
     private val database: MagratheaDatabase,
     private val reporter: StoredRecordCorruptionReporter,
@@ -157,98 +170,133 @@ internal class RoomBackgroundExecutionStore(
         { payload -> recordCodec.decodeResult(payload).toStoredRecord() },
     private val originDecoder: (String) -> DecodedStoredRecord<BackgroundOriginContext> =
         { payload -> originCodec.decodeResult(payload).toStoredRecord() },
+    private val catalog: RoomSessionCatalog = RoomSessionCatalog(database),
 ) : BackgroundExecutionStore {
     private val executionsDao = database.backgroundExecutionDao()
     private val originsDao = database.backgroundOriginDao()
+    private val recovery = RoomRecoveryIndex(database, json)
+    private val references = RoomAttachmentReferenceIndex(database, json)
 
-    override suspend fun upsert(record: BackgroundExecutionRecord) {
-        val entity = AgentBackgroundExecutionEntity(
-            sessionId = record.sessionId.value,
-            executionId = record.executionId,
-            envelope = recordCodec.encode(record),
-            updatedAtEpochMs = record.settledAtEpochMs
-                ?: record.startedAtEpochMs
-                ?: record.queuedAtEpochMs,
-        )
-        database.useWriterConnection { connection ->
-            connection.immediateTransaction { executionsDao.upsert(entity) }
+    override suspend fun upsert(record: BackgroundExecutionRecord) = catalog.operation {
+        val envelope = recordCodec.encode(record)
+        val uris = extractBackgroundExecutionAttachmentUris(record)
+        while (true) {
+            val prepared = recovery.prepareBackground(record)
+            val committed = database.useWriterConnection { connection ->
+                connection.immediateTransaction {
+                    catalog.readState()
+                    if (!recovery.matches(prepared, record.sessionId)) false else {
+                        executionsDao.upsert(recovery.backgroundEntity(record, envelope, prepared))
+                        references.replace(record.sessionId.value, executionReferenceSource(record.executionId), uris)
+                        catalog.advanceRevision()
+                        true
+                    }
+                }
+            }
+            if (committed) break
         }
     }
 
-    override suspend fun putOrigin(origin: BackgroundOriginContext) {
+    override suspend fun putOrigin(origin: BackgroundOriginContext) = catalog.operation {
         val entity = AgentBackgroundOriginEntity(
             sessionId = origin.sessionId.value,
             runId = origin.runId.value,
             envelope = originCodec.encode(origin),
         )
+        val uris = extractBackgroundOriginAttachmentUris(origin)
         database.useWriterConnection { connection ->
-            connection.immediateTransaction { originsDao.upsert(entity) }
+            connection.immediateTransaction {
+                catalog.readState()
+                originsDao.upsert(entity)
+                references.replace(origin.sessionId.value, originReferenceSource(origin.runId.value), uris)
+                catalog.advanceRevision()
+            }
         }
+        Unit
     }
 
     override suspend fun load(sessionId: AgentSessionId): BackgroundSessionRecords {
         val corruptions = mutableListOf<StoredRecordCorruption>()
         return try {
-            database.useReaderConnection { connection ->
-                connection.deferredTransaction {
-                    BackgroundSessionRecords(
-                        records = executionsDao.listBySession(sessionId.value)
-                            .mapNotNull { entity ->
-                                try {
-                                    decodeRecord(entity).value
-                                } catch (failure: StoredRecordCorruptionException) {
-                                    corruptions += failure.corruption
-                                    null
-                                }
-                            },
-                        origins = originsDao.listBySession(sessionId.value).mapNotNull { entity ->
-                            try {
-                                decodeOrigin(entity).value
-                            } catch (failure: StoredRecordCorruptionException) {
-                                corruptions += failure.corruption
-                                null
-                            }
-                        },
-                    )
+            catalog.operation {
+                val (executions, origins) = database.useReaderConnection { connection ->
+                    connection.deferredTransaction {
+                        catalog.readState()
+                        executionsDao.listBySession(sessionId.value) to originsDao.listBySession(sessionId.value)
+                    }
                 }
+                BackgroundSessionRecords(
+                    records = executions.mapNotNull { entity ->
+                        try {
+                            decodeRecord(entity).value
+                        } catch (failure: StoredRecordCorruptionException) {
+                            corruptions += failure.corruption
+                            null
+                        }
+                    },
+                    origins = origins.mapNotNull { entity ->
+                        try {
+                            decodeOrigin(entity).value
+                        } catch (failure: StoredRecordCorruptionException) {
+                            corruptions += failure.corruption
+                            null
+                        }
+                    },
+                )
             }
         } finally {
             corruptions.forEach(::reportCorruption)
         }
     }
 
-    override suspend fun delete(sessionId: AgentSessionId, executionId: String) {
+    override suspend fun delete(sessionId: AgentSessionId, executionId: String) = catalog.operation {
         database.useWriterConnection { connection ->
             connection.immediateTransaction {
+                catalog.readState()
                 executionsDao.deleteById(sessionId.value, executionId)
+                database.catalogDao().deleteSourceReferences(sessionId.value, executionReferenceSource(executionId))
+                catalog.advanceRevision()
             }
         }
+        Unit
     }
 
-    override suspend fun deleteOrigin(sessionId: AgentSessionId, runId: AgentRunId) {
+    override suspend fun deleteOrigin(sessionId: AgentSessionId, runId: AgentRunId) = catalog.operation {
         database.useWriterConnection { connection ->
             connection.immediateTransaction {
+                catalog.readState()
                 originsDao.deleteById(sessionId.value, runId.value)
+                database.catalogDao().deleteSourceReferences(sessionId.value, originReferenceSource(runId.value))
+                catalog.advanceRevision()
             }
         }
+        Unit
     }
 
-    override suspend fun deleteSession(sessionId: AgentSessionId) {
+    override suspend fun deleteSession(sessionId: AgentSessionId) = catalog.operation {
         database.useWriterConnection { connection ->
             connection.immediateTransaction {
+                catalog.readState()
                 originsDao.deleteBySession(sessionId.value)
                 executionsDao.deleteBySession(sessionId.value)
+                database.catalogDao().deleteBackgroundReferences(sessionId.value)
+                catalog.advanceRevision()
             }
         }
+        Unit
     }
 
-    override suspend fun clear() {
+    override suspend fun clear() = catalog.operation {
         database.useWriterConnection { connection ->
             connection.immediateTransaction {
+                catalog.readState()
                 originsDao.deleteAll()
                 executionsDao.deleteAll()
+                database.catalogDao().clearBackgroundReferences()
+                catalog.advanceRevision()
             }
         }
+        Unit
     }
 
     private fun decodeRecord(
@@ -343,20 +391,24 @@ internal class RoomAgentPersistence(
         { payload -> snapshotCodec.decodeResult(payload).toStoredRecord() },
     private val checkpointDecoder: (String) -> DecodedStoredRecord<AgentCheckpoint> =
         { payload -> checkpointCodec.decodeResult(payload).toStoredRecord() },
+    private val catalog: RoomSessionCatalog = RoomSessionCatalog(database),
 ) : AgentPersistence {
     private val sessionDao = database.sessionDao()
     private val checkpointDao = database.checkpointDao()
+    private val recovery = RoomRecoveryIndex(database, json)
 
     override suspend fun commit(
         snapshot: AgentSessionSnapshot,
         checkpoint: AgentCheckpoint?,
-    ) {
+    ) = catalog.operation {
         val record = AgentPersistenceRecord(snapshot, checkpoint)
-        val sessionEntity = AgentSessionEntity(
-            sessionId = snapshot.sessionId.value,
-            payload = snapshotCodec.encode(snapshot),
-            updatedAtEpochMs = snapshot.updatedAtEpochMs,
-        )
+        val payload = snapshotCodec.encode(snapshot)
+        val projection = catalog.projector.project(snapshot)
+        val references = extractSessionAttachmentUris(snapshot, checkpoint)
+        val legacy = if (catalog.projector.activityMode == SessionActivityMode.PREPARED &&
+            sessionDao.identity(snapshot.sessionId.value)?.catalogActivityOrder == null) {
+            sessionDao.findById(snapshot.sessionId.value)?.let { it to catalog.projector.project(decodeSession(it).value) }
+        } else null
         val checkpointEntity = checkpoint?.let {
             AgentCheckpointEntity(
                 sessionId = it.sessionId.value,
@@ -364,66 +416,87 @@ internal class RoomAgentPersistence(
                 turn = it.turn,
             )
         }
-        database.useWriterConnection { connection ->
-            connection.immediateTransaction {
-                sessionDao.upsert(sessionEntity)
-                if (record.checkpoint == null) {
-                    checkpointDao.deleteById(snapshot.sessionId.value)
-                } else {
-                    checkpointDao.upsert(requireNotNull(checkpointEntity))
+        completeWrite {
+            val identity = database.useWriterConnection { connection ->
+                connection.immediateTransaction {
+                    val identity = catalog.storeSnapshot(snapshot, payload, projection, references, legacy)
+                    if (record.checkpoint == null) {
+                        checkpointDao.deleteById(snapshot.sessionId.value)
+                    } else {
+                        checkpointDao.upsert(requireNotNull(checkpointEntity))
+                    }
+                    recovery.refreshSnapshot(snapshot)
+                    identity
                 }
             }
+            catalog.committed(identity, projection.activityIdentity)
         }
     }
 
     override suspend fun load(sessionId: AgentSessionId): AgentPersistenceRecord? {
         return try {
-            database.useWriterConnection { connection ->
-                connection.immediateTransaction<AgentPersistenceRecord?> {
-                    val sessionEntity = sessionDao.findById(sessionId.value)
-                        ?: return@immediateTransaction null
-                    val checkpointEntity = checkpointDao.findById(sessionId.value)
-                    val snapshot = decodeSession(sessionEntity)
-                    val checkpoint = checkpointEntity?.let(::decodeCheckpoint)
-                    if (
-                        checkpoint != null &&
-                        (
-                            checkpoint.value.sessionId != snapshot.value.sessionId ||
-                                checkpoint.value.runId != snapshot.value.runId
-                        )
-                    ) {
-                        throw corruption(
-                            StoredRecordKind.CHECKPOINT,
-                            sessionId.value,
-                            StoredRecordCorruptionReason.INDEX_MISMATCH,
-                        )
-                    }
-                    val record = AgentPersistenceRecord(snapshot.value, checkpoint?.value)
-                    rewriteSessionIfNeeded(sessionEntity, snapshot)
-                    if (checkpointEntity != null && checkpoint != null) {
-                        rewriteCheckpointIfNeeded(checkpointEntity, checkpoint)
-                    }
-                    record
-                }
-            }
+            catalog.operation { loadAndRewrite(sessionId) }
         } catch (failure: StoredRecordCorruptionException) {
             reportCorruption(failure.corruption)
             throw failure
         }
     }
 
+    private suspend fun loadAndRewrite(sessionId: AgentSessionId): AgentPersistenceRecord? {
+        while (true) {
+            val (sessionEntity, checkpointEntity) = database.useReaderConnection { connection ->
+                connection.deferredTransaction {
+                    catalog.readState()
+                    sessionDao.findById(sessionId.value) to checkpointDao.findById(sessionId.value)
+                }
+            }
+            if (sessionEntity == null) return null
+            val snapshot = decodeSession(sessionEntity)
+            val checkpoint = checkpointEntity?.let(::decodeCheckpoint)
+            if (checkpoint != null && (checkpoint.value.sessionId != snapshot.value.sessionId || checkpoint.value.runId != snapshot.value.runId)) {
+                throw corruption(StoredRecordKind.CHECKPOINT, sessionId.value, StoredRecordCorruptionReason.INDEX_MISMATCH)
+            }
+            val record = AgentPersistenceRecord(snapshot.value, checkpoint?.value)
+            if (snapshot.rewritePayload == null && checkpoint?.rewritePayload == null) return record
+            // Host projection runs before acquiring the writer. CAS retries if another handle wrote.
+            val projection = catalog.projector.project(snapshot.value)
+            val references = extractSessionAttachmentUris(snapshot.value, checkpoint?.value)
+            val rewritten = catalog.contextMutation {
+                database.useWriterConnection { connection ->
+                    connection.immediateTransaction {
+                        catalog.readState()
+                        if (sessionDao.findById(sessionId.value) != sessionEntity || checkpointDao.findById(sessionId.value) != checkpointEntity) {
+                            false
+                        } else {
+                            catalog.storeSnapshot(snapshot.value, snapshot.rewritePayload ?: sessionEntity.payload,
+                                projection, references, sessionEntity to projection)
+                            if (checkpointEntity != null && checkpoint != null) rewriteCheckpointIfNeeded(checkpointEntity, checkpoint)
+                            recovery.refreshSnapshot(snapshot.value)
+                            true
+                        }
+                    }
+                }
+            }
+            if (rewritten) return record
+        }
+    }
+
     override suspend fun listSessions(): List<AgentSessionSnapshot> {
         val corruptions = mutableListOf<StoredRecordCorruption>()
         return try {
-            database.useReaderConnection { connection ->
-                connection.deferredTransaction<List<AgentSessionSnapshot>> {
-                    sessionDao.listAll().mapNotNull { entity ->
-                        try {
-                            decodeSession(entity).value
-                        } catch (failure: StoredRecordCorruptionException) {
-                            corruptions += failure.corruption
-                            null
-                        }
+            catalog.operation {
+                val entities = database.useReaderConnection { connection ->
+                    connection.deferredTransaction {
+                        catalog.readState()
+                        sessionDao.listAll()
+                    }
+                }
+                entities.mapNotNull { entity ->
+                    try {
+                        decodeSession(entity).value
+                    } catch (failure: StoredRecordCorruptionException) {
+                        corruptions += failure.corruption
+                        null
                     }
                 }
             }
@@ -432,21 +505,39 @@ internal class RoomAgentPersistence(
         }
     }
 
-    override suspend fun deleteSession(sessionId: AgentSessionId) {
-        database.useWriterConnection { connection ->
-            connection.immediateTransaction {
-                checkpointDao.deleteById(sessionId.value)
-                sessionDao.deleteById(sessionId.value)
+    override suspend fun deleteSession(sessionId: AgentSessionId) = catalog.operation {
+        completeWrite {
+            database.useWriterConnection { connection ->
+                connection.immediateTransaction {
+                    val existed = sessionDao.exists(sessionId.value)
+                    checkpointDao.deleteById(sessionId.value)
+                    sessionDao.deleteById(sessionId.value)
+                    catalog.deleteRows(sessionId, existed)
+                }
             }
+            catalog.deleted(sessionId)
         }
     }
 
-    override suspend fun clear() {
-        database.useWriterConnection { connection ->
-            connection.immediateTransaction {
-                checkpointDao.deleteAll()
-                sessionDao.deleteAll()
+    override suspend fun clear() = catalog.operation {
+        completeWrite {
+            database.useWriterConnection { connection ->
+                connection.immediateTransaction {
+                    checkpointDao.deleteAll()
+                    sessionDao.deleteAll()
+                    catalog.clearRows()
+                }
             }
+            catalog.cleared()
+        }
+    }
+
+    /** A committed write must consume its transient context before cancellation reaches the caller. */
+    private suspend fun completeWrite(block: suspend () -> Unit) {
+        catalog.contextMutation {
+            currentCoroutineContext().ensureActive()
+            withContext(NonCancellable) { block() }
+            currentCoroutineContext().ensureActive()
         }
     }
 
@@ -490,15 +581,6 @@ internal class RoomAgentPersistence(
             )
         }
         return decoded
-    }
-
-    private suspend fun rewriteSessionIfNeeded(
-        entity: AgentSessionEntity,
-        decoded: DecodedStoredRecord<AgentSessionSnapshot>,
-    ) {
-        decoded.rewritePayload?.let { payload ->
-            sessionDao.upsert(entity.copy(payload = payload))
-        }
     }
 
     private suspend fun rewriteCheckpointIfNeeded(

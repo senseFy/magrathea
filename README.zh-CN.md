@@ -20,10 +20,10 @@ Magrathea 是一个 Kotlin Multiplatform Agent Runtime，用于在 Android、JVM
 | Runtime | `magrathea-runtime` |
 | Agent API | `magrathea-chatbot`、`magrathea-policy`、`magrathea-mcp` |
 | Provider | `magrathea-provider-gemini`、`magrathea-provider-openai`、`magrathea-provider-anthropic` |
-| 数据与凭证 | `magrathea-storage-room`、`magrathea-storage-web`、`magrathea-credentials` |
+| 数据与凭证 | `magrathea-session-catalog`、`magrathea-storage-room`、`magrathea-storage-web`、`magrathea-credentials` |
 | Browser Gateway | `magrathea-gateway-protocol`、`magrathea-provider-gateway`、`magrathea-gateway-server`、`magrathea-web-client` |
 
-以上是 16 个逻辑模块。Kotlin Multiplatform 会从中生成目标平台变体，consumer 只需声明所需的
+以上是 17 个逻辑模块。Kotlin Multiplatform 会从中生成目标平台变体，consumer 只需声明所需的
 逻辑模块坐标。
 
 ## 能力

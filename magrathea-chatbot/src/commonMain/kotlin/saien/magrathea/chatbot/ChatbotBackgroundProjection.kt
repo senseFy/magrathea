@@ -8,7 +8,6 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import saien.magrathea.core.ToolCallPart
 import saien.magrathea.core.ToolOrigin
@@ -91,7 +90,7 @@ internal class ChatbotBackgroundProjection(
 private fun ToolResultPart.toBackgroundToolResult(
     activity: ChatbotToolActivitySnapshot,
 ): ChatbotToolResult = copy(
-    isError = metadata[RESULT_IS_ERROR_METADATA]?.jsonPrimitive?.booleanOrNull == true,
+    isError = (metadata[RESULT_IS_ERROR_METADATA] as? JsonPrimitive)?.booleanOrNull == true,
     userErrorCode = (metadata[RESULT_ERROR_CODE_METADATA] as? JsonPrimitive)?.content
         ?: userErrorCode,
 ).toChatbotToolResult().copy(
@@ -151,7 +150,7 @@ internal fun List<ChatbotToolActivitySnapshot>.applyBackgroundProjection(
  */
 private fun ToolResultPart.retrievalResults(): List<Pair<String, ToolResultPart>> {
     if (toolName == "read_background_result") {
-        return metadata[HANDLE_METADATA]?.jsonPrimitive?.content
+        return (metadata[HANDLE_METADATA] as? JsonPrimitive)?.content
             ?.let { listOf(it to this) }
             .orEmpty()
     }
@@ -164,7 +163,7 @@ private fun ToolResultPart.retrievalResults(): List<Pair<String, ToolResultPart>
         }
         val results = (result as? JsonObject)?.get("results") as? JsonArray ?: return emptyList()
         val single = (results.singleOrNull() as? JsonObject) ?: return emptyList()
-        val handle = single["handle"]?.jsonPrimitive?.content ?: return emptyList()
+        val handle = (single["handle"] as? JsonPrimitive)?.content ?: return emptyList()
         return listOf(handle to this)
     }
     return emptyList()
@@ -176,10 +175,10 @@ private fun ToolResultPart.retrievalResults(): List<Pair<String, ToolResultPart>
  * text. An out-of-range slice yields empty content rather than a failure.
  */
 private fun ToolResultPart.awaitSliceResult(entry: JsonObject): Pair<String, ToolResultPart>? {
-    val handle = entry["handle"]?.jsonPrimitive?.content ?: return null
-    val offset = entry["content_offset"]?.jsonPrimitive?.intOrNull ?: 0
-    val count = entry["content_count"]?.jsonPrimitive?.intOrNull ?: 0
-    val slice = if (offset >= 0 && count >= 0 && offset + count <= content.size) {
+    val handle = (entry["handle"] as? JsonPrimitive)?.content ?: return null
+    val offset = (entry["content_offset"] as? JsonPrimitive)?.intOrNull ?: 0
+    val count = (entry["content_count"] as? JsonPrimitive)?.intOrNull ?: 0
+    val slice = if (offset >= 0 && offset <= content.size && count >= 0 && count <= content.size - offset) {
         content.subList(offset, offset + count)
     } else {
         emptyList()

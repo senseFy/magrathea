@@ -21,6 +21,7 @@ dependencyResolutionManagement {
 rootProject.name = "magrathea"
 
 include(":magrathea-core")
+include(":magrathea-session-catalog")
 include(":magrathea-provider-api")
 include(":magrathea-provider-openai")
 include(":magrathea-provider-gemini")

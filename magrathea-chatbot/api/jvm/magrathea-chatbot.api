@@ -299,6 +299,11 @@ public final class saien/magrathea/chatbot/ChatbotObservation {
 	public final fun cancel ()V
 }
 
+public final class saien/magrathea/chatbot/ChatbotPreparedMessage {
+	public final fun getMessageId ()Ljava/lang/String;
+	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
+}
+
 public final class saien/magrathea/chatbot/ChatbotProviderInterruption {
 	public fun <init> (Lsaien/magrathea/chatbot/ChatbotFailure;Lsaien/magrathea/chatbot/ChatbotProviderInterruptionPhase;Ljava/lang/Long;)V
 	public synthetic fun <init> (Lsaien/magrathea/chatbot/ChatbotFailure;Lsaien/magrathea/chatbot/ChatbotProviderInterruptionPhase;Ljava/lang/Long;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
@@ -399,17 +404,22 @@ public final class saien/magrathea/chatbot/ChatbotSendOptions {
 }
 
 public final class saien/magrathea/chatbot/ChatbotSession {
+	public final fun awaitIdle (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun cancel (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun cancelBackground (Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun continueWithBackgroundResults (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
 	public final fun interrupt (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun observe (Lsaien/magrathea/chatbot/ChatbotStateObserver;)Lsaien/magrathea/chatbot/ChatbotObservation;
+	public final fun prepareMessage (Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotSendOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun prepareMessage$default (Lsaien/magrathea/chatbot/ChatbotSession;Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotSendOptions;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun regenerate (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun resume (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun resumeBackground (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun send (Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotSendOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun send$default (Lsaien/magrathea/chatbot/ChatbotSession;Ljava/lang/String;Ljava/util/List;Lsaien/magrathea/chatbot/ChatbotSendOptions;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun sendPrepared (Lsaien/magrathea/chatbot/ChatbotPreparedMessage;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun snapshot ()Lsaien/magrathea/chatbot/ChatbotSnapshot;
 	public final fun stopAll (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun suspendBackground (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;

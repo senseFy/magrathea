@@ -3,6 +3,8 @@ package saien.magrathea.chatbot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -69,8 +71,39 @@ internal class ChatbotController(
             "A chatbot message requires text or at least one attachment"
         }
         stopPendingExecution()
-        val messages = lease.state.value.authoritativeMessages() +
-            userChatbotMessage(text, attachments, options.metadata)
+        startUserMessage(userChatbotMessage(text, attachments, options.metadata))
+    }
+
+    suspend fun prepareMessage(
+        text: String,
+        attachments: List<ChatbotAttachment>,
+        options: ChatbotSendOptions,
+    ): ChatbotPreparedMessage = commandMutex.withLock {
+        ensureOpen()
+        currentCoroutineContext().ensureActive()
+        require(text.isNotBlank() || attachments.isNotEmpty()) {
+            "A chatbot message requires text or at least one attachment"
+        }
+        ChatbotPreparedMessage(
+            sessionId = lease.sessionId,
+            owner = this,
+            message = userChatbotMessage(text, attachments, options.metadata.copyPreparedMetadata()),
+        )
+    }
+
+    suspend fun sendPreparedMessage(prepared: ChatbotPreparedMessage) = commandMutex.withLock {
+        ensureOpen()
+        currentCoroutineContext().ensureActive()
+        prepared.validateUsable(this)
+        stopPendingExecution()
+        currentCoroutineContext().ensureActive()
+        val message = prepared.claim(this)
+        startUserMessage(message)
+    }
+
+    /** Caller holds [commandMutex] and has settled any previous execution. */
+    private suspend fun startUserMessage(message: AgentMessage) {
+        val messages = lease.state.value.authoritativeMessages() + message
         lease.start(buildRequest(messages))
         syncFromLease()
     }
@@ -87,6 +120,17 @@ internal class ChatbotController(
         stopPendingExecution()
         lease.start(buildRequest(regeneratedMessages))
         syncFromLease()
+    }
+
+    suspend fun awaitIdle() {
+        commandMutex.withLock {
+            if (closed) throw ChatbotException(ChatbotFailure.CLOSED)
+        }
+        // Waiting must leave control commands available to settle the execution being joined.
+        lease.awaitIdle()
+        commandMutex.withLock {
+            if (!closed) syncFromLease()
+        }
     }
 
     suspend fun resume() = commandMutex.withLock {

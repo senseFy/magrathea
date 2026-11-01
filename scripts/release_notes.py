@@ -56,7 +56,7 @@ def render(root, version):
 
 ## Distribution
 
-The 16 logical SDK modules and their Kotlin Multiplatform variants are available from
+The 17 logical SDK modules and their Kotlin Multiplatform variants are available from
 GitHub Packages under `saien.magrathea`. See the
 [consumer setup](https://github.com/senseFy/magrathea/blob/v{version}/docs/publishing.md#consume).
 

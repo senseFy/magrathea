@@ -223,7 +223,7 @@ class JvmRoomBackgroundStoreTest {
             Room.databaseBuilder<MagratheaDatabase>(name = databasePath.toString()),
         )
         rawDatabase.backgroundExecutionDao().upsert(
-            AgentBackgroundExecutionEntity(sessionId.value, "exec-corrupt", "not-json", 1L),
+            AgentBackgroundExecutionEntity(sessionId = sessionId.value, executionId = "exec-corrupt", envelope = "not-json", updatedAtEpochMs = 1L),
         )
         rawDatabase.backgroundOriginDao().upsert(
             AgentBackgroundOriginEntity(sessionId.value, "run-corrupt", "not-json"),

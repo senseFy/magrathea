@@ -7,6 +7,7 @@ class PublishedCoreConsumerTest {
     @Test
     fun resolvesPublishedCommonApi() {
         assertEquals("published-consumer", publishedCoreSessionId("published-consumer").value)
+        assertEquals("magrathea.default:1:catalog", publishedCatalogFingerprint())
         assertEquals("gemini", publishedGeminiProviderKey())
         assertEquals("openai,anthropic", publishedProviderKeys())
         assertEquals("SESSION:NOT_FOUND:IDLE", publishedPlatformAdapterFingerprint())
@@ -19,7 +20,7 @@ class PublishedCoreConsumerTest {
         assertEquals(
             "apple-link|gemini|openai,anthropic|SESSION:NOT_FOUND:IDLE|" +
                 "gateway:consumer-model:https://gateway.example/consumer:IDLE|" +
-                "web_search:2:7:5|consumer:search:LOW:ALLOW",
+                "web_search:2:7:5|consumer:search:LOW:ALLOW|magrathea.default:1:catalog",
             publishedAppleLinkFingerprint(),
         )
     }

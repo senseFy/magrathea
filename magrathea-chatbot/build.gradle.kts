@@ -16,6 +16,7 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(project(":magrathea-runtime"))
+            implementation(project(":magrathea-session-catalog"))
             implementation(project(":magrathea-provider-api"))
             implementation(project(":magrathea-policy"))
             implementation(libs.kotlinx.coroutines.test)

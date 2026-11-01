@@ -212,7 +212,7 @@ class JvmRoomDatabaseIntegrationTest {
             Room.databaseBuilder<MagratheaDatabase>(name = databasePath.toString()),
         )
         rawDatabase.sessionDao().upsert(
-            AgentSessionEntity(session.sessionId.value, v6Session, session.updatedAtEpochMs),
+            AgentSessionEntity(sessionId = session.sessionId.value, payload = v6Session, updatedAtEpochMs = session.updatedAtEpochMs),
         )
         rawDatabase.checkpointDao().upsert(
             AgentCheckpointEntity(session.sessionId.value, v6Checkpoint, checkpoint.turn),
@@ -257,7 +257,7 @@ class JvmRoomDatabaseIntegrationTest {
         val rawDatabase = buildMagratheaRoomDatabase(
             Room.databaseBuilder<MagratheaDatabase>(name = databasePath.toString()),
         )
-        rawDatabase.sessionDao().upsert(AgentSessionEntity(corruptId, "not-json", 1L))
+        rawDatabase.sessionDao().upsert(AgentSessionEntity(sessionId = corruptId, payload = "not-json", updatedAtEpochMs = 1L))
         rawDatabase.checkpointDao().upsert(AgentCheckpointEntity(corruptId, "not-json", 1))
         rawDatabase.close()
 
@@ -297,7 +297,7 @@ class JvmRoomDatabaseIntegrationTest {
             Room.databaseBuilder<MagratheaDatabase>(name = databasePath.toString()),
         )
         rawDatabase.sessionDao().upsert(
-            AgentSessionEntity(session.sessionId.value, olderPayload, session.updatedAtEpochMs),
+            AgentSessionEntity(sessionId = session.sessionId.value, payload = olderPayload, updatedAtEpochMs = session.updatedAtEpochMs),
         )
         rawDatabase.close()
 
@@ -343,7 +343,7 @@ class JvmRoomDatabaseIntegrationTest {
             Room.databaseBuilder<MagratheaDatabase>(name = databasePath.toString()),
         )
         database.sessionDao().upsert(
-            AgentSessionEntity(session.sessionId.value, futurePayload, session.updatedAtEpochMs),
+            AgentSessionEntity(sessionId = session.sessionId.value, payload = futurePayload, updatedAtEpochMs = session.updatedAtEpochMs),
         )
         database.close()
 
@@ -373,7 +373,7 @@ class JvmRoomDatabaseIntegrationTest {
             Room.databaseBuilder<MagratheaDatabase>(name = databasePath.toString()),
         )
         database.sessionDao().upsert(
-            AgentSessionEntity(session.sessionId.value, "legacy-session", session.updatedAtEpochMs),
+            AgentSessionEntity(sessionId = session.sessionId.value, payload = "legacy-session", updatedAtEpochMs = session.updatedAtEpochMs),
         )
         database.checkpointDao().upsert(
             AgentCheckpointEntity(checkpoint.sessionId.value, "legacy-checkpoint", checkpoint.turn),
@@ -417,7 +417,7 @@ class JvmRoomDatabaseIntegrationTest {
             Room.databaseBuilder<MagratheaDatabase>(name = databasePath.toString()),
         )
         database.sessionDao().upsert(
-            AgentSessionEntity(session.sessionId.value, "legacy-session", session.updatedAtEpochMs),
+            AgentSessionEntity(sessionId = session.sessionId.value, payload = "legacy-session", updatedAtEpochMs = session.updatedAtEpochMs),
         )
         database.checkpointDao().upsert(
             AgentCheckpointEntity(checkpoint.sessionId.value, "legacy-checkpoint", checkpoint.turn),
@@ -462,7 +462,7 @@ class JvmRoomDatabaseIntegrationTest {
             Room.databaseBuilder<MagratheaDatabase>(name = databasePath.toString()),
         )
         database.sessionDao().upsert(
-            AgentSessionEntity(session.sessionId.value, "legacy-session", session.updatedAtEpochMs),
+            AgentSessionEntity(sessionId = session.sessionId.value, payload = "legacy-session", updatedAtEpochMs = session.updatedAtEpochMs),
         )
         database.checkpointDao().upsert(
             AgentCheckpointEntity(
@@ -516,16 +516,16 @@ class JvmRoomDatabaseIntegrationTest {
         )
         database.sessionDao().upsert(
             AgentSessionEntity(
-                migratable.sessionId.value,
-                "legacy-migratable-session",
-                migratable.updatedAtEpochMs,
+                sessionId = migratable.sessionId.value,
+                payload = "legacy-migratable-session",
+                updatedAtEpochMs = migratable.updatedAtEpochMs,
             ),
         )
         database.sessionDao().upsert(
             AgentSessionEntity(
-                incompatible.sessionId.value,
-                incompatiblePayload,
-                incompatible.updatedAtEpochMs,
+                sessionId = incompatible.sessionId.value,
+                payload = incompatiblePayload,
+                updatedAtEpochMs = incompatible.updatedAtEpochMs,
             ),
         )
         val persistence = RoomAgentPersistence(
@@ -572,13 +572,13 @@ class JvmRoomDatabaseIntegrationTest {
             Room.databaseBuilder<MagratheaDatabase>(name = databasePath.toString()),
         )
         database.sessionDao().upsert(
-            AgentSessionEntity("corrupt-list-row", "not-json", updatedAtEpochMs = 30L),
+            AgentSessionEntity(sessionId = "corrupt-list-row", payload = "not-json", updatedAtEpochMs = 30L),
         )
         database.sessionDao().upsert(
             AgentSessionEntity(
-                incompatible.sessionId.value,
-                incompatiblePayload,
-                incompatible.updatedAtEpochMs,
+                sessionId = incompatible.sessionId.value,
+                payload = incompatiblePayload,
+                updatedAtEpochMs = incompatible.updatedAtEpochMs,
             ),
         )
         val reports = mutableListOf<StoredRecordCorruption>()

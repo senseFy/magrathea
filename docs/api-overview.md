@@ -19,6 +19,97 @@ Chatbot, Provider, Tool, persistence, and browser layers they need.
 The application composition root selects the Provider, network engine, database, credential store,
 and UI.
 
+## Session Catalog
+
+`magrathea-session-catalog` is an optional Core-only module. `SessionCatalog` exposes bounded keyset
+pages, primary-key organization lookup, flat collections, conditional title writes, and candidate
+attachment-reference lookup. It never restores or executes a session. `SessionCatalogProjector`
+provides deterministic scalar projection and normalization; the default supports headless sessions.
+Projectors may be called concurrently and must be safe to share between operations.
+
+`InMemorySessionCatalogStore` is an atomic reference backend with separate `persistence`, `catalog`,
+`maintenance` and `migration` capabilities. Room and IndexedDB expose these from their store handles
+as well. Structural upgrades leave old history at `INDEXING`; `maintenance.runBatch` advances a
+persisted cursor, processing at most 50 source records per call. Projection runs outside write
+transactions; writeback checks the source identity/version and current generation, then merges
+current organization and recovery facts.
+Unreadable sources remain intact and yield `PARTIAL` coverage. A completed pass is not repeated on
+ordinary reopen. Hosts own scheduling, cancellation and joining maintenance before closing stores.
+
+`maintenance.rebuild` checks the expected policy/generation and clears derived indexes while retaining
+canonical data, organization and accepted activity order. Same-policy writers may continue; a policy
+replacement requires fencing and draining old execution writers first. Collection search normalization
+is rebuilt in bounded steps too. A malformed collection or a failing collection normalizer stops that
+maintenance phase with an explicit failure; it is not silently counted as complete.
+
+`migration` imports a frozen host organization source through typed batches of at most 50 collections
+and assignments. The host supplies a source ID and whole-source fingerprint, retains its source backup,
+and gates organization commands until the receipt is complete. Assignments bind only physical legacy
+incarnations, including unreadable canonical records. Batch receipts and organization writes are atomic;
+completed sources are not reimported, and clear invalidates unfinished imports.
+
+Attachment-name migration fills missing `AttachmentPart.fileName` in both snapshot and checkpoint.
+Targets include incarnation, rowVersion and a URI continuation; each URI page and patch contains at most
+50 names. Callers must fence/drain the session and restore the patched record before admitting writers.
+The first original envelopes are retained with canonical authority for explicit CAS recovery, survive
+normal commits and index rebuilds, and keep their attachment references protected until session deletion.
+`beginAttachmentNameScan` resumes a fixed typed receipt for the host metadata source and algorithm
+version. Its bounded pages include opaque physical cursors and unreadable sources; advance each source
+only after its name attempt, using the rowVersion returned by a successful patch. Managed sessions may
+use `SKIPPED_MANAGED` only after the host's restore gate has attempted migration and owns that same
+incarnation. Finishing checks the remaining physical tail atomically. Completed receipts survive reopen
+and catalog rebuild, including their failure count, so ordinary cold starts never repeat the historical
+scan. Explicit restart resets the scan attempt; restart and clear invalidate old progress tokens.
+Room also indexes independent background request/result references and known-empty origin contexts;
+unreadable background sources preserve their bytes and keep reference coverage incomplete. Reference
+lookups never decode these envelopes. Hosts still protect live, draft and submitting references before GC.
+
+`pageRecoveryCandidates` reads lightweight checkpoint, persisted-state and background-result facts;
+it does not restore sessions or authorize execution. Snapshot commits and independent background writes
+both maintain those facts. A completed snapshot can remain a candidate while background work is pending
+or its result is unacknowledged. Regenerating history can revoke an acknowledgement. Unknown sources
+remain conservative candidates, with coverage separate from ordinary header coverage.
+
+Room upgrades its physical database from version 2 to 3; IndexedDB upgrades from version 1 to 2.
+Room adds scalar columns and covering indexes for lightweight session and background facts without
+copying or decoding canonical payloads. Existing tables retain their physical column order, and
+attachment-name backups live in a separate table. Index creation is synchronous during the upgrade
+and its cost grows with the number of records; bounded catalog maintenance runs afterward.
+These structural upgrades retain canonical data and do not change envelope schema 9. Earlier SDK
+versions cannot reopen the upgraded databases; downgrading requires a compatible pre-upgrade backup.
+
+Room `persistence.deleteSession` also deletes that session's background executions, origins, migration
+backup and derived catalog records in the same transaction. `persistence.clear` does so for every
+session, while retaining collections. Direct `AgentPersistence` callers must drain session and background
+writers before deletion; background records no longer survive canonical session deletion.
+
+The Web adapter retains opaque payload strings and maintains
+eight stores. Metadata key cursors answer identity queries without cloning canonical payloads. All Long
+authority and cursor values cross its JS bridge as strings. Search uses bounded scan transactions:
+short or empty pages can still have a continuation cursor, so callers must inspect the cursor and
+`exhausted` rather than infer completion from entry count. Structurally invalid physical keys are
+preserved and reported with a null diagnostic session ID. Recovery has a bounded key-only fallback
+while some sources remain unindexed; complete indexes use the recovery index directly.
+
+Applications that require acceptance order can prepare an activity ticket before execution and bind
+it to a stable canonical input identity. `SessionActivityMode.PREPARED` is a strict opt-in: the first
+non-null projected activity identity and subsequent identity changes need a matching prepared intent
+on the actual commit handle. Without one, the canonical commit fails atomically with
+`ACTIVITY_NOT_PREPARED`; there is no fallback to timestamp ordering. Unchanged identities need no new
+preparation, and regeneration can use `preparePreservedActivity` to retain accepted order. Legacy
+backfill can initialize timestamp order. The default `CANONICAL_TIME` mode supports plain
+`AgentPersistence` consumers without preparation calls. Initial organization and activity context
+must survive until commit or a fenced, drained abandonment; a send returning does not prove
+persistence has completed.
+
+`ChatbotSession.sessionId` is available immediately after creation. `prepareMessage` prepares only
+an immutable input with a stable message ID and a timestamp captured at preparation time;
+`sendPrepared` preserves both and appends it to the current session history. A prepared input belongs
+to one facade lifetime and allows one sending attempt. Cancellation while waiting for command
+admission or for the previous execution to settle leaves it unused. After the new send attempt starts,
+it remains consumed on failure or cancellation. It is not a durable idempotency key and must not be
+retried after an unknown execution outcome.
+
 ## Providers
 
 `magrathea-provider-api` defines:
@@ -135,13 +226,16 @@ known result. See [History replay and exclusions](replay.md).
 | Module | Boundary |
 |---|---|
 | `magrathea-storage-room` | Atomic Room persistence for Android, JVM, and iOS |
-| `magrathea-storage-web` | Atomic IndexedDB persistence for browser JS/Wasm |
+| `magrathea-storage-web` | Atomic IndexedDB persistence, catalog queries and bounded maintenance for browser JS/Wasm |
 | `magrathea-credentials` | Android Keystore and iOS Keychain adapters |
 
 JVM credentials remain host-owned. Store handles and clients close idempotently and reject
-subsequent operations once closed.
+subsequent operations once closed. Room rejects new work before waiting for admitted operations to
+finish and closing its database. Cancelling the closing coroutine does not abandon this wait or cancel
+admitted work. Hosts should stop producers and cancel/join maintenance first; a slow or non-returning
+projector or decoder can delay close completion.
 
-Logical session and checkpoint envelopes use schema 7, with schema 6 as the minimum readable
+Logical session and checkpoint envelopes use schema 9, with schema 6 as the minimum readable
 migration baseline.
 Malformed payloads, unsupported older schemas, unsupported newer schemas, and migration failures
 are classified separately. Room and IndexedDB adapters surface incompatible schemas rather than

@@ -13,6 +13,7 @@ The normative decision is [ADR-012](adr/ADR-012-project-positioning-and-layers.m
 | Kernel | `magrathea-core`, `magrathea-provider-api` | Agent models, stores, credentials, Provider events, transports, and serialization |
 | Runtime | `magrathea-runtime` | Turns, Tools, retry, checkpoints, managed session ownership, resume, context management, limits, and tracing |
 | Capabilities | Provider adapters, `magrathea-mcp`, `magrathea-policy` | Reference protocols, MCP Tools, and reusable approval policy |
+| Catalog | `magrathea-session-catalog` | Optional Core-only session directory, organization, projections, and bounded maintenance contracts |
 | Platform | `magrathea-storage-room`, `magrathea-storage-web`, `magrathea-credentials` | Persistence and protected mobile credentials |
 | Product | `magrathea-chatbot`, `magrathea-web-client` | UI-neutral chatbot lifecycle and browser composition |
 | Gateway | `magrathea-gateway-protocol`, `magrathea-provider-gateway`, `magrathea-gateway-server` | Browser-safe Provider access, replay, quota, and audit ports |
@@ -22,6 +23,8 @@ Dependencies point inward:
 - Kernel contracts remain independent of UI toolkits, databases, product facades, and application
   lifecycles.
 - Runtime coordinates ports whose credentials and product presentation remain host-owned.
+- The optional catalog defines lightweight session queries and organization without depending on
+  Runtime or product facades. Storage adapters can commit catalog indexes and canonical data atomically.
 - Optional adapters translate external protocols into canonical Core contracts.
 - The application composition root selects implementations and owns their lifecycle.
 

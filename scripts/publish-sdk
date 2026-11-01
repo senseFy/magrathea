@@ -22,6 +22,7 @@ VERSION_PROPERTY="magrathea.version"
 GROUP_PROPERTY="magrathea.group"
 SDK_MODULES=(
   "magrathea-core"
+  "magrathea-session-catalog"
   "magrathea-provider-api"
   "magrathea-provider-openai"
   "magrathea-provider-gemini"

@@ -1,11 +1,15 @@
 public final class saien/magrathea/storage/room/JvmMagratheaRoom {
 	public static final field INSTANCE Lsaien/magrathea/storage/room/JvmMagratheaRoom;
 	public final fun open (Ljava/lang/String;Lsaien/magrathea/storage/room/StoredRecordCorruptionReporter;)Lsaien/magrathea/storage/room/MagratheaRoomStoreHandle;
+	public final fun open (Ljava/lang/String;Lsaien/magrathea/storage/room/StoredRecordCorruptionReporter;Lsaien/magrathea/catalog/SessionCatalogProjector;)Lsaien/magrathea/storage/room/MagratheaRoomStoreHandle;
 }
 
 public final class saien/magrathea/storage/room/MagratheaRoomStoreHandle {
 	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun getBackgroundStore ()Lsaien/magrathea/core/BackgroundExecutionStore;
+	public final fun getCatalog ()Lsaien/magrathea/catalog/SessionCatalog;
+	public final fun getMaintenance ()Lsaien/magrathea/catalog/SessionCatalogMaintenance;
+	public final fun getMigration ()Lsaien/magrathea/catalog/SessionCatalogMigration;
 	public final fun getPersistence ()Lsaien/magrathea/core/AgentPersistence;
 }
 
