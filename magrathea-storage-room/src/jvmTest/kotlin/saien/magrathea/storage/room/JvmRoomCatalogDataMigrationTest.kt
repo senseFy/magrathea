@@ -66,8 +66,8 @@ class JvmRoomCatalogDataMigrationTest {
         fixture { database, store, path ->
             val snapshot = snapshot()
             val original = AgentSessionSnapshotCodec().encode(snapshot)
-            database.sessionDao().upsert(AgentSessionEntity(snapshot.sessionId.value, original, snapshot.updatedAtEpochMs))
-            database.sessionDao().upsert(AgentSessionEntity("z-bad", "opaque unchanged scan source", 1))
+            database.sessionDao().upsert(AgentSessionEntity(sessionId = snapshot.sessionId.value, payload = original, updatedAtEpochMs = snapshot.updatedAtEpochMs))
+            database.sessionDao().upsert(AgentSessionEntity(sessionId = "z-bad", payload = "opaque unchanged scan source", updatedAtEpochMs = 1))
             val begun = store.migration.beginAttachmentNameScan("local-metadata", 1)
             val page = store.migration.attachmentNameScanPage(begun, 1)
             assertFalse(page.exhausted)
@@ -168,8 +168,8 @@ class JvmRoomCatalogDataMigrationTest {
     @Test
     fun legacyImportKeepsOpaqueRowsSkipsReusedIdsAndResumesWithDurableReceipts() = runTest {
         fixture { database, store, path ->
-            database.sessionDao().upsert(AgentSessionEntity("opaque", "original unknown bytes", 1))
-            database.sessionDao().upsert(AgentSessionEntity("reused", "deleted legacy bytes", 1))
+            database.sessionDao().upsert(AgentSessionEntity(sessionId = "opaque", payload = "original unknown bytes", updatedAtEpochMs = 1))
+            database.sessionDao().upsert(AgentSessionEntity(sessionId = "reused", payload = "deleted legacy bytes", updatedAtEpochMs = 1))
             store.persistence.deleteSession(AgentSessionId("reused"))
             store.persistence.commit(roomTestSnapshot("reused"), null)
             val receipt = store.migration.beginOrganizationImport("host-json-v1", "sha256-of-frozen-source")
@@ -224,9 +224,9 @@ class JvmRoomCatalogDataMigrationTest {
             val checkpoint = checkpoint(snapshot)
             val original = AgentSessionSnapshotCodec().encode(snapshot)
             val checkpointOriginal = AgentCheckpointCodec().encode(checkpoint)
-            database.sessionDao().upsert(AgentSessionEntity(snapshot.sessionId.value, original, snapshot.updatedAtEpochMs))
+            database.sessionDao().upsert(AgentSessionEntity(sessionId = snapshot.sessionId.value, payload = original, updatedAtEpochMs = snapshot.updatedAtEpochMs))
             database.checkpointDao().upsert(AgentCheckpointEntity(snapshot.sessionId.value, checkpointOriginal, checkpoint.turn))
-            database.sessionDao().upsert(AgentSessionEntity("z-bad", "opaque-name-source", 1))
+            database.sessionDao().upsert(AgentSessionEntity(sessionId = "z-bad", payload = "opaque-name-source", updatedAtEpochMs = 1))
             val firstPage = store.migration.attachmentNameTargets(limit = 1)
             assertFalse(firstPage.exhausted)
             val target = firstPage.entries.single()
@@ -275,7 +275,7 @@ class JvmRoomCatalogDataMigrationTest {
             val snapshot = snapshot()
             val checkpoint = checkpoint(snapshot)
             val original = AgentSessionSnapshotCodec().encode(snapshot)
-            database.sessionDao().upsert(AgentSessionEntity(snapshot.sessionId.value, original, snapshot.updatedAtEpochMs))
+            database.sessionDao().upsert(AgentSessionEntity(sessionId = snapshot.sessionId.value, payload = original, updatedAtEpochMs = snapshot.updatedAtEpochMs))
             database.checkpointDao().upsert(AgentCheckpointEntity(snapshot.sessionId.value, AgentCheckpointCodec().encode(checkpoint), checkpoint.turn))
             val target = assertNotNull(store.migration.attachmentNameTarget(snapshot.sessionId))
             val pending = async(Dispatchers.Default) {

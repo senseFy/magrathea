@@ -149,7 +149,7 @@ internal fun buildMagratheaRoomDatabase(
     return builder
         .setDriver(BundledSQLiteDriver())
         .setQueryCoroutineContext(Dispatchers.Default)
-        .addMigrations(MAGRATHEA_ROOM_MIGRATION_1_2, MAGRATHEA_ROOM_MIGRATION_2_3)
+        .addMigrations(MAGRATHEA_ROOM_MIGRATION_1_2, MAGRATHEA_ROOM_MIGRATION_2_3, MAGRATHEA_ROOM_MIGRATION_3_4)
         .build()
 }
 
@@ -212,28 +212,31 @@ internal class RoomBackgroundExecutionStore(
     override suspend fun load(sessionId: AgentSessionId): BackgroundSessionRecords {
         val corruptions = mutableListOf<StoredRecordCorruption>()
         return try {
-            database.useReaderConnection { connection ->
-                connection.deferredTransaction {
-                    BackgroundSessionRecords(
-                        records = executionsDao.listBySession(sessionId.value)
-                            .mapNotNull { entity ->
-                                try {
-                                    decodeRecord(entity).value
-                                } catch (failure: StoredRecordCorruptionException) {
-                                    corruptions += failure.corruption
-                                    null
-                                }
-                            },
-                        origins = originsDao.listBySession(sessionId.value).mapNotNull { entity ->
-                            try {
-                                decodeOrigin(entity).value
-                            } catch (failure: StoredRecordCorruptionException) {
-                                corruptions += failure.corruption
-                                null
-                            }
-                        },
-                    )
+            catalog.operation {
+                val (executions, origins) = database.useReaderConnection { connection ->
+                    connection.deferredTransaction {
+                        catalog.readState()
+                        executionsDao.listBySession(sessionId.value) to originsDao.listBySession(sessionId.value)
+                    }
                 }
+                BackgroundSessionRecords(
+                    records = executions.mapNotNull { entity ->
+                        try {
+                            decodeRecord(entity).value
+                        } catch (failure: StoredRecordCorruptionException) {
+                            corruptions += failure.corruption
+                            null
+                        }
+                    },
+                    origins = origins.mapNotNull { entity ->
+                        try {
+                            decodeOrigin(entity).value
+                        } catch (failure: StoredRecordCorruptionException) {
+                            corruptions += failure.corruption
+                            null
+                        }
+                    },
+                )
             }
         } finally {
             corruptions.forEach(::reportCorruption)
@@ -452,17 +455,19 @@ internal class RoomAgentPersistence(
             // Host projection runs before acquiring the writer. CAS retries if another handle wrote.
             val projection = catalog.projector.project(snapshot.value)
             val references = extractSessionAttachmentUris(snapshot.value, checkpoint?.value)
-            val rewritten = database.useWriterConnection { connection ->
-                connection.immediateTransaction {
-                    catalog.readState()
-                    if (sessionDao.findById(sessionId.value) != sessionEntity || checkpointDao.findById(sessionId.value) != checkpointEntity) {
-                        false
-                    } else {
-                        catalog.storeSnapshot(snapshot.value, snapshot.rewritePayload ?: sessionEntity.payload,
-                            projection, references, sessionEntity to projection)
-                        if (checkpointEntity != null && checkpoint != null) rewriteCheckpointIfNeeded(checkpointEntity, checkpoint)
-                        recovery.refreshSnapshot(snapshot.value)
-                        true
+            val rewritten = catalog.contextMutation {
+                database.useWriterConnection { connection ->
+                    connection.immediateTransaction {
+                        catalog.readState()
+                        if (sessionDao.findById(sessionId.value) != sessionEntity || checkpointDao.findById(sessionId.value) != checkpointEntity) {
+                            false
+                        } else {
+                            catalog.storeSnapshot(snapshot.value, snapshot.rewritePayload ?: sessionEntity.payload,
+                                projection, references, sessionEntity to projection)
+                            if (checkpointEntity != null && checkpoint != null) rewriteCheckpointIfNeeded(checkpointEntity, checkpoint)
+                            recovery.refreshSnapshot(snapshot.value)
+                            true
+                        }
                     }
                 }
             }
@@ -474,17 +479,18 @@ internal class RoomAgentPersistence(
         val corruptions = mutableListOf<StoredRecordCorruption>()
         return try {
             catalog.operation {
-                database.useReaderConnection { connection ->
-                    connection.deferredTransaction<List<AgentSessionSnapshot>> {
+                val entities = database.useReaderConnection { connection ->
+                    connection.deferredTransaction {
                         catalog.readState()
-                        sessionDao.listAll().mapNotNull { entity ->
-                            try {
-                                decodeSession(entity).value
-                            } catch (failure: StoredRecordCorruptionException) {
-                                corruptions += failure.corruption
-                                null
-                            }
-                        }
+                        sessionDao.listAll()
+                    }
+                }
+                entities.mapNotNull { entity ->
+                    try {
+                        decodeSession(entity).value
+                    } catch (failure: StoredRecordCorruptionException) {
+                        corruptions += failure.corruption
+                        null
                     }
                 }
             }
@@ -522,9 +528,11 @@ internal class RoomAgentPersistence(
 
     /** A committed write must consume its transient context before cancellation reaches the caller. */
     private suspend fun completeWrite(block: suspend () -> Unit) {
-        currentCoroutineContext().ensureActive()
-        withContext(NonCancellable) { block() }
-        currentCoroutineContext().ensureActive()
+        catalog.contextMutation {
+            currentCoroutineContext().ensureActive()
+            withContext(NonCancellable) { block() }
+            currentCoroutineContext().ensureActive()
+        }
     }
 
     private fun decodeSession(

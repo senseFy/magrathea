@@ -61,18 +61,19 @@ internal class RoomRecoveryIndex(private val database: MagratheaDatabase, json: 
     private val snapshotCodec = AgentSessionSnapshotCodec(json)
     private val backgroundCodec = BackgroundExecutionRecordCodec(json)
 
-    /** Call after the canonical row/checkpoint have been stored, while their transaction is open. */
+    /** Canonical recovery facts were stored with the row; reconcile only changed background facts. */
     suspend fun refreshSnapshot(snapshot: AgentSessionSnapshot) {
-        sessions.updateRecoveryStatus(snapshot.sessionId.value, snapshot.state.status.name,
-            sessionRecoveryReasons(snapshot.state.status, hasCheckpoint = false).isNotEmpty())
         backgrounds.recoveryBySession(snapshot.sessionId.value).forEach { row ->
             val known = row.hasKnownSource()
             val acknowledged = if (known) {
                 backgroundResultDeliveryFacts(requireNotNull(row.catalogHandle), requireNotNull(row.catalogResultVersion),
                     snapshot.state.messages).acknowledged
             } else null
-            backgrounds.updateRecovery(row.sessionId, row.executionId, row.catalogHandle, row.catalogState,
-                row.catalogResultVersion, acknowledged, row.catalogState != BackgroundExecutionState.TERMINAL.name || acknowledged != true)
+            val candidate = row.catalogState != BackgroundExecutionState.TERMINAL.name || acknowledged != true
+            if (row.catalogAcknowledged != acknowledged || row.catalogRecoveryCandidate != candidate) {
+                backgrounds.updateRecovery(row.sessionId, row.executionId, row.catalogHandle, row.catalogState,
+                    row.catalogResultVersion, acknowledged, candidate)
+            }
         }
     }
 

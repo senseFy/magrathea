@@ -12,12 +12,12 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.room.RoomDatabaseConstructor
+import androidx.room.Upsert
 import androidx.room.migration.Migration
 
 @Entity(tableName = "agent_sessions", indices = [Index(value = ["catalogRecoveryCandidate", "sessionId"])])
 internal data class AgentSessionEntity(
     @PrimaryKey val sessionId: String,
-    val payload: String,
     val updatedAtEpochMs: Long,
     @ColumnInfo(defaultValue = "'legacy'") val incarnation: String = "legacy",
     @ColumnInfo(defaultValue = "0") val rowVersion: Long = 0L,
@@ -26,7 +26,15 @@ internal data class AgentSessionEntity(
     val catalogActivityOrder: String? = null,
     val catalogRecoveryStatus: String? = null,
     @ColumnInfo(defaultValue = "1") val catalogRecoveryCandidate: Boolean = true,
-    val catalogAttachmentNameBackup: String? = null,
+    val payload: String,
+)
+
+/** Original migration envelopes are cold data and must not enlarge every canonical row rewrite. */
+@Entity(tableName = "session_attachment_name_backups")
+internal data class SessionAttachmentNameBackupEntity(
+    @PrimaryKey val sessionId: String,
+    val incarnation: String,
+    val payload: String,
 )
 
 /** Recovery queries never select a canonical envelope. Null status means the source is unknown. */
@@ -56,48 +64,8 @@ internal data class AgentCheckpointEntity(
 
 @Dao
 internal interface AgentSessionDao {
-    @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun insertIgnoringExisting(entity: AgentSessionEntity): Long
-
-    @Query("UPDATE agent_sessions SET payload=:payload, updatedAtEpochMs=:updatedAtEpochMs, incarnation=:incarnation, " +
-        "rowVersion=:rowVersion, catalogObservedActivityIdentity=:observed, catalogActivityIdentity=:accepted, catalogActivityOrder=:activityOrder, " +
-        "catalogRecoveryStatus=:recoveryStatus, catalogRecoveryCandidate=:recoveryCandidate, " +
-        "catalogAttachmentNameBackup=COALESCE(catalogAttachmentNameBackup,:backup) WHERE sessionId=:id")
-    suspend fun updatePreservingMigrationBackup(
-        id: String,
-        payload: String,
-        updatedAtEpochMs: Long,
-        incarnation: String,
-        rowVersion: Long,
-        observed: String?,
-        accepted: String?,
-        activityOrder: String?,
-        recoveryStatus: String?,
-        recoveryCandidate: Boolean,
-        backup: String?,
-    )
-
-    @androidx.room.Transaction
-    suspend fun upsert(entity: AgentSessionEntity) {
-        if (insertIgnoringExisting(entity) == -1L) {
-            updatePreservingMigrationBackup(
-                id = entity.sessionId,
-                payload = entity.payload,
-                updatedAtEpochMs = entity.updatedAtEpochMs,
-                incarnation = entity.incarnation,
-                rowVersion = entity.rowVersion,
-                observed = entity.catalogObservedActivityIdentity,
-                accepted = entity.catalogActivityIdentity,
-                activityOrder = entity.catalogActivityOrder,
-                recoveryStatus = entity.catalogRecoveryStatus,
-                recoveryCandidate = entity.catalogRecoveryCandidate,
-                backup = entity.catalogAttachmentNameBackup,
-            )
-        }
-    }
-
-    @Query("SELECT catalogAttachmentNameBackup FROM agent_sessions WHERE sessionId=:sessionId")
-    suspend fun attachmentNameBackup(sessionId: String): String?
+    @Upsert
+    suspend fun upsert(entity: AgentSessionEntity)
 
     @Query("SELECT * FROM agent_sessions WHERE sessionId = :sessionId")
     suspend fun findById(sessionId: String): AgentSessionEntity?
@@ -108,9 +76,6 @@ internal interface AgentSessionDao {
 
     @Query("SELECT sessionId, incarnation, rowVersion, catalogRecoveryStatus FROM agent_sessions WHERE sessionId = :sessionId")
     suspend fun recovery(sessionId: String): AgentSessionRecoveryEntity?
-
-    @Query("UPDATE agent_sessions SET catalogRecoveryStatus = :status, catalogRecoveryCandidate = :candidate WHERE sessionId = :sessionId")
-    suspend fun updateRecoveryStatus(sessionId: String, status: String, candidate: Boolean)
 
     @Query("SELECT EXISTS(SELECT 1 FROM agent_sessions WHERE catalogRecoveryCandidate = 1 AND (catalogRecoveryStatus IS NULL OR " +
         "catalogRecoveryStatus NOT IN ('IDLE','RUNNING','WAITING_FOR_TOOLS','COMPLETED','FAILED','CANCELLED','INTERRUPTED')))")
@@ -173,7 +138,6 @@ internal interface AgentCheckpointDao {
 internal data class AgentBackgroundExecutionEntity(
     val sessionId: String,
     val executionId: String,
-    val envelope: String,
     val updatedAtEpochMs: Long,
     @ColumnInfo(defaultValue = "0") val rowVersion: Long = 0,
     val catalogHandle: String? = null,
@@ -181,6 +145,7 @@ internal data class AgentBackgroundExecutionEntity(
     val catalogResultVersion: Int? = null,
     val catalogAcknowledged: Boolean? = null,
     @ColumnInfo(defaultValue = "1") val catalogRecoveryCandidate: Boolean = true,
+    val envelope: String,
 )
 
 internal data class AgentBackgroundRecoveryEntity(
@@ -327,8 +292,9 @@ internal val MAGRATHEA_ROOM_MIGRATION_1_2 = object : Migration(1, 2) {
         SessionCollectionEntity::class,
         SessionOrganizationEntity::class,
         CatalogStateEntity::class,
+        SessionAttachmentNameBackupEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 @ConstructedBy(MagratheaDatabaseConstructor::class)

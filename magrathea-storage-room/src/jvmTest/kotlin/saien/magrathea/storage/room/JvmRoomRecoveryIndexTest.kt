@@ -42,6 +42,34 @@ import kotlin.test.assertTrue
 
 class JvmRoomRecoveryIndexTest {
     @Test
+    fun canonicalCommitUpdatesItsRowOnceAndDoesNotRewriteUnchangedBackgroundFactsOrBackups() = runTest {
+        withStore { store, database, path ->
+            val original = completed("one-write")
+            store.persistence.commit(original, null)
+            store.backgroundStore.upsert(terminal(background("one-write", "work", BackgroundExecutionState.RUNNING)))
+            database.catalogDao().upsertAttachmentNameBackup(
+                SessionAttachmentNameBackupEntity("one-write", "opaque-life", "opaque original backup"),
+            )
+            execute(path, "CREATE TABLE canonical_update_count (value INTEGER NOT NULL)")
+            execute(path, "INSERT INTO canonical_update_count VALUES (0)")
+            execute(path, "CREATE TRIGGER count_canonical AFTER UPDATE ON agent_sessions BEGIN UPDATE canonical_update_count SET value = value + 1; END")
+            execute(path, "CREATE TRIGGER reject_background_rewrite BEFORE UPDATE ON agent_background_executions BEGIN SELECT RAISE(ABORT, 'unchanged background rewritten'); END")
+            execute(path, "CREATE TRIGGER reject_backup_rewrite BEFORE UPDATE ON session_attachment_name_backups BEGIN SELECT RAISE(ABORT, 'cold backup rewritten'); END")
+
+            store.persistence.commit(original.copy(updatedAtEpochMs = original.updatedAtEpochMs + 1), null)
+
+            BundledSQLiteDriver().open(path).use { connection ->
+                connection.prepare("SELECT value FROM canonical_update_count").use {
+                    assertTrue(it.step())
+                    assertEquals(1L, it.getLong(0))
+                }
+            }
+            assertEquals("opaque original backup", database.catalogDao().attachmentNameBackup("one-write")?.payload)
+            assertEquals(AgentStatus.COMPLETED.name, database.sessionDao().recovery("one-write")?.catalogRecoveryStatus)
+        }
+    }
+
+    @Test
     fun completedSessionWithBackgroundWorkLeavesTheIndexOnlyAfterCurrentResultIsAcknowledged() = runTest {
         withStore { store, _, _ ->
             val original = completed("session")
@@ -105,8 +133,13 @@ class JvmRoomRecoveryIndexTest {
         withStore { store, database, _ ->
             val value = terminal(background("b-known", "work", BackgroundExecutionState.RUNNING))
             store.persistence.commit(acknowledge(completed("b-known"), value), null)
-            database.backgroundExecutionDao().upsert(AgentBackgroundExecutionEntity("a-bad", "bad", "opaque unknown schema", 1))
-            database.backgroundExecutionDao().upsert(AgentBackgroundExecutionEntity("b-known", "work", BackgroundExecutionRecordCodec().encode(value), 1))
+            database.backgroundExecutionDao().upsert(AgentBackgroundExecutionEntity(sessionId = "a-bad", executionId = "bad", envelope = "opaque unknown schema", updatedAtEpochMs = 1))
+            database.backgroundExecutionDao().upsert(AgentBackgroundExecutionEntity(
+                sessionId = "b-known",
+                executionId = "work",
+                envelope = BackgroundExecutionRecordCodec().encode(value),
+                updatedAtEpochMs = 1,
+            ))
             val state = store.catalog.state()
             val index = RoomRecoveryIndex(database)
             val before = store.catalog.pageRecoveryCandidates(limit = 10)
@@ -179,7 +212,7 @@ class JvmRoomRecoveryIndexTest {
         withStore { store, database, _ ->
             val old = store.catalog.state()
             store.persistence.clear()
-            database.backgroundExecutionDao().upsert(AgentBackgroundExecutionEntity("fresh", "work", "unknown", 1))
+            database.backgroundExecutionDao().upsert(AgentBackgroundExecutionEntity(sessionId = "fresh", executionId = "work", envelope = "unknown", updatedAtEpochMs = 1))
             val before = store.catalog.state()
             val failure = assertFailsWith<SessionCatalogException> {
                 RoomRecoveryIndex(database).backfillBackgroundBatch(1, old.policy, old.generation)

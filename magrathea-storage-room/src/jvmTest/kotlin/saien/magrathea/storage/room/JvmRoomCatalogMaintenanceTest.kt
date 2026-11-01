@@ -58,11 +58,11 @@ class JvmRoomCatalogMaintenanceTest {
             val a = snapshot("a", "u-a", 1)
             val c = snapshot("c", "u-c", 3)
             fixture.seed(a)
-            fixture.database.sessionDao().upsert(AgentSessionEntity("b-corrupt", "opaque corrupt bytes", 2))
+            fixture.database.sessionDao().upsert(AgentSessionEntity(sessionId = "b-corrupt", payload = "opaque corrupt bytes", updatedAtEpochMs = 2))
             fixture.seed(c)
             val future = JsonObject(Json.parseToJsonElement(codec.encode(snapshot("d-future", "u-d", 4))).jsonObject +
                 ("schemaVersion" to JsonPrimitive(CURRENT_STORAGE_SCHEMA_VERSION + 100))).toString()
-            fixture.database.sessionDao().upsert(AgentSessionEntity("d-future", future, 4))
+            fixture.database.sessionDao().upsert(AgentSessionEntity(sessionId = "d-future", payload = future, updatedAtEpochMs = 4))
             assertEquals(CatalogCoverage.INDEXING, fixture.store.catalog.state().coverage)
             val first = fixture.store.maintenance.runBatch(1)
             assertEquals(1, first.indexed)
@@ -295,7 +295,7 @@ class JvmRoomCatalogMaintenanceTest {
 
     private inner class Fixture(val directory: Path, val path: String, val database: MagratheaDatabase, val store: MagratheaRoomStoreHandle) {
         suspend fun seed(snapshot: AgentSessionSnapshot, checkpoint: AgentCheckpoint? = null) {
-            database.sessionDao().upsert(AgentSessionEntity(snapshot.sessionId.value, codec.encode(snapshot), snapshot.updatedAtEpochMs))
+            database.sessionDao().upsert(AgentSessionEntity(sessionId = snapshot.sessionId.value, payload = codec.encode(snapshot), updatedAtEpochMs = snapshot.updatedAtEpochMs))
             if (checkpoint != null) database.checkpointDao().upsert(AgentCheckpointEntity(snapshot.sessionId.value, AgentCheckpointCodec().encode(checkpoint), checkpoint.turn))
         }
     }

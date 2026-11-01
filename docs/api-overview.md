@@ -69,9 +69,17 @@ both maintain those facts. A completed snapshot can remain a candidate while bac
 or its result is unacknowledged. Regenerating history can revoke an acknowledgement. Unknown sources
 remain conservative candidates, with coverage separate from ordinary header coverage.
 
-Room upgrades its physical database from version 2 to 3; IndexedDB upgrades from version 1 to 2.
-These structural upgrades retain canonical data and do not change envelope schema 9. Earlier SDK
-versions cannot reopen the upgraded databases; downgrading requires a compatible pre-upgrade backup.
+Room upgrades its physical database to version 4, including databases created with the earlier
+version 3 catalog layout; IndexedDB upgrades from version 1 to 2. Room keeps attachment-name backups
+in a separate table and places lightweight session and background facts before their opaque payloads.
+These structural upgrades retain canonical data and backups without decoding them, and do not change
+envelope schema 9. Earlier SDK versions cannot reopen the upgraded databases; downgrading requires a
+compatible pre-upgrade backup.
+
+Room `persistence.deleteSession` also deletes that session's background executions, origins, migration
+backup and derived catalog records in the same transaction. `persistence.clear` does so for every
+session, while retaining collections. Direct `AgentPersistence` callers must drain session and background
+writers before deletion; background records no longer survive canonical session deletion.
 
 The Web adapter retains opaque payload strings and maintains
 eight stores. Metadata key cursors answer identity queries without cloning canonical payloads. All Long
@@ -82,14 +90,23 @@ preserved and reported with a null diagnostic session ID. Recovery has a bounded
 while some sources remain unindexed; complete indexes use the recovery index directly.
 
 Applications that require acceptance order can prepare an activity ticket before execution and bind
-it to a stable canonical input identity. Canonical-time consumers need no preparation calls. Initial
-organization and activity context belong to the actual commit handle and must survive until commit
-or a fenced, drained abandonment; a send returning does not prove persistence has completed.
+it to a stable canonical input identity. `SessionActivityMode.PREPARED` is a strict opt-in: the first
+non-null projected activity identity and subsequent identity changes need a matching prepared intent
+on the actual commit handle. Without one, the canonical commit fails atomically with
+`ACTIVITY_NOT_PREPARED`; there is no fallback to timestamp ordering. Unchanged identities need no new
+preparation, and regeneration can use `preparePreservedActivity` to retain accepted order. Legacy
+backfill can initialize timestamp order. The default `CANONICAL_TIME` mode supports plain
+`AgentPersistence` consumers without preparation calls. Initial organization and activity context
+must survive until commit or a fenced, drained abandonment; a send returning does not prove
+persistence has completed.
 
 `ChatbotSession.sessionId` is available immediately after creation. `prepareMessage` prepares only
-an immutable input with a stable message ID; `sendPrepared` appends it to the current session history.
-A prepared input belongs to one facade lifetime and allows one sending attempt. It is not a durable
-idempotency key and must not be retried after an unknown execution outcome.
+an immutable input with a stable message ID and a timestamp captured at preparation time;
+`sendPrepared` preserves both and appends it to the current session history. A prepared input belongs
+to one facade lifetime and allows one sending attempt. Cancellation while waiting for command
+admission or for the previous execution to settle leaves it unused. After the new send attempt starts,
+it remains consumed on failure or cancellation. It is not a durable idempotency key and must not be
+retried after an unknown execution outcome.
 
 ## Providers
 

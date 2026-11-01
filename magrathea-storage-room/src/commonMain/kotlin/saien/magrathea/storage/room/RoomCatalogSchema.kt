@@ -120,6 +120,18 @@ internal interface SessionCatalogDao {
     @Upsert
     suspend fun upsertState(entity: CatalogStateEntity)
 
+    @Upsert
+    suspend fun upsertAttachmentNameBackup(entity: SessionAttachmentNameBackupEntity)
+
+    @Query("SELECT * FROM session_attachment_name_backups WHERE sessionId = :sessionId")
+    suspend fun attachmentNameBackup(sessionId: String): SessionAttachmentNameBackupEntity?
+
+    @Query("DELETE FROM session_attachment_name_backups WHERE sessionId = :sessionId")
+    suspend fun deleteAttachmentNameBackup(sessionId: String)
+
+    @Query("DELETE FROM session_attachment_name_backups")
+    suspend fun clearAttachmentNameBackups()
+
     @Query("SELECT * FROM session_catalog WHERE sessionId = :sessionId")
     suspend fun header(sessionId: String): SessionCatalogEntity?
 
@@ -177,7 +189,7 @@ internal interface SessionCatalogDao {
         "SELECT 1 FROM session_attachment_refs r WHERE r.sessionId=b.sessionId AND r.sourceKey='origin:' || b.runId AND r.isCoverageMarker=1))")
     suspend fun hasUnindexedOriginReferences(): Boolean
 
-    @Query("SELECT EXISTS(SELECT 1 FROM agent_sessions s WHERE s.catalogAttachmentNameBackup IS NOT NULL AND NOT EXISTS(" +
+    @Query("SELECT EXISTS(SELECT 1 FROM session_attachment_name_backups s WHERE NOT EXISTS(" +
         "SELECT 1 FROM session_attachment_refs r WHERE r.sessionId=s.sessionId AND r.sourceKey='attachment-name-backup' AND r.isCoverageMarker=1))")
     suspend fun hasUnindexedBackupReferences(): Boolean
 

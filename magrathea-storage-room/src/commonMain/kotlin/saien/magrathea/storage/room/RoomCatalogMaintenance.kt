@@ -83,7 +83,11 @@ internal class RoomCatalogMaintenance(
         val failed: Long,
     )
 
-    private data class Source(val session: AgentSessionEntity?, val checkpoint: AgentCheckpointEntity?)
+    private data class Source(
+        val session: AgentSessionEntity?,
+        val checkpoint: AgentCheckpointEntity?,
+        val backup: SessionAttachmentNameBackupEntity?,
+    )
 
     private sealed interface Computed {
         data class Projected(
@@ -190,7 +194,7 @@ internal class RoomCatalogMaintenance(
         while (remaining > 0 && !expected.sessionsComplete) {
             val captured = readStep(expected) {
                 val id = sessionIds(expected.afterSession, 1).firstOrNull()
-                id to if (id == null) null else Source(sessions.findById(id), checkpoints.findById(id))
+                id to if (id == null) null else Source(sessions.findById(id), checkpoints.findById(id), dao.attachmentNameBackup(id))
             }
             val id = captured.first
             if (id == null) {
@@ -208,7 +212,8 @@ internal class RoomCatalogMaintenance(
             var raced = false
             var outcome: Outcome? = null
             expected = writeStep(expected) {
-                if (sessions.findById(id) != source.session || checkpoints.findById(id) != source.checkpoint) {
+                if (sessions.findById(id) != source.session || checkpoints.findById(id) != source.checkpoint ||
+                    dao.attachmentNameBackup(id) != source.backup) {
                     raced = true
                 } else {
                     outcome = when (computed) {
@@ -241,13 +246,17 @@ internal class RoomCatalogMaintenance(
         }
 
         if (remaining > 0 && expected.sessionsComplete && expected.collectionsComplete) {
-            val background = recovery.backfillBackgroundBatch(remaining, expected.state.policy, expected.state.generation)
+            val background = catalog.operation {
+                recovery.backfillBackgroundBatch(remaining, expected.state.policy, expected.state.generation)
+            }
             indexed += background.indexed
             skipped += background.skipped
             issues += background.issues
             remaining -= background.processed
             if (remaining > 0 && background.complete) {
-                val origins = referenceIndex.backfillOrigins(remaining, expected.state.policy, expected.state.generation)
+                val origins = catalog.operation {
+                    referenceIndex.backfillOrigins(remaining, expected.state.policy, expected.state.generation)
+                }
                 indexed += origins.indexed
                 skipped += origins.skipped
                 issues += origins.issues
@@ -268,8 +277,9 @@ internal class RoomCatalogMaintenance(
                 (checkpoint != null && (checkpoint.value.sessionId.value != session.sessionId || checkpoint.value.turn != source.checkpoint.turn ||
                     checkpoint.value.runId != snapshot.value.runId))) return Computed.Failed(SessionCatalogMaintenanceIssueKind.UNREADABLE)
             AgentPersistenceRecord(snapshot.value, checkpoint?.value)
-            backupReferences = session.catalogAttachmentNameBackup?.let {
-                val backup = SessionCatalogMigrationEncoding.backup(it)
+            backupReferences = source.backup?.let {
+                require(it.incarnation == session.incarnation)
+                val backup = SessionCatalogMigrationEncoding.backup(it.payload)
                 require(backup.identity == SessionIdentity(AgentSessionId(session.sessionId), session.incarnation))
                 attachmentNameBackupUris(backup, json)
             }

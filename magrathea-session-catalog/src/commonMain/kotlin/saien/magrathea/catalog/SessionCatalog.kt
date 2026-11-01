@@ -23,7 +23,14 @@ enum class SessionActivityMode {
     /** A plain AgentPersistence consumer needs no catalog preparation calls. */
     CANONICAL_TIME,
 
-    /** Changes in the projected activity identity require an explicit prepared intent. */
+    /**
+     * Strict opt-in acceptance ordering. The first non-null projected activity identity needs a
+     * matching [SessionCatalog.prepareActivity] ticket. Later identity changes need a matching
+     * ticket or [SessionCatalog.preparePreservedActivity] context on the actual commit handle. Missing
+     * preparation fails the canonical commit atomically with
+     * [SessionCatalogFailure.ACTIVITY_NOT_PREPARED]; it never falls back to timestamp ordering.
+     * Unchanged identities need no new context. Legacy backfill can initialize timestamp order.
+     */
     PREPARED,
 }
 
@@ -83,6 +90,7 @@ data class SessionCatalogProjection(
 /**
  * A synchronous, deterministic, side-effect-free projection. Implementations must not access a
  * provider, UI, live runtime or external storage. Adapters call [project] outside write transactions.
+ * Calls may run concurrently; implementations must be safe to share between operations and handles.
  * Only the bounded override title needs [normalizeSearch] while merging current organization data.
  */
 interface SessionCatalogProjector {

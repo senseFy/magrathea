@@ -5,8 +5,11 @@ import androidx.room.deferredTransaction
 import androidx.room.immediateTransaction
 import androidx.room.useReaderConnection
 import androidx.room.useWriterConnection
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import saien.magrathea.catalog.CatalogCoverage
 import saien.magrathea.catalog.CatalogKeyEncoding
 import saien.magrathea.catalog.CatalogPageDirection
@@ -46,6 +49,7 @@ import saien.magrathea.catalog.materializeCatalogEntry
 import saien.magrathea.catalog.normalizeCatalogQuery
 import saien.magrathea.catalog.resolveSessionActivity
 import saien.magrathea.catalog.sessionCatalogSortKey
+import saien.magrathea.catalog.sessionRecoveryReasons
 import saien.magrathea.catalog.validateCatalogCursor
 import saien.magrathea.catalog.validateCatalogPageLimit
 import saien.magrathea.core.AgentSessionId
@@ -60,8 +64,13 @@ internal class RoomSessionCatalog(
 ) : SessionCatalog {
     private val dao = database.catalogDao()
     private val sessions = database.sessionDao()
-    private val mutex = Mutex()
+    private val lifecycleMutex = Mutex()
+    private val initializationMutex = Mutex()
+    private val contextMutex = Mutex()
     private var closed = false
+    private var activeOperations = 0
+    private var drained: CompletableDeferred<Unit>? = null
+    private var closeResult: CompletableDeferred<Unit>? = null
     private var initialized = false
     private val initializations = mutableMapOf<AgentSessionId, PreparedSessionInitialization>()
     private val intents = mutableMapOf<SessionIdentity, MutableMap<String?, PreparedActivityIntent>>()
@@ -69,8 +78,25 @@ internal class RoomSessionCatalog(
     internal suspend fun <T> operation(
         requireMatchingPolicy: Boolean = true,
         block: suspend () -> T,
-    ): T = mutex.withLock {
-        if (closed) fail(SessionCatalogFailure.CLOSED)
+    ): T {
+        lifecycleMutex.withLock {
+            if (closed) fail(SessionCatalogFailure.CLOSED)
+            activeOperations++
+        }
+        try {
+            initialize(requireMatchingPolicy)
+            return block()
+        } finally {
+            withContext(NonCancellable) {
+                lifecycleMutex.withLock {
+                    activeOperations--
+                    if (activeOperations == 0) drained?.complete(Unit)
+                }
+            }
+        }
+    }
+
+    private suspend fun initialize(requireMatchingPolicy: Boolean) = initializationMutex.withLock {
         if (!initialized) {
             database.useWriterConnection { connection ->
                 connection.immediateTransaction {
@@ -93,17 +119,38 @@ internal class RoomSessionCatalog(
             }
             initialized = true
         }
-        block()
     }
 
-    internal suspend fun close() = mutex.withLock {
-        if (!closed) {
+    /** Closing rejects new admissions, but never abandons the drain if its caller is cancelled. */
+    internal suspend fun close() = withContext(NonCancellable) {
+        val (result, ownsClose) = lifecycleMutex.withLock {
+            closeResult?.let { return@withLock it to false }
             closed = true
-            initializations.clear()
-            intents.clear()
-            database.close()
+            val result = CompletableDeferred<Unit>()
+            closeResult = result
+            drained = CompletableDeferred<Unit>().also {
+                if (activeOperations == 0) it.complete(Unit)
+            }
+            result to true
         }
+        if (ownsClose) {
+            try {
+                requireNotNull(drained).await()
+                contextMutex.withLock {
+                    initializations.clear()
+                    intents.clear()
+                    database.close()
+                }
+                result.complete(Unit)
+            } catch (failure: Throwable) {
+                result.completeExceptionally(failure)
+            }
+        }
+        result.await()
     }
+
+    /** Acquire before a writer connection; never hold this lock during decoding or projection. */
+    internal suspend fun <T> contextMutation(block: suspend () -> T): T = contextMutex.withLock { block() }
 
     private suspend fun <T> read(block: suspend (SessionCatalogState) -> T): T = operation {
         database.useReaderConnection { connection ->
@@ -112,10 +159,12 @@ internal class RoomSessionCatalog(
     }
 
     private suspend fun <T> write(block: suspend () -> T): T = operation {
-        database.useWriterConnection { connection ->
-            connection.immediateTransaction {
-                readState()
-                block()
+        contextMutation {
+            database.useWriterConnection { connection ->
+                connection.immediateTransaction {
+                    readState()
+                    block()
+                }
             }
         }
     }
@@ -204,24 +253,26 @@ internal class RoomSessionCatalog(
     override suspend fun prepareActivity(identity: SessionIdentity, activityIdentity: String): SessionActivityTicket = operation {
         require(projector.activityMode == SessionActivityMode.PREPARED) { "Prepared activity requires a PREPARED projection policy" }
         require(activityIdentity.isNotBlank())
-        database.useWriterConnection { connection ->
-            connection.immediateTransaction {
-                readState()
-                requirePreparedIdentity(identity)
-                val old = intents[identity]?.get(activityIdentity)
-                if (old is PreparedActivityIntent.Advance) return@immediateTransaction old.ticket
-                if (old is PreparedActivityIntent.Preserve) fail(SessionCatalogFailure.INITIALIZATION_CONFLICT)
-                val durable = sessions.identity(identity.sessionId.value)?.activity()
-                val accepted = durable?.order as? SessionActivityOrder.Accepted
-                if (durable?.lastAcceptedIdentity == activityIdentity && accepted != null) {
-                    return@immediateTransaction SessionActivityTicket(identity, activityIdentity, accepted.sequence)
+        contextMutation {
+            database.useWriterConnection { connection ->
+                connection.immediateTransaction {
+                    readState()
+                    requirePreparedIdentity(identity)
+                    val old = intents[identity]?.get(activityIdentity)
+                    if (old is PreparedActivityIntent.Advance) return@immediateTransaction old.ticket
+                    if (old is PreparedActivityIntent.Preserve) fail(SessionCatalogFailure.INITIALIZATION_CONFLICT)
+                    val durable = sessions.identity(identity.sessionId.value)?.activity()
+                    val accepted = durable?.order as? SessionActivityOrder.Accepted
+                    if (durable?.lastAcceptedIdentity == activityIdentity && accepted != null) {
+                        return@immediateTransaction SessionActivityTicket(identity, activityIdentity, accepted.sequence)
+                    }
+                    val next = increment(number("sequence"))
+                    put("sequence", next.toString())
+                    SessionActivityTicket(identity, activityIdentity, next)
                 }
-                val next = increment(number("sequence"))
-                put("sequence", next.toString())
-                SessionActivityTicket(identity, activityIdentity, next)
+            }.also { ticket ->
+                intents.getOrPut(identity) { mutableMapOf() }[activityIdentity] = PreparedActivityIntent.Advance(ticket)
             }
-        }.also { ticket ->
-            intents.getOrPut(identity) { mutableMapOf() }[activityIdentity] = PreparedActivityIntent.Advance(ticket)
         }
     }
 
@@ -233,16 +284,20 @@ internal class RoomSessionCatalog(
     }
 
     override suspend fun releaseActivity(identity: SessionIdentity, activityIdentity: String?) = operation {
-        intents[identity]?.let { pending ->
-            pending.remove(activityIdentity)
-            if (pending.isEmpty()) intents.remove(identity)
+        contextMutation {
+            intents[identity]?.let { pending ->
+                pending.remove(activityIdentity)
+                if (pending.isEmpty()) intents.remove(identity)
+            }
         }
         Unit
     }
 
     override suspend fun releasePreparation(identity: SessionIdentity) = operation {
-        if (initializations[identity.sessionId]?.identity == identity) initializations.remove(identity.sessionId)
-        intents.remove(identity)
+        contextMutation {
+            if (initializations[identity.sessionId]?.identity == identity) initializations.remove(identity.sessionId)
+            intents.remove(identity)
+        }
         Unit
     }
 
@@ -282,6 +337,8 @@ internal class RoomSessionCatalog(
                 catalogObservedActivityIdentity = activity.observedIdentity,
                 catalogActivityIdentity = activity.lastAcceptedIdentity,
                 catalogActivityOrder = activity.order.encoded(),
+                catalogRecoveryStatus = snapshot.state.status.name,
+                catalogRecoveryCandidate = sessionRecoveryReasons(snapshot.state.status, hasCheckpoint = false).isNotEmpty(),
             ),
         )
         storeOrganization(identity, organization)
@@ -320,6 +377,7 @@ internal class RoomSessionCatalog(
         dao.deleteSearch(id.value)
         dao.deleteReferences(id.value)
         dao.deleteOrganization(id.value)
+        dao.deleteAttachmentNameBackup(id.value)
         database.backgroundExecutionDao().deleteBySession(id.value)
         database.backgroundOriginDao().deleteBySession(id.value)
         if (canonicalExisted) advanceRevision()
@@ -337,6 +395,7 @@ internal class RoomSessionCatalog(
         dao.clearSearch()
         dao.clearReferences()
         dao.clearOrganization()
+        dao.clearAttachmentNameBackups()
         database.backgroundExecutionDao().deleteAll()
         database.backgroundOriginDao().deleteAll()
         val generation = increment(number("generation"))
@@ -380,7 +439,9 @@ internal class RoomSessionCatalog(
         } catch (_: Exception) {
             return false
         }
-        if (changesAuthority) {
+        val recoveryStatus = snapshot.state.status.name
+        val recoveryCandidate = sessionRecoveryReasons(snapshot.state.status, hasCheckpoint = false).isNotEmpty()
+        if (changesAuthority || source.catalogRecoveryStatus != recoveryStatus || source.catalogRecoveryCandidate != recoveryCandidate) {
             sessions.upsert(
                 source.copy(
                     payload = rewrittenSnapshot ?: source.payload,
@@ -388,6 +449,8 @@ internal class RoomSessionCatalog(
                     catalogObservedActivityIdentity = activity.observedIdentity,
                     catalogActivityIdentity = activity.lastAcceptedIdentity,
                     catalogActivityOrder = activity.order.encoded(),
+                    catalogRecoveryStatus = recoveryStatus,
+                    catalogRecoveryCandidate = recoveryCandidate,
                 ),
             )
         }

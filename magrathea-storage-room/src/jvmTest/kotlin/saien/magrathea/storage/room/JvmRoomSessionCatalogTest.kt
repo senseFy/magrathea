@@ -214,7 +214,7 @@ class JvmRoomSessionCatalogTest {
             val identity = store.catalog.prepareNewSession(session.sessionId, "old-life", SessionOrganization("Old"))
             store.catalog.prepareActivity(identity, "u1")
             store.persistence.commit(session, roomTestCheckpoint(session, 1))
-            database.backgroundExecutionDao().upsert(AgentBackgroundExecutionEntity("delete", "work", "opaque", 1))
+            database.backgroundExecutionDao().upsert(AgentBackgroundExecutionEntity(sessionId = "delete", executionId = "work", envelope = "opaque", updatedAtEpochMs = 1))
             database.backgroundOriginDao().upsert(AgentBackgroundOriginEntity("delete", "run", "opaque"))
             val beforeDelete = store.catalog.state()
             execute(path, "CREATE TRIGGER fail_delete BEFORE DELETE ON session_catalog BEGIN SELECT RAISE(ABORT, 'injected'); END")

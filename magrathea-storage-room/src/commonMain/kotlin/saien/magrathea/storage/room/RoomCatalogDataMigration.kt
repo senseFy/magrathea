@@ -69,7 +69,11 @@ internal class RoomCatalogDataMigration(
     private val checkpoints = database.checkpointDao()
     private val snapshotCodec = AgentSessionSnapshotCodec(json)
     private val checkpointCodec = AgentCheckpointCodec(json)
-    private data class Source(val session: AgentSessionEntity, val checkpoint: AgentCheckpointEntity?)
+    private data class Source(
+        val session: AgentSessionEntity,
+        val checkpoint: AgentCheckpointEntity?,
+        val backup: SessionAttachmentNameBackupEntity?,
+    )
 
     private suspend fun <T> read(block: suspend () -> T): T = catalog.operation {
         database.useReaderConnection { connection ->
@@ -256,7 +260,7 @@ internal class RoomCatalogDataMigration(
         expected: SessionAttachmentNameScanProgress? = null,
     ): Source? = read {
         if (expected != null) checkScan(expected)
-        sessions.findById(id.value)?.let { Source(it, checkpoints.findById(id.value)) }
+        sessions.findById(id.value)?.let { Source(it, checkpoints.findById(id.value), dao.attachmentNameBackup(id.value)) }
     }
 
     private fun record(source: Source): AgentPersistenceRecord = decode {
@@ -316,12 +320,12 @@ internal class RoomCatalogDataMigration(
     override suspend fun attachmentNameBackup(identity: SessionIdentity): SessionAttachmentNameBackup? = read {
         val current = sessions.identity(identity.sessionId.value) ?: return@read null
         if (current.incarnation != identity.incarnation) fail(SessionCatalogFailure.STALE_IDENTITY)
-        sessions.attachmentNameBackup(identity.sessionId.value)?.let(SessionCatalogMigrationEncoding::backup)
+        dao.attachmentNameBackup(identity.sessionId.value)?.payload?.let(SessionCatalogMigrationEncoding::backup)
     }
     override suspend fun restoreAttachmentNameBackup(target: SessionAttachmentNameTarget): SessionAttachmentNamePatchResult {
         val source = source(target.identity.sessionId) ?: fail(SessionCatalogFailure.STALE_MIGRATION)
         checkTarget(source, target)
-        val backup = source.session.catalogAttachmentNameBackup?.let(SessionCatalogMigrationEncoding::backup)
+        val backup = source.backup?.payload?.let(SessionCatalogMigrationEncoding::backup)
             ?: return SessionAttachmentNamePatchResult(target.identity, target.rowVersion, false)
         val restored = decode { AgentPersistenceRecord(snapshotCodec.decodeResult(backup.snapshotPayload).value,
             backup.checkpointPayload?.let { checkpointCodec.decodeResult(it).value }) }
@@ -337,7 +341,7 @@ internal class RoomCatalogDataMigration(
         val projection = catalog.projector.project(updated.snapshot)
         val snapshot = snapshotCodec.encode(updated.snapshot)
         val checkpoint = updated.checkpoint?.let(checkpointCodec::encode)
-        val backup = source.session.catalogAttachmentNameBackup ?: SessionCatalogMigrationEncoding.backup(
+        val backup = source.backup?.payload ?: SessionCatalogMigrationEncoding.backup(
             SessionAttachmentNameBackup(target.identity, target.rowVersion, source.session.payload, source.checkpoint?.payload))
         val backupReferences = decode {
             val value = SessionCatalogMigrationEncoding.backup(backup)
@@ -345,16 +349,20 @@ internal class RoomCatalogDataMigration(
             attachmentNameBackupUris(value, json)
         }
         return write {
-            if (sessions.findById(source.session.sessionId) != source.session || checkpoints.findById(source.session.sessionId) != source.checkpoint) {
+            if (sessions.findById(source.session.sessionId) != source.session ||
+                checkpoints.findById(source.session.sessionId) != source.checkpoint ||
+                dao.attachmentNameBackup(source.session.sessionId) != source.backup) {
                 fail(SessionCatalogFailure.STALE_MIGRATION)
             }
             if (!changed) return@write SessionAttachmentNamePatchResult(target.identity, target.rowVersion, false)
-            val restoredSource = source.session.copy(updatedAtEpochMs = updated.snapshot.updatedAtEpochMs, catalogAttachmentNameBackup = backup)
+            val restoredSource = source.session.copy(updatedAtEpochMs = updated.snapshot.updatedAtEpochMs)
             if (!catalog.writeMaintenanceProjection(restoredSource, source.checkpoint, updated.snapshot, snapshot, checkpoint, projection,
                     extractSessionAttachmentUris(updated.snapshot, updated.checkpoint))) fail(SessionCatalogFailure.MAINTENANCE_PROJECTION_FAILED)
             if (updated.checkpoint == null) checkpoints.deleteById(source.session.sessionId)
             else checkpoints.upsert(AgentCheckpointEntity(source.session.sessionId, requireNotNull(checkpoint), requireNotNull(updated.checkpoint).turn))
-            RoomRecoveryIndex(database).refreshSnapshot(updated.snapshot)
+            if (source.backup == null) {
+                dao.upsertAttachmentNameBackup(SessionAttachmentNameBackupEntity(source.session.sessionId, target.identity.incarnation, backup))
+            }
             RoomAttachmentReferenceIndex(database).replace(source.session.sessionId, ATTACHMENT_NAME_BACKUP_SOURCE, backupReferences)
             catalog.advanceRevision()
             SessionAttachmentNamePatchResult(target.identity, next(target.rowVersion), true)

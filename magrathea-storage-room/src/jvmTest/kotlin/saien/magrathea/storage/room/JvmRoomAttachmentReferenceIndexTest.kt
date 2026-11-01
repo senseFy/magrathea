@@ -69,8 +69,8 @@ class JvmRoomAttachmentReferenceIndexTest {
     fun boundedLegacyBackfillRetainsUnknownBytesAndRebuildReindexesKnownSources() = runTest {
         fixture { database, store, _ ->
             val valid = background("a", "work", "attachment://legacy", "attachment://shared")
-            database.backgroundExecutionDao().upsert(AgentBackgroundExecutionEntity("a", "work", BackgroundExecutionRecordCodec().encode(valid), 1))
-            database.backgroundExecutionDao().upsert(AgentBackgroundExecutionEntity("z", "unknown", "opaque-execution", 1))
+            database.backgroundExecutionDao().upsert(AgentBackgroundExecutionEntity(sessionId = "a", executionId = "work", envelope = BackgroundExecutionRecordCodec().encode(valid), updatedAtEpochMs = 1))
+            database.backgroundExecutionDao().upsert(AgentBackgroundExecutionEntity(sessionId = "z", executionId = "unknown", envelope = "opaque-execution", updatedAtEpochMs = 1))
             val snapshot = roomTestSnapshot("a")
             val origin = BackgroundOriginContext(snapshot.sessionId, snapshot.runId, snapshot.request.copy(messages = emptyList()))
             database.backgroundOriginDao().upsert(AgentBackgroundOriginEntity("a", origin.runId.value, BackgroundOriginContextCodec().encode(origin)))

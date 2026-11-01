@@ -112,7 +112,7 @@ class JvmRoomCancellationBoundaryTest {
         val database = Room.databaseBuilder<MagratheaDatabase>(name = directory.resolve("store.db").toString())
             .setDriver(driver)
             .setQueryCoroutineContext(Dispatchers.Default)
-            .addMigrations(MAGRATHEA_ROOM_MIGRATION_1_2, MAGRATHEA_ROOM_MIGRATION_2_3)
+            .addMigrations(MAGRATHEA_ROOM_MIGRATION_1_2, MAGRATHEA_ROOM_MIGRATION_2_3, MAGRATHEA_ROOM_MIGRATION_3_4)
             .build()
         val store = MagratheaRoomStoreHandle(database, StoredRecordCorruptionReporter { error("Unexpected corruption") }, projector = CancellationProjector())
         try {
