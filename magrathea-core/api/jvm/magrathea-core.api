@@ -1365,6 +1365,23 @@ public final class saien/magrathea/core/BackgroundOutcome$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class saien/magrathea/core/BackgroundResultDeliveryFacts {
+	public fun <init> (ZZ)V
+	public final fun component1 ()Z
+	public final fun component2 ()Z
+	public final fun copy (ZZ)Lsaien/magrathea/core/BackgroundResultDeliveryFacts;
+	public static synthetic fun copy$default (Lsaien/magrathea/core/BackgroundResultDeliveryFacts;ZZILjava/lang/Object;)Lsaien/magrathea/core/BackgroundResultDeliveryFacts;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAcknowledged ()Z
+	public final fun getDelivered ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/core/BackgroundResultDeliveryKt {
+	public static final fun backgroundResultDeliveryFacts (Ljava/lang/String;ILjava/util/List;)Lsaien/magrathea/core/BackgroundResultDeliveryFacts;
+}
+
 public final class saien/magrathea/core/BackgroundSessionRecords {
 	public fun <init> ()V
 	public fun <init> (Ljava/util/List;Ljava/util/List;)V
@@ -1378,6 +1395,20 @@ public final class saien/magrathea/core/BackgroundSessionRecords {
 	public final fun getRecords ()Ljava/util/List;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/core/BackgroundToolProtocol {
+	public static final field AWAIT_RESULTS_METADATA_KEY Ljava/lang/String;
+	public static final field AWAIT_TOOL Ljava/lang/String;
+	public static final field CANCEL_TOOL Ljava/lang/String;
+	public static final field CONTROL_RESULT_METADATA_KEY Ljava/lang/String;
+	public static final field CONTROL_RUN_ID_METADATA_KEY Ljava/lang/String;
+	public static final field FINISH_TOOL Ljava/lang/String;
+	public static final field HANDLE_METADATA_KEY Ljava/lang/String;
+	public static final field INSTANCE Lsaien/magrathea/core/BackgroundToolProtocol;
+	public static final field READ_TOOL Ljava/lang/String;
+	public static final field RESULT_ERROR_CODE_METADATA_KEY Ljava/lang/String;
+	public static final field RESULT_IS_ERROR_METADATA_KEY Ljava/lang/String;
 }
 
 public final class saien/magrathea/core/Citation {
