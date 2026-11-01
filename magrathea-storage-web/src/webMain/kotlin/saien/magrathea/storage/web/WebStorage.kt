@@ -2,7 +2,16 @@ package saien.magrathea.storage.web
 
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.json.Json
+import saien.magrathea.catalog.DefaultSessionCatalogProjector
+import saien.magrathea.catalog.SessionCatalog
+import saien.magrathea.catalog.SessionCatalogException
+import saien.magrathea.catalog.SessionCatalogFailure
+import saien.magrathea.catalog.SessionCatalogMaintenance
+import saien.magrathea.catalog.SessionCatalogMigration
+import saien.magrathea.catalog.SessionCatalogProjector
 import saien.magrathea.core.AgentCheckpoint
 import saien.magrathea.core.AgentCheckpointCodec
 import saien.magrathea.core.AgentPersistence
@@ -22,7 +31,7 @@ internal data class WebDecodedStoredRecord<T>(
 internal fun <T> StoredEnvelopeDecodeResult<T>.toWebStoredRecord(): WebDecodedStoredRecord<T> =
     WebDecodedStoredRecord(value, rewritePayload)
 
-const val MAGRATHEA_WEB_DATABASE_VERSION: Int = 1
+const val MAGRATHEA_WEB_DATABASE_VERSION: Int = 2
 const val DEFAULT_MAGRATHEA_WEB_DATABASE_NAME: String = "magrathea-core"
 
 data class MagratheaWebStoreConfiguration(
@@ -119,8 +128,19 @@ class MagratheaWebStore internal constructor(
     json: Json,
     snapshotDecoder: ((String) -> WebDecodedStoredRecord<AgentSessionSnapshot>)? = null,
     checkpointDecoder: ((String) -> WebDecodedStoredRecord<AgentCheckpoint>)? = null,
+    projector: SessionCatalogProjector = DefaultSessionCatalogProjector(),
 ) {
     private val lifecycle = WebStoreLifecycle()
+    private val indexedCatalog = (database as? IndexedDbRecordDatabase)?.let { WebSessionCatalog(it, lifecycle, projector, json) }
+
+    val catalog: SessionCatalog
+        get() = requireNotNull(indexedCatalog) { "Catalog requires an IndexedDB backend" }
+
+    val maintenance: SessionCatalogMaintenance
+        get() = requireNotNull(indexedCatalog) { "Maintenance requires an IndexedDB backend" }.maintenance
+
+    val migration: SessionCatalogMigration
+        get() = requireNotNull(indexedCatalog) { "Migration requires an IndexedDB backend" }.migration
 
     val persistence: AgentPersistence =
         IndexedDbAgentPersistence(
@@ -130,10 +150,12 @@ class MagratheaWebStore internal constructor(
             json,
             snapshotDecoder,
             checkpointDecoder,
+            indexedCatalog,
         )
 
     suspend fun close() {
         lifecycle.close()
+        indexedCatalog?.closed()
     }
 }
 
@@ -147,19 +169,40 @@ fun createMagratheaWebStore(
     json = json,
 )
 
-private class WebStoreLifecycle {
+fun createMagratheaWebStore(
+    configuration: MagratheaWebStoreConfiguration = MagratheaWebStoreConfiguration(),
+    corruptionReporter: WebStoredRecordCorruptionReporter = WebStoredRecordCorruptionReporter { },
+    json: Json = Json,
+    projector: SessionCatalogProjector,
+): MagratheaWebStore = MagratheaWebStore(
+    database = IndexedDbRecordDatabase(configuration.databaseName),
+    reporter = corruptionReporter,
+    json = json,
+    projector = projector,
+)
+
+internal class WebStoreLifecycle {
     private val mutex = Mutex()
     private var closed = false
 
     suspend inline fun <T> withOpenOperation(crossinline operation: suspend () -> T): T {
         return mutex.withLock {
             if (closed) throw WebStorageException(WebStorageFailure.CLOSED)
-            operation()
+            val result = operation()
+            currentCoroutineContext().ensureActive()
+            result
         }
     }
 
     suspend fun close() {
         mutex.withLock { closed = true }
+    }
+
+    suspend inline fun <T> withCatalogOperation(crossinline operation: suspend () -> T): T = mutex.withLock {
+        if (closed) throw SessionCatalogException(SessionCatalogFailure.CLOSED)
+        val result = operation()
+        currentCoroutineContext().ensureActive()
+        result
     }
 }
 
@@ -170,6 +213,7 @@ private class IndexedDbAgentPersistence(
     json: Json,
     snapshotDecoder: ((String) -> WebDecodedStoredRecord<AgentSessionSnapshot>)?,
     checkpointDecoder: ((String) -> WebDecodedStoredRecord<AgentCheckpoint>)?,
+    private val catalog: WebSessionCatalog?,
 ) : AgentPersistence {
     private val sessionCodec = AgentSessionSnapshotCodec(json)
     private val checkpointCodec = AgentCheckpointCodec(json)
@@ -197,7 +241,9 @@ private class IndexedDbAgentPersistence(
         } catch (_: Throwable) {
             throw WebStorageException(WebStorageFailure.INVALID_RECORD)
         }
-        database.commit(snapshot.sessionId.value, sessionPayload, checkpointPayload)
+        if (catalog == null) database.commit(snapshot.sessionId.value, sessionPayload, checkpointPayload)
+        else catalog.commit(record.snapshot, record.checkpoint, sessionPayload, checkpointPayload)
+        Unit
     }
 
     override suspend fun load(
@@ -227,7 +273,12 @@ private class IndexedDbAgentPersistence(
                     if (snapshot.rewritePayload == null && checkpoint?.rewritePayload == null) {
                         return@withOpenOperation record
                     }
-                    val rewritten = database.rewriteIfUnchanged(
+                    val rewritten = if (catalog != null) catalog.commit(
+                        snapshot.value, checkpoint?.value,
+                        snapshot.rewritePayload ?: requireNotNull(rawRecord.session.payload),
+                        checkpoint?.rewritePayload ?: rawRecord.checkpoint?.payload,
+                        rewriteExpected = rawRecord,
+                    ) else database.rewriteIfUnchanged(
                         listOf(
                             WebPayloadRewriteExpectation(
                                 store = WEB_SESSION_STORE,
@@ -278,11 +329,11 @@ private class IndexedDbAgentPersistence(
     }
 
     override suspend fun deleteSession(sessionId: AgentSessionId) = lifecycle.withOpenOperation {
-        database.delete(sessionId.value)
+        if (catalog == null) database.delete(sessionId.value) else catalog.delete(sessionId)
     }
 
     override suspend fun clear() = lifecycle.withOpenOperation {
-        database.clear()
+        if (catalog == null) database.clear() else catalog.clear()
     }
 
     private fun decodeSession(

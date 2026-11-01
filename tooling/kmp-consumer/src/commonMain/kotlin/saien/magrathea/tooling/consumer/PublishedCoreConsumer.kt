@@ -1,5 +1,6 @@
 package saien.magrathea.tooling.consumer
 
+import saien.magrathea.catalog.DefaultSessionCatalogProjector
 import saien.magrathea.core.AgentSessionId
 import saien.magrathea.core.IdGenerator
 import saien.magrathea.provider.api.HttpRequestSpec
@@ -28,6 +29,11 @@ import saien.magrathea.runtime.search.WebSearchTool
 
 fun publishedCoreSessionId(value: String): AgentSessionId =
     AgentSessionId.create(IdGenerator { value })
+
+fun publishedCatalogFingerprint(): String {
+    val projector = DefaultSessionCatalogProjector()
+    return "${projector.policy.id}:${projector.policy.version}:${projector.normalizeSearch("  CATALOG  ")}"
+}
 
 fun publishedGeminiProviderKey(): String {
     val provider = GeminiProviderAdapter(
@@ -89,6 +95,7 @@ fun publishedAppleLinkFingerprint(): String = listOf(
     publishedGatewayFingerprint(),
     publishedWebSearchFingerprint(),
     publishedExtensionFingerprint(),
+    publishedCatalogFingerprint(),
 ).joinToString("|")
 
 private object NoopPublishedTransport : HttpTransport {

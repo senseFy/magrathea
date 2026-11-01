@@ -360,6 +360,7 @@ fail_contract("release.yml must publish four logical-module shards") unless
     publish_matrix.all? { |entry| entry["name"] && entry["modules"] }
 expected_publish_modules = %w[
   magrathea-core
+  magrathea-session-catalog
   magrathea-provider-api
   magrathea-provider-openai
   magrathea-provider-gemini

@@ -56,6 +56,7 @@ apiValidation {
 
 val sdkPublishProjects = listOf(
     ":magrathea-core",
+    ":magrathea-session-catalog",
     ":magrathea-provider-api",
     ":magrathea-provider-openai",
     ":magrathea-provider-gemini",
@@ -75,6 +76,7 @@ val sdkPublishProjects = listOf(
 
 val sdkKmpMobilePublishProjects = setOf(
     ":magrathea-core",
+    ":magrathea-session-catalog",
     ":magrathea-provider-api",
     ":magrathea-provider-openai",
     ":magrathea-provider-gemini",
@@ -95,6 +97,7 @@ val sdkKmpWebOnlyPublishProjects = setOf(
 val sdkKmpPublishProjects = sdkKmpMobilePublishProjects + sdkKmpWebOnlyPublishProjects
 val sdkKmpWebPublishProjects = setOf(
     ":magrathea-core",
+    ":magrathea-session-catalog",
     ":magrathea-provider-api",
     ":magrathea-runtime",
     ":magrathea-mcp",
@@ -274,6 +277,44 @@ val verifySdkModuleClassification = tasks.register("verifySdkModuleClassificatio
     }
 }
 
+val catalogLayerChecks = listOf(
+    ":magrathea-core",
+    ":magrathea-runtime",
+    ":magrathea-session-catalog",
+    ":magrathea-storage-room",
+    ":magrathea-storage-web",
+).map { path ->
+    val subject = project(path)
+    subject.tasks.register("verifyCatalogProductionDependencies") {
+        group = "verification"
+        doLast {
+            // Resolve on the owning project's task, under its Gradle execution lock.
+            val configuration = if (path == ":magrathea-storage-web") {
+                "jsRuntimeClasspath"
+            } else {
+                "jvmRuntimeClasspath"
+            }
+            val closure = subject.configurations.getByName(configuration)
+                .incoming.resolutionResult.allComponents
+                .mapNotNull { (it.id as? org.gradle.api.artifacts.component.ProjectComponentIdentifier)?.projectPath }
+                .toSet()
+            if (path == ":magrathea-core" || path == ":magrathea-runtime") {
+                check(":magrathea-session-catalog" !in closure) {
+                    "$path must not depend on the optional session catalog"
+                }
+            } else {
+                val unexpected = closure - setOf(path, ":magrathea-core", ":magrathea-session-catalog")
+                check(unexpected.isEmpty()) { "$path has non-harness production dependencies: $unexpected" }
+            }
+        }
+    }
+}
+val verifySessionCatalogLayering = tasks.register("verifySessionCatalogLayering") {
+    group = "verification"
+    description = "Keep catalog/storage independent of Runtime, Chatbot, Providers, and host UI."
+    dependsOn(catalogLayerChecks)
+}
+
 val verifySdkPublicationMetadata = tasks.register("verifySdkPublicationMetadata") {
     group = "verification"
     description = "Generate and validate Maven POM metadata for every published SDK module."
@@ -446,8 +487,8 @@ val writeRollbackCoordinates = tasks.register("writeRollbackCoordinates") {
 
     doLast {
         val coordinates = publishingArtifactCoordinates(null)
-        check(coordinates.size == 88) {
-            "Rollback rehearsal expected 88 publication coordinates, found ${coordinates.size}"
+        check(coordinates.size == 95) {
+            "Rollback rehearsal expected 95 publication coordinates, found ${coordinates.size}"
         }
         check(coordinates.toSet().size == coordinates.size) {
             "Rollback rehearsal contains duplicate publication coordinates"
@@ -570,6 +611,7 @@ val verifySdkQuick = tasks.register("verifySdkQuick") {
     group = "verification"
     description = "Run deterministic tests plus API and serialization compatibility checks."
     dependsOn(verifySdkModuleClassification)
+    dependsOn(verifySessionCatalogLayering)
     dependsOn(verifySdkCompatibility)
     dependsOn(
         verifyPublishSdkContract,
@@ -783,6 +825,7 @@ val stopWebGatewayE2eServer = tasks.register("stopWebGatewayE2eServer") {
 
 val webSamplePublishProjects = listOf(
     ":magrathea-core",
+    ":magrathea-session-catalog",
     ":magrathea-provider-api",
     ":magrathea-gateway-protocol",
     ":magrathea-provider-gateway",
@@ -1430,7 +1473,7 @@ val verifyWebTypeScriptConsumer = tasks.register<Exec>("verifyWebTypeScriptConsu
 
 val verifySdkMavenDistribution = tasks.register<Exec>("verifySdkMavenDistribution") {
     group = "verification"
-    description = "Validate all 88 build-local Maven coordinates and their documentation artifacts."
+    description = "Validate all 95 build-local Maven coordinates and their documentation artifacts."
     dependsOn(sdkPublishProjects.map { "$it:publishAllPublicationsToSdkVerificationRepository" })
     commandLine(
         "/bin/bash",

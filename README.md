@@ -20,10 +20,10 @@ bring their own UI and choose only the integrations they need.
 | Runtime | `magrathea-runtime` |
 | Agent APIs | `magrathea-chatbot`, `magrathea-policy`, `magrathea-mcp` |
 | Providers | `magrathea-provider-gemini`, `magrathea-provider-openai`, `magrathea-provider-anthropic` |
-| Data and credentials | `magrathea-storage-room`, `magrathea-storage-web`, `magrathea-credentials` |
+| Data and credentials | `magrathea-session-catalog`, `magrathea-storage-room`, `magrathea-storage-web`, `magrathea-credentials` |
 | Browser Gateway | `magrathea-gateway-protocol`, `magrathea-provider-gateway`, `magrathea-gateway-server`, `magrathea-web-client` |
 
-These are 16 logical modules. Kotlin Multiplatform publication variants are generated from them,
+These are 17 logical modules. Kotlin Multiplatform publication variants are generated from them,
 and consumers declare the logical module coordinates they need.
 
 ## Capabilities

@@ -117,8 +117,9 @@ use always stays blocking because there is no managed Session to own the work.
   `AgentEvent.BackgroundExecutionSettled` fires when a background execution reaches a terminal
   state.
 - Stores: `InMemoryBackgroundExecutionStore` for tests and non-durable hosts, the Room store
-  (`MagratheaRoomStoreHandle.backgroundStore`, database version 2) for durable hosts, and no
-  background store in `magrathea-storage-web` — browser sessions stay blocking.
+  (`MagratheaRoomStoreHandle.backgroundStore`, introduced in database version 2; version 3 adds
+  recovery indexes) for durable hosts, and no background store in `magrathea-storage-web` — browser
+  sessions stay blocking.
 - Records are persisted under storage schema 9, a one-way migration: earlier SDK versions
   cannot read a Session or background record written under it.
 

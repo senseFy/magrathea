@@ -75,6 +75,14 @@ substitute for the public API or the tests themselves.
 | S-010 | Same-ID leases share one process-local runtime; releasing a lease never stops active work, while delete, clear, and root close fence old leases; committed destructive invalidation survives persistence failure and is reported as typed scope metadata | Managed-session and Chatbot destructive-failure contracts |
 | S-011 | Envelope schema is classified before current-payload decoding; schema 6 is the migration baseline, every later revision requires a contiguous adjacent migration, and incompatible records are surfaced without filtering or rewriting their stored bytes | Core migration registry, Room integration, and browser storage contracts |
 | S-012 | Chatbot Tool activities follow the active execution's journal: a call is `PENDING` until execution is admitted, `RUNNING` once started, and terminal as soon as it completes, while canonical Tool result messages always take precedence and older turns are never rewritten | Chatbot Tool journal contracts |
+| S-013 | The optional catalog and its storage adapters depend on Core contracts, never Runtime, Chatbot, Providers or host UI; Core/Runtime do not depend on the catalog | `verifySessionCatalogLayering` |
+| S-014 | Canonical persistence, initial organization, prepared activity order and derived Room indexes commit or roll back together; ordinary pages read no canonical payloads | `JvmRoomSessionCatalogTest`, `JvmRoomCatalogPagingTest`, `ChatbotCatalogPreparationIntegrationTest` |
+| S-015 | Bounded maintenance retains source bytes and authority, resumes from durable progress, compares canonical/checkpoint versions, and rejects stale generations; failures remain explicit partial coverage | `SessionCatalogContractTest`, `JvmRoomCatalogMaintenanceTest` |
+| S-016 | Recovery discovery reads lightweight facts without restoring or executing; both snapshot and independent background writes update acknowledgement, and regeneration may revoke it | `JvmRoomRecoveryIndexTest` |
+| S-017 | Organization import binds only existing legacy incarnations; typed batch writes and receipts are atomic, completed sources never reimport, and clear invalidates unfinished jobs | `SessionCatalogMigrationContractTest`, `JvmRoomCatalogDataMigrationTest`, `WebCatalogDataMigrationBrowserTest` |
+| S-018 | Attachment-name patches compare incarnation, rowVersion and checkpoint; original envelopes and their references survive normal commits and rebuild, and URI pages have bounded continuation | `SessionCatalogMigrationContractTest`, `JvmRoomCatalogDataMigrationTest`, `WebCatalogDataMigrationBrowserTest` |
+| S-019 | Independent background sources replace only their own references; bounded backfill retains unknown bytes, source coverage prevents unsafe completeness, and source writes/references roll back together | `JvmRoomAttachmentReferenceIndexTest` |
+| S-020 | Attachment-name scan receipts resume bounded physical cursors across reopen, survive catalog rebuild, and reject stale lifecycle/attempt/incarnation/version writes; managed skips allow later versions, unreadable keys remain untouched, and completion atomically verifies the tail | `SessionCatalogMigrationContractTest`, `JvmRoomCatalogDataMigrationTest`, `WebCatalogDataMigrationBrowserTest` |
 
 ## Gateway and Web
 
@@ -92,8 +100,8 @@ substitute for the public API or the tests themselves.
 
 | ID | Invariant | Nearest verification boundary |
 |---|---|---|
-| D-001 | 16 logical SDK modules generate 88 build-local Maven coordinates | Distribution verifier |
-| D-002 | An isolated consumer resolves all 13 mobile KMP modules and links the graph into device and Simulator frameworks | Published-consumer Apple gate |
+| D-001 | 17 logical SDK modules generate 95 build-local Maven coordinates | Distribution verifier |
+| D-002 | An isolated consumer resolves all 14 mobile KMP modules and links the graph into device and Simulator frameworks | Published-consumer Apple gate |
 | D-003 | Public JVM-bearing ABI and serialization fixtures are release gates | API/schema verifier |
 | D-004 | Isolated consumers resolve published JVM, Android, iOS, JS, and Wasm variants | Published-consumer gates |
 | D-005 | Remote Maven publication requires in-memory PGP signing, publication-isolated signature outputs, and immutable coordinates | Publisher and rollback contracts |

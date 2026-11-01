@@ -1,0 +1,1006 @@
+public final class saien/magrathea/catalog/CatalogCoverage : java/lang/Enum {
+	public static final field COMPLETE Lsaien/magrathea/catalog/CatalogCoverage;
+	public static final field INDEXING Lsaien/magrathea/catalog/CatalogCoverage;
+	public static final field PARTIAL Lsaien/magrathea/catalog/CatalogCoverage;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/catalog/CatalogCoverage;
+	public static fun values ()[Lsaien/magrathea/catalog/CatalogCoverage;
+}
+
+public final class saien/magrathea/catalog/CatalogKeyEncoding {
+	public static final field INSTANCE Lsaien/magrathea/catalog/CatalogKeyEncoding;
+	public final fun activityRank (Lsaien/magrathea/catalog/SessionActivityOrder;)Ljava/lang/String;
+	public final fun ascendingLong (J)Ljava/lang/String;
+	public final fun collectionKey (Ljava/lang/String;)Ljava/lang/String;
+	public final fun descendingLong (J)Ljava/lang/String;
+	public final fun stringKey (Ljava/lang/String;)Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/CatalogPageDirection : java/lang/Enum {
+	public static final field AFTER Lsaien/magrathea/catalog/CatalogPageDirection;
+	public static final field BEFORE Lsaien/magrathea/catalog/CatalogPageDirection;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/catalog/CatalogPageDirection;
+	public static fun values ()[Lsaien/magrathea/catalog/CatalogPageDirection;
+}
+
+public final class saien/magrathea/catalog/DefaultSessionCatalogProjector : saien/magrathea/catalog/SessionCatalogProjector {
+	public fun <init> ()V
+	public fun getActivityMode ()Lsaien/magrathea/catalog/SessionActivityMode;
+	public fun getPolicy ()Lsaien/magrathea/catalog/SessionCatalogPolicy;
+	public fun normalizeSearch (Ljava/lang/String;)Ljava/lang/String;
+	public fun project (Lsaien/magrathea/core/AgentSessionSnapshot;)Lsaien/magrathea/catalog/SessionCatalogProjection;
+}
+
+public final class saien/magrathea/catalog/InMemorySessionCatalogStore {
+	public fun <init> ()V
+	public fun <init> (Lsaien/magrathea/catalog/SessionCatalogProjector;)V
+	public synthetic fun <init> (Lsaien/magrathea/catalog/SessionCatalogProjector;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getCatalog ()Lsaien/magrathea/catalog/SessionCatalog;
+	public final fun getMaintenance ()Lsaien/magrathea/catalog/SessionCatalogMaintenance;
+	public final fun getMigration ()Lsaien/magrathea/catalog/SessionCatalogMigration;
+	public final fun getPersistence ()Lsaien/magrathea/core/AgentPersistence;
+	public final fun rebuild (Lsaien/magrathea/catalog/SessionCatalogProjector;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun rebuild$default (Lsaien/magrathea/catalog/InMemorySessionCatalogStore;Lsaien/magrathea/catalog/SessionCatalogProjector;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/catalog/LegacySessionOrganization {
+	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/catalog/SessionOrganization;)V
+	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun component2 ()Lsaien/magrathea/catalog/SessionOrganization;
+	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/catalog/SessionOrganization;)Lsaien/magrathea/catalog/LegacySessionOrganization;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/LegacySessionOrganization;Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/catalog/SessionOrganization;ILjava/lang/Object;)Lsaien/magrathea/catalog/LegacySessionOrganization;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getOrganization ()Lsaien/magrathea/catalog/SessionOrganization;
+	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/OrganizationImportReceipt {
+	public fun <init> (Lsaien/magrathea/catalog/OrganizationImportToken;JJJZZ)V
+	public synthetic fun <init> (Lsaien/magrathea/catalog/OrganizationImportToken;JJJZZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lsaien/magrathea/catalog/OrganizationImportToken;
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun component5 ()Z
+	public final fun component6 ()Z
+	public final fun copy (Lsaien/magrathea/catalog/OrganizationImportToken;JJJZZ)Lsaien/magrathea/catalog/OrganizationImportReceipt;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/OrganizationImportReceipt;Lsaien/magrathea/catalog/OrganizationImportToken;JJJZZILjava/lang/Object;)Lsaien/magrathea/catalog/OrganizationImportReceipt;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getComplete ()Z
+	public final fun getImported ()J
+	public final fun getInvalidated ()Z
+	public final fun getNextBatch ()J
+	public final fun getSkipped ()J
+	public final fun getToken ()Lsaien/magrathea/catalog/OrganizationImportToken;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/OrganizationImportToken {
+	public fun <init> (Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;)Lsaien/magrathea/catalog/OrganizationImportToken;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/OrganizationImportToken;Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/catalog/OrganizationImportToken;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFingerprint ()Ljava/lang/String;
+	public final fun getLifecycle ()J
+	public final fun getSourceId ()Ljava/lang/String;
+	public final fun getStoreId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class saien/magrathea/catalog/PreparedActivityIntent {
+}
+
+public final class saien/magrathea/catalog/PreparedActivityIntent$Advance : saien/magrathea/catalog/PreparedActivityIntent {
+	public fun <init> (Lsaien/magrathea/catalog/SessionActivityTicket;)V
+	public final fun component1 ()Lsaien/magrathea/catalog/SessionActivityTicket;
+	public final fun copy (Lsaien/magrathea/catalog/SessionActivityTicket;)Lsaien/magrathea/catalog/PreparedActivityIntent$Advance;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/PreparedActivityIntent$Advance;Lsaien/magrathea/catalog/SessionActivityTicket;ILjava/lang/Object;)Lsaien/magrathea/catalog/PreparedActivityIntent$Advance;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTicket ()Lsaien/magrathea/catalog/SessionActivityTicket;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/PreparedActivityIntent$Preserve : saien/magrathea/catalog/PreparedActivityIntent {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lsaien/magrathea/catalog/PreparedActivityIntent$Preserve;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/PreparedActivityIntent$Preserve;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/catalog/PreparedActivityIntent$Preserve;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTargetActivityIdentity ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/PreparedSessionInitialization {
+	public fun <init> (Lsaien/magrathea/catalog/SessionIdentity;Lsaien/magrathea/catalog/SessionOrganization;)V
+	public final fun component1 ()Lsaien/magrathea/catalog/SessionIdentity;
+	public final fun component2 ()Lsaien/magrathea/catalog/SessionOrganization;
+	public final fun copy (Lsaien/magrathea/catalog/SessionIdentity;Lsaien/magrathea/catalog/SessionOrganization;)Lsaien/magrathea/catalog/PreparedSessionInitialization;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/PreparedSessionInitialization;Lsaien/magrathea/catalog/SessionIdentity;Lsaien/magrathea/catalog/SessionOrganization;ILjava/lang/Object;)Lsaien/magrathea/catalog/PreparedSessionInitialization;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getIdentity ()Lsaien/magrathea/catalog/SessionIdentity;
+	public final fun getInitialOrganization ()Lsaien/magrathea/catalog/SessionOrganization;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionActivityFact {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/catalog/SessionActivityOrder;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Lsaien/magrathea/catalog/SessionActivityOrder;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/catalog/SessionActivityOrder;)Lsaien/magrathea/catalog/SessionActivityFact;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionActivityFact;Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/catalog/SessionActivityOrder;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionActivityFact;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getLastAcceptedIdentity ()Ljava/lang/String;
+	public final fun getObservedIdentity ()Ljava/lang/String;
+	public final fun getOrder ()Lsaien/magrathea/catalog/SessionActivityOrder;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionActivityMode : java/lang/Enum {
+	public static final field CANONICAL_TIME Lsaien/magrathea/catalog/SessionActivityMode;
+	public static final field PREPARED Lsaien/magrathea/catalog/SessionActivityMode;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/catalog/SessionActivityMode;
+	public static fun values ()[Lsaien/magrathea/catalog/SessionActivityMode;
+}
+
+public abstract interface class saien/magrathea/catalog/SessionActivityOrder {
+}
+
+public final class saien/magrathea/catalog/SessionActivityOrder$Accepted : saien/magrathea/catalog/SessionActivityOrder {
+	public fun <init> (J)V
+	public final fun component1 ()J
+	public final fun copy (J)Lsaien/magrathea/catalog/SessionActivityOrder$Accepted;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionActivityOrder$Accepted;JILjava/lang/Object;)Lsaien/magrathea/catalog/SessionActivityOrder$Accepted;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSequence ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionActivityOrder$Legacy : saien/magrathea/catalog/SessionActivityOrder {
+	public fun <init> (J)V
+	public final fun component1 ()J
+	public final fun copy (J)Lsaien/magrathea/catalog/SessionActivityOrder$Legacy;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionActivityOrder$Legacy;JILjava/lang/Object;)Lsaien/magrathea/catalog/SessionActivityOrder$Legacy;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTimestampEpochMs ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionActivityTicket {
+	public fun <init> (Lsaien/magrathea/catalog/SessionIdentity;Ljava/lang/String;J)V
+	public final fun component1 ()Lsaien/magrathea/catalog/SessionIdentity;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()J
+	public final fun copy (Lsaien/magrathea/catalog/SessionIdentity;Ljava/lang/String;J)Lsaien/magrathea/catalog/SessionActivityTicket;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionActivityTicket;Lsaien/magrathea/catalog/SessionIdentity;Ljava/lang/String;JILjava/lang/Object;)Lsaien/magrathea/catalog/SessionActivityTicket;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getActivityIdentity ()Ljava/lang/String;
+	public final fun getIdentity ()Lsaien/magrathea/catalog/SessionIdentity;
+	public final fun getSequence ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionAttachmentName {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/catalog/SessionAttachmentName;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionAttachmentName;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionAttachmentName;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFileName ()Ljava/lang/String;
+	public final fun getUri ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionAttachmentNameBackup {
+	public fun <init> (Lsaien/magrathea/catalog/SessionIdentity;JLjava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Lsaien/magrathea/catalog/SessionIdentity;
+	public final fun component2 ()J
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Lsaien/magrathea/catalog/SessionIdentity;JLjava/lang/String;Ljava/lang/String;)Lsaien/magrathea/catalog/SessionAttachmentNameBackup;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionAttachmentNameBackup;Lsaien/magrathea/catalog/SessionIdentity;JLjava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionAttachmentNameBackup;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCheckpointPayload ()Ljava/lang/String;
+	public final fun getIdentity ()Lsaien/magrathea/catalog/SessionIdentity;
+	public final fun getRowVersion ()J
+	public final fun getSnapshotPayload ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionAttachmentNamePage {
+	public fun <init> (Ljava/util/List;Lsaien/magrathea/core/AgentSessionId;ZLjava/util/List;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/util/List;Lsaien/magrathea/core/AgentSessionId;ZLjava/util/List;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun component3 ()Z
+	public final fun component4 ()Ljava/util/List;
+	public final fun component5 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;Lsaien/magrathea/core/AgentSessionId;ZLjava/util/List;Ljava/util/List;)Lsaien/magrathea/catalog/SessionAttachmentNamePage;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionAttachmentNamePage;Ljava/util/List;Lsaien/magrathea/core/AgentSessionId;ZLjava/util/List;Ljava/util/List;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionAttachmentNamePage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEntries ()Ljava/util/List;
+	public final fun getExhausted ()Z
+	public final fun getIssues ()Ljava/util/List;
+	public final fun getNextSessionId ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun getSources ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionAttachmentNamePatchResult {
+	public fun <init> (Lsaien/magrathea/catalog/SessionIdentity;JZ)V
+	public final fun component1 ()Lsaien/magrathea/catalog/SessionIdentity;
+	public final fun component2 ()J
+	public final fun component3 ()Z
+	public final fun copy (Lsaien/magrathea/catalog/SessionIdentity;JZ)Lsaien/magrathea/catalog/SessionAttachmentNamePatchResult;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionAttachmentNamePatchResult;Lsaien/magrathea/catalog/SessionIdentity;JZILjava/lang/Object;)Lsaien/magrathea/catalog/SessionAttachmentNamePatchResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getChanged ()Z
+	public final fun getIdentity ()Lsaien/magrathea/catalog/SessionIdentity;
+	public final fun getRowVersion ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionAttachmentNameScanOutcome : java/lang/Enum {
+	public static final field FAILED Lsaien/magrathea/catalog/SessionAttachmentNameScanOutcome;
+	public static final field PROCESSED Lsaien/magrathea/catalog/SessionAttachmentNameScanOutcome;
+	public static final field SKIPPED_MANAGED Lsaien/magrathea/catalog/SessionAttachmentNameScanOutcome;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/catalog/SessionAttachmentNameScanOutcome;
+	public static fun values ()[Lsaien/magrathea/catalog/SessionAttachmentNameScanOutcome;
+}
+
+public final class saien/magrathea/catalog/SessionAttachmentNameScanProgress {
+	public fun <init> (Lsaien/magrathea/catalog/SessionAttachmentNameScanToken;Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;JJZ)V
+	public synthetic fun <init> (Lsaien/magrathea/catalog/SessionAttachmentNameScanToken;Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;JJZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lsaien/magrathea/catalog/SessionAttachmentNameScanToken;
+	public final fun component2 ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()J
+	public final fun component5 ()J
+	public final fun component6 ()Z
+	public final fun copy (Lsaien/magrathea/catalog/SessionAttachmentNameScanToken;Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;JJZ)Lsaien/magrathea/catalog/SessionAttachmentNameScanProgress;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionAttachmentNameScanProgress;Lsaien/magrathea/catalog/SessionAttachmentNameScanToken;Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;JJZILjava/lang/Object;)Lsaien/magrathea/catalog/SessionAttachmentNameScanProgress;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAfterSessionId ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun getComplete ()Z
+	public final fun getCursor ()Ljava/lang/String;
+	public final fun getFailed ()J
+	public final fun getProcessed ()J
+	public final fun getToken ()Lsaien/magrathea/catalog/SessionAttachmentNameScanToken;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionAttachmentNameScanToken {
+	public fun <init> (Ljava/lang/String;JJLjava/lang/String;I)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()I
+	public final fun copy (Ljava/lang/String;JJLjava/lang/String;I)Lsaien/magrathea/catalog/SessionAttachmentNameScanToken;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionAttachmentNameScanToken;Ljava/lang/String;JJLjava/lang/String;IILjava/lang/Object;)Lsaien/magrathea/catalog/SessionAttachmentNameScanToken;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getGeneration ()J
+	public final fun getLifecycle ()J
+	public final fun getSourceId ()Ljava/lang/String;
+	public final fun getSourceVersion ()I
+	public final fun getStoreId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionAttachmentNameSource {
+	public fun <init> (Lsaien/magrathea/catalog/SessionIdentity;Ljava/lang/Long;Ljava/lang/String;)V
+	public final fun component1 ()Lsaien/magrathea/catalog/SessionIdentity;
+	public final fun component2 ()Ljava/lang/Long;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Lsaien/magrathea/catalog/SessionIdentity;Ljava/lang/Long;Ljava/lang/String;)Lsaien/magrathea/catalog/SessionAttachmentNameSource;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionAttachmentNameSource;Lsaien/magrathea/catalog/SessionIdentity;Ljava/lang/Long;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionAttachmentNameSource;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCursor ()Ljava/lang/String;
+	public final fun getIdentity ()Lsaien/magrathea/catalog/SessionIdentity;
+	public final fun getRowVersion ()Ljava/lang/Long;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionAttachmentNameTarget {
+	public fun <init> (Lsaien/magrathea/catalog/SessionIdentity;JLjava/util/Set;Ljava/lang/String;)V
+	public synthetic fun <init> (Lsaien/magrathea/catalog/SessionIdentity;JLjava/util/Set;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lsaien/magrathea/catalog/SessionIdentity;
+	public final fun component2 ()J
+	public final fun component3 ()Ljava/util/Set;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Lsaien/magrathea/catalog/SessionIdentity;JLjava/util/Set;Ljava/lang/String;)Lsaien/magrathea/catalog/SessionAttachmentNameTarget;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionAttachmentNameTarget;Lsaien/magrathea/catalog/SessionIdentity;JLjava/util/Set;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionAttachmentNameTarget;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getIdentity ()Lsaien/magrathea/catalog/SessionIdentity;
+	public final fun getMissingUris ()Ljava/util/Set;
+	public final fun getNextUri ()Ljava/lang/String;
+	public final fun getRowVersion ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionAttachmentReferences {
+	public fun <init> (Ljava/util/Set;Lsaien/magrathea/catalog/CatalogCoverage;)V
+	public final fun component1 ()Ljava/util/Set;
+	public final fun component2 ()Lsaien/magrathea/catalog/CatalogCoverage;
+	public final fun copy (Ljava/util/Set;Lsaien/magrathea/catalog/CatalogCoverage;)Lsaien/magrathea/catalog/SessionAttachmentReferences;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionAttachmentReferences;Ljava/util/Set;Lsaien/magrathea/catalog/CatalogCoverage;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionAttachmentReferences;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCoverage ()Lsaien/magrathea/catalog/CatalogCoverage;
+	public final fun getReferencedUris ()Ljava/util/Set;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class saien/magrathea/catalog/SessionCatalog {
+	public abstract fun collection (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun createCollection (Lsaien/magrathea/catalog/SessionCollection;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun deleteCollection (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun exists (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun organization (Lsaien/magrathea/catalog/SessionIdentity;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun pageCollections (Lsaien/magrathea/catalog/SessionCollectionQuery;Lsaien/magrathea/catalog/SessionCollectionCursor;Lsaien/magrathea/catalog/CatalogPageDirection;ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun pageCollections$default (Lsaien/magrathea/catalog/SessionCatalog;Lsaien/magrathea/catalog/SessionCollectionQuery;Lsaien/magrathea/catalog/SessionCollectionCursor;Lsaien/magrathea/catalog/CatalogPageDirection;ILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun pageRecoveryCandidates (Lsaien/magrathea/catalog/SessionRecoveryCursor;ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun pageRecoveryCandidates$default (Lsaien/magrathea/catalog/SessionCatalog;Lsaien/magrathea/catalog/SessionRecoveryCursor;ILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun pageSessions (Lsaien/magrathea/catalog/SessionCatalogQuery;Lsaien/magrathea/catalog/SessionCatalogCursor;Lsaien/magrathea/catalog/CatalogPageDirection;ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun pageSessions$default (Lsaien/magrathea/catalog/SessionCatalog;Lsaien/magrathea/catalog/SessionCatalogQuery;Lsaien/magrathea/catalog/SessionCatalogCursor;Lsaien/magrathea/catalog/CatalogPageDirection;ILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun prepareActivity (Lsaien/magrathea/catalog/SessionIdentity;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun prepareNewSession (Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Lsaien/magrathea/catalog/SessionOrganization;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun prepareNewSession$default (Lsaien/magrathea/catalog/SessionCatalog;Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Lsaien/magrathea/catalog/SessionOrganization;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun preparePreservedActivity (Lsaien/magrathea/catalog/SessionIdentity;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun referencedUris (Ljava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun releaseActivity (Lsaien/magrathea/catalog/SessionIdentity;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun releasePreparation (Lsaien/magrathea/catalog/SessionIdentity;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun renameCollection (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun sessionHeader (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun sessionIdentity (Lsaien/magrathea/core/AgentSessionId;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun setTitleIfAbsent (Lsaien/magrathea/catalog/SessionIdentity;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun state (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun updateOrganization (Lsaien/magrathea/catalog/SessionIdentity;Lsaien/magrathea/catalog/SessionOrganizationMutation;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun windowAround (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/catalog/SessionCatalogQuery;ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/catalog/SessionCatalog$DefaultImpls {
+	public static synthetic fun pageCollections$default (Lsaien/magrathea/catalog/SessionCatalog;Lsaien/magrathea/catalog/SessionCollectionQuery;Lsaien/magrathea/catalog/SessionCollectionCursor;Lsaien/magrathea/catalog/CatalogPageDirection;ILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static synthetic fun pageRecoveryCandidates$default (Lsaien/magrathea/catalog/SessionCatalog;Lsaien/magrathea/catalog/SessionRecoveryCursor;ILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static synthetic fun pageSessions$default (Lsaien/magrathea/catalog/SessionCatalog;Lsaien/magrathea/catalog/SessionCatalogQuery;Lsaien/magrathea/catalog/SessionCatalogCursor;Lsaien/magrathea/catalog/CatalogPageDirection;ILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static synthetic fun prepareNewSession$default (Lsaien/magrathea/catalog/SessionCatalog;Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Lsaien/magrathea/catalog/SessionOrganization;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogCursor {
+	public fun <init> (Lsaien/magrathea/catalog/SessionCatalogQuery;Lsaien/magrathea/catalog/SessionCatalogPolicy;JLsaien/magrathea/catalog/SessionCatalogSortKey;)V
+	public final fun component1 ()Lsaien/magrathea/catalog/SessionCatalogQuery;
+	public final fun component2 ()Lsaien/magrathea/catalog/SessionCatalogPolicy;
+	public final fun component3 ()J
+	public final fun component4 ()Lsaien/magrathea/catalog/SessionCatalogSortKey;
+	public final fun copy (Lsaien/magrathea/catalog/SessionCatalogQuery;Lsaien/magrathea/catalog/SessionCatalogPolicy;JLsaien/magrathea/catalog/SessionCatalogSortKey;)Lsaien/magrathea/catalog/SessionCatalogCursor;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionCatalogCursor;Lsaien/magrathea/catalog/SessionCatalogQuery;Lsaien/magrathea/catalog/SessionCatalogPolicy;JLsaien/magrathea/catalog/SessionCatalogSortKey;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionCatalogCursor;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getGeneration ()J
+	public final fun getKey ()Lsaien/magrathea/catalog/SessionCatalogSortKey;
+	public final fun getPolicy ()Lsaien/magrathea/catalog/SessionCatalogPolicy;
+	public final fun getQuery ()Lsaien/magrathea/catalog/SessionCatalogQuery;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogEntry {
+	public fun <init> (Lsaien/magrathea/catalog/SessionCatalogHeader;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Lsaien/magrathea/catalog/SessionCatalogHeader;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Lsaien/magrathea/catalog/SessionCatalogHeader;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/catalog/SessionCatalogEntry;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionCatalogEntry;Lsaien/magrathea/catalog/SessionCatalogHeader;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionCatalogEntry;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHeader ()Lsaien/magrathea/catalog/SessionCatalogHeader;
+	public final fun getNormalizedModelName ()Ljava/lang/String;
+	public final fun getNormalizedPreview ()Ljava/lang/String;
+	public final fun getNormalizedTitle ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun matches (Lsaien/magrathea/catalog/SessionCatalogQuery;)Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogException : java/lang/IllegalStateException {
+	public fun <init> (Lsaien/magrathea/catalog/SessionCatalogFailure;)V
+	public final fun getFailure ()Lsaien/magrathea/catalog/SessionCatalogFailure;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogFailure : java/lang/Enum {
+	public static final field ACTIVITY_NOT_PREPARED Lsaien/magrathea/catalog/SessionCatalogFailure;
+	public static final field CLOSED Lsaien/magrathea/catalog/SessionCatalogFailure;
+	public static final field COLLECTION_CONFLICT Lsaien/magrathea/catalog/SessionCatalogFailure;
+	public static final field COLLECTION_NOT_FOUND Lsaien/magrathea/catalog/SessionCatalogFailure;
+	public static final field COUNTER_EXHAUSTED Lsaien/magrathea/catalog/SessionCatalogFailure;
+	public static final field INITIALIZATION_CONFLICT Lsaien/magrathea/catalog/SessionCatalogFailure;
+	public static final field INVALID_CURSOR Lsaien/magrathea/catalog/SessionCatalogFailure;
+	public static final field MAINTENANCE_PROJECTION_FAILED Lsaien/magrathea/catalog/SessionCatalogFailure;
+	public static final field MIGRATION_CONFLICT Lsaien/magrathea/catalog/SessionCatalogFailure;
+	public static final field POLICY_MISMATCH Lsaien/magrathea/catalog/SessionCatalogFailure;
+	public static final field SESSION_NOT_FOUND Lsaien/magrathea/catalog/SessionCatalogFailure;
+	public static final field STALE_ACTIVITY Lsaien/magrathea/catalog/SessionCatalogFailure;
+	public static final field STALE_IDENTITY Lsaien/magrathea/catalog/SessionCatalogFailure;
+	public static final field STALE_MAINTENANCE Lsaien/magrathea/catalog/SessionCatalogFailure;
+	public static final field STALE_MIGRATION Lsaien/magrathea/catalog/SessionCatalogFailure;
+	public static final field UNREADABLE_MIGRATION_SOURCE Lsaien/magrathea/catalog/SessionCatalogFailure;
+	public static final field UNSUPPORTED_QUERY Lsaien/magrathea/catalog/SessionCatalogFailure;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/catalog/SessionCatalogFailure;
+	public static fun values ()[Lsaien/magrathea/catalog/SessionCatalogFailure;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogHeader {
+	public fun <init> (Lsaien/magrathea/catalog/SessionIdentity;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/core/AgentStatus;JLsaien/magrathea/catalog/SessionActivityFact;Ljava/lang/String;Ljava/lang/Long;)V
+	public final fun component1 ()Lsaien/magrathea/catalog/SessionIdentity;
+	public final fun component10 ()Lsaien/magrathea/catalog/SessionActivityFact;
+	public final fun component11 ()Ljava/lang/String;
+	public final fun component12 ()Ljava/lang/Long;
+	public final fun component2 ()J
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/lang/String;
+	public final fun component7 ()Ljava/lang/String;
+	public final fun component8 ()Lsaien/magrathea/core/AgentStatus;
+	public final fun component9 ()J
+	public final fun copy (Lsaien/magrathea/catalog/SessionIdentity;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/core/AgentStatus;JLsaien/magrathea/catalog/SessionActivityFact;Ljava/lang/String;Ljava/lang/Long;)Lsaien/magrathea/catalog/SessionCatalogHeader;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionCatalogHeader;Lsaien/magrathea/catalog/SessionIdentity;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lsaien/magrathea/core/AgentStatus;JLsaien/magrathea/catalog/SessionActivityFact;Ljava/lang/String;Ljava/lang/Long;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionCatalogHeader;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getActivity ()Lsaien/magrathea/catalog/SessionActivityFact;
+	public final fun getActivityAtEpochMs ()J
+	public final fun getCollectionId ()Ljava/lang/String;
+	public final fun getIdentity ()Lsaien/magrathea/catalog/SessionIdentity;
+	public final fun getLabel ()Ljava/lang/String;
+	public final fun getModelDisplayName ()Ljava/lang/String;
+	public final fun getModelId ()Ljava/lang/String;
+	public final fun getPinnedAtEpochMs ()Ljava/lang/Long;
+	public final fun getPreviewExcerpt ()Ljava/lang/String;
+	public final fun getProviderId ()Ljava/lang/String;
+	public final fun getRowVersion ()J
+	public final fun getStatus ()Lsaien/magrathea/core/AgentStatus;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class saien/magrathea/catalog/SessionCatalogMaintenance {
+	public abstract fun rebuild (Lsaien/magrathea/catalog/SessionCatalogPolicy;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun runBatch (ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun runBatch$default (Lsaien/magrathea/catalog/SessionCatalogMaintenance;ILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun status (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogMaintenance$DefaultImpls {
+	public static synthetic fun runBatch$default (Lsaien/magrathea/catalog/SessionCatalogMaintenance;ILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogMaintenanceBatch {
+	public fun <init> (Lsaien/magrathea/catalog/SessionCatalogMaintenanceProgress;IILjava/util/List;)V
+	public final fun component1 ()Lsaien/magrathea/catalog/SessionCatalogMaintenanceProgress;
+	public final fun component2 ()I
+	public final fun component3 ()I
+	public final fun component4 ()Ljava/util/List;
+	public final fun copy (Lsaien/magrathea/catalog/SessionCatalogMaintenanceProgress;IILjava/util/List;)Lsaien/magrathea/catalog/SessionCatalogMaintenanceBatch;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionCatalogMaintenanceBatch;Lsaien/magrathea/catalog/SessionCatalogMaintenanceProgress;IILjava/util/List;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionCatalogMaintenanceBatch;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getIndexed ()I
+	public final fun getIssues ()Ljava/util/List;
+	public final fun getProgress ()Lsaien/magrathea/catalog/SessionCatalogMaintenanceProgress;
+	public final fun getSkipped ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogMaintenanceIssue {
+	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/catalog/SessionCatalogMaintenanceIssueKind;)V
+	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun component2 ()Lsaien/magrathea/catalog/SessionCatalogMaintenanceIssueKind;
+	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/catalog/SessionCatalogMaintenanceIssueKind;)Lsaien/magrathea/catalog/SessionCatalogMaintenanceIssue;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionCatalogMaintenanceIssue;Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/catalog/SessionCatalogMaintenanceIssueKind;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionCatalogMaintenanceIssue;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getKind ()Lsaien/magrathea/catalog/SessionCatalogMaintenanceIssueKind;
+	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogMaintenanceIssueKind : java/lang/Enum {
+	public static final field INCOMPATIBLE_SCHEMA Lsaien/magrathea/catalog/SessionCatalogMaintenanceIssueKind;
+	public static final field PROJECTION_FAILED Lsaien/magrathea/catalog/SessionCatalogMaintenanceIssueKind;
+	public static final field UNREADABLE Lsaien/magrathea/catalog/SessionCatalogMaintenanceIssueKind;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/catalog/SessionCatalogMaintenanceIssueKind;
+	public static fun values ()[Lsaien/magrathea/catalog/SessionCatalogMaintenanceIssueKind;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogMaintenanceKt {
+	public static final field MAX_CATALOG_MAINTENANCE_BATCH_SIZE I
+}
+
+public final class saien/magrathea/catalog/SessionCatalogMaintenanceProgress {
+	public fun <init> (Lsaien/magrathea/catalog/SessionCatalogState;Lsaien/magrathea/core/AgentSessionId;JJZ)V
+	public final fun component1 ()Lsaien/magrathea/catalog/SessionCatalogState;
+	public final fun component2 ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun component5 ()Z
+	public final fun copy (Lsaien/magrathea/catalog/SessionCatalogState;Lsaien/magrathea/core/AgentSessionId;JJZ)Lsaien/magrathea/catalog/SessionCatalogMaintenanceProgress;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionCatalogMaintenanceProgress;Lsaien/magrathea/catalog/SessionCatalogState;Lsaien/magrathea/core/AgentSessionId;JJZILjava/lang/Object;)Lsaien/magrathea/catalog/SessionCatalogMaintenanceProgress;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAfterSessionId ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun getComplete ()Z
+	public final fun getFailed ()J
+	public final fun getProcessed ()J
+	public final fun getState ()Lsaien/magrathea/catalog/SessionCatalogState;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class saien/magrathea/catalog/SessionCatalogMigration {
+	public abstract fun advanceAttachmentNameScan (Lsaien/magrathea/catalog/SessionAttachmentNameScanProgress;Lsaien/magrathea/catalog/SessionAttachmentNameSource;Lsaien/magrathea/catalog/SessionAttachmentNameScanOutcome;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun advanceAttachmentNameScan$default (Lsaien/magrathea/catalog/SessionCatalogMigration;Lsaien/magrathea/catalog/SessionAttachmentNameScanProgress;Lsaien/magrathea/catalog/SessionAttachmentNameSource;Lsaien/magrathea/catalog/SessionAttachmentNameScanOutcome;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun attachmentNameBackup (Lsaien/magrathea/catalog/SessionIdentity;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun attachmentNameScanPage (Lsaien/magrathea/catalog/SessionAttachmentNameScanProgress;ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun attachmentNameScanPage$default (Lsaien/magrathea/catalog/SessionCatalogMigration;Lsaien/magrathea/catalog/SessionAttachmentNameScanProgress;ILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun attachmentNameTarget (Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun attachmentNameTarget$default (Lsaien/magrathea/catalog/SessionCatalogMigration;Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun attachmentNameTargets (Lsaien/magrathea/core/AgentSessionId;ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun attachmentNameTargets$default (Lsaien/magrathea/catalog/SessionCatalogMigration;Lsaien/magrathea/core/AgentSessionId;ILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun beginAttachmentNameScan (Ljava/lang/String;ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun beginOrganizationImport (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun finishAttachmentNameScan (Lsaien/magrathea/catalog/SessionAttachmentNameScanProgress;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun importOrganizationBatch (Lsaien/magrathea/catalog/OrganizationImportToken;JLjava/util/List;Ljava/util/List;ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun importOrganizationBatch$default (Lsaien/magrathea/catalog/SessionCatalogMigration;Lsaien/magrathea/catalog/OrganizationImportToken;JLjava/util/List;Ljava/util/List;ZLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun organizationImportAllowed (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun organizationImportStatus (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun patchAttachmentNames (Lsaien/magrathea/catalog/SessionAttachmentNameTarget;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun restartAttachmentNameScan (Lsaien/magrathea/catalog/SessionAttachmentNameScanProgress;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun restoreAttachmentNameBackup (Lsaien/magrathea/catalog/SessionAttachmentNameTarget;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogMigration$DefaultImpls {
+	public static synthetic fun advanceAttachmentNameScan$default (Lsaien/magrathea/catalog/SessionCatalogMigration;Lsaien/magrathea/catalog/SessionAttachmentNameScanProgress;Lsaien/magrathea/catalog/SessionAttachmentNameSource;Lsaien/magrathea/catalog/SessionAttachmentNameScanOutcome;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static synthetic fun attachmentNameScanPage$default (Lsaien/magrathea/catalog/SessionCatalogMigration;Lsaien/magrathea/catalog/SessionAttachmentNameScanProgress;ILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static synthetic fun attachmentNameTarget$default (Lsaien/magrathea/catalog/SessionCatalogMigration;Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static synthetic fun attachmentNameTargets$default (Lsaien/magrathea/catalog/SessionCatalogMigration;Lsaien/magrathea/core/AgentSessionId;ILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static synthetic fun importOrganizationBatch$default (Lsaien/magrathea/catalog/SessionCatalogMigration;Lsaien/magrathea/catalog/OrganizationImportToken;JLjava/util/List;Ljava/util/List;ZLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogMigrationEncoding {
+	public static final field INSTANCE Lsaien/magrathea/catalog/SessionCatalogMigrationEncoding;
+	public final fun backup (Ljava/lang/String;)Lsaien/magrathea/catalog/SessionAttachmentNameBackup;
+	public final fun backup (Lsaien/magrathea/catalog/SessionAttachmentNameBackup;)Ljava/lang/String;
+	public final fun batch (Ljava/util/List;Ljava/util/List;Z)Ljava/lang/String;
+	public final fun receipt (Ljava/lang/String;)Lsaien/magrathea/catalog/OrganizationImportReceipt;
+	public final fun receipt (Lsaien/magrathea/catalog/OrganizationImportReceipt;)Ljava/lang/String;
+	public final fun scanProgress (Ljava/lang/String;)Lsaien/magrathea/catalog/SessionAttachmentNameScanProgress;
+	public final fun scanProgress (Lsaien/magrathea/catalog/SessionAttachmentNameScanProgress;)Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogMigrationKt {
+	public static final field MAX_CATALOG_MIGRATION_BATCH_SIZE I
+}
+
+public final class saien/magrathea/catalog/SessionCatalogMigrationSemanticsKt {
+	public static final fun advanceAttachmentNameScanProgress (Lsaien/magrathea/catalog/SessionAttachmentNameScanProgress;Lsaien/magrathea/catalog/SessionAttachmentNameSource;Lsaien/magrathea/catalog/SessionAttachmentNameScanOutcome;)Lsaien/magrathea/catalog/SessionAttachmentNameScanProgress;
+	public static final fun attachmentNameBackupUris (Lsaien/magrathea/catalog/SessionAttachmentNameBackup;Lkotlinx/serialization/json/Json;)Ljava/util/Set;
+	public static synthetic fun attachmentNameBackupUris$default (Lsaien/magrathea/catalog/SessionAttachmentNameBackup;Lkotlinx/serialization/json/Json;ILjava/lang/Object;)Ljava/util/Set;
+	public static final fun attachmentNameMap (Ljava/util/List;)Ljava/util/Map;
+	public static final fun attachmentNameSessionCursor (Lsaien/magrathea/core/AgentSessionId;)Ljava/lang/String;
+	public static final fun fillAttachmentNames (Lsaien/magrathea/core/AgentPersistenceRecord;Ljava/util/Map;)Lsaien/magrathea/core/AgentPersistenceRecord;
+	public static final fun missingAttachmentNameUris (Lsaien/magrathea/core/AgentPersistenceRecord;)Ljava/util/Set;
+	public static final fun sessionAttachmentNameTarget (Lsaien/magrathea/catalog/SessionIdentity;JLsaien/magrathea/core/AgentPersistenceRecord;Ljava/lang/String;)Lsaien/magrathea/catalog/SessionAttachmentNameTarget;
+	public static synthetic fun sessionAttachmentNameTarget$default (Lsaien/magrathea/catalog/SessionIdentity;JLsaien/magrathea/core/AgentPersistenceRecord;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionAttachmentNameTarget;
+	public static final fun validateOrganizationImportBatch (Ljava/util/List;Ljava/util/List;)V
+}
+
+public final class saien/magrathea/catalog/SessionCatalogPage {
+	public fun <init> (Ljava/util/List;Lsaien/magrathea/catalog/SessionCatalogCursor;Lsaien/magrathea/catalog/SessionCatalogCursor;ZLsaien/magrathea/catalog/SessionCatalogState;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Lsaien/magrathea/catalog/SessionCatalogCursor;
+	public final fun component3 ()Lsaien/magrathea/catalog/SessionCatalogCursor;
+	public final fun component4 ()Z
+	public final fun component5 ()Lsaien/magrathea/catalog/SessionCatalogState;
+	public final fun copy (Ljava/util/List;Lsaien/magrathea/catalog/SessionCatalogCursor;Lsaien/magrathea/catalog/SessionCatalogCursor;ZLsaien/magrathea/catalog/SessionCatalogState;)Lsaien/magrathea/catalog/SessionCatalogPage;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionCatalogPage;Ljava/util/List;Lsaien/magrathea/catalog/SessionCatalogCursor;Lsaien/magrathea/catalog/SessionCatalogCursor;ZLsaien/magrathea/catalog/SessionCatalogState;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionCatalogPage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEntries ()Ljava/util/List;
+	public final fun getExhausted ()Z
+	public final fun getNextCursor ()Lsaien/magrathea/catalog/SessionCatalogCursor;
+	public final fun getPreviousCursor ()Lsaien/magrathea/catalog/SessionCatalogCursor;
+	public final fun getState ()Lsaien/magrathea/catalog/SessionCatalogState;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogPolicy {
+	public fun <init> (Ljava/lang/String;I)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()I
+	public final fun copy (Ljava/lang/String;I)Lsaien/magrathea/catalog/SessionCatalogPolicy;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionCatalogPolicy;Ljava/lang/String;IILjava/lang/Object;)Lsaien/magrathea/catalog/SessionCatalogPolicy;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getId ()Ljava/lang/String;
+	public final fun getVersion ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogProjection {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()J
+	public final fun component6 ()Ljava/lang/String;
+	public final fun component7 ()Ljava/lang/String;
+	public final fun component8 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/catalog/SessionCatalogProjection;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionCatalogProjection;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionCatalogProjection;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getActivityAtEpochMs ()J
+	public final fun getActivityIdentity ()Ljava/lang/String;
+	public final fun getFallbackLabel ()Ljava/lang/String;
+	public final fun getModelDisplayName ()Ljava/lang/String;
+	public final fun getNormalizedFallbackLabel ()Ljava/lang/String;
+	public final fun getNormalizedModelName ()Ljava/lang/String;
+	public final fun getNormalizedPreview ()Ljava/lang/String;
+	public final fun getPreviewExcerpt ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class saien/magrathea/catalog/SessionCatalogProjector {
+	public fun getActivityMode ()Lsaien/magrathea/catalog/SessionActivityMode;
+	public abstract fun getPolicy ()Lsaien/magrathea/catalog/SessionCatalogPolicy;
+	public abstract fun normalizeSearch (Ljava/lang/String;)Ljava/lang/String;
+	public abstract fun project (Lsaien/magrathea/core/AgentSessionSnapshot;)Lsaien/magrathea/catalog/SessionCatalogProjection;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogProjector$DefaultImpls {
+	public static fun getActivityMode (Lsaien/magrathea/catalog/SessionCatalogProjector;)Lsaien/magrathea/catalog/SessionActivityMode;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogQuery {
+	public fun <init> ()V
+	public fun <init> (Lsaien/magrathea/catalog/SessionCatalogScope;Lsaien/magrathea/catalog/SessionPinFilter;Lsaien/magrathea/catalog/SessionCatalogSort;Ljava/lang/String;)V
+	public synthetic fun <init> (Lsaien/magrathea/catalog/SessionCatalogScope;Lsaien/magrathea/catalog/SessionPinFilter;Lsaien/magrathea/catalog/SessionCatalogSort;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lsaien/magrathea/catalog/SessionCatalogScope;
+	public final fun component2 ()Lsaien/magrathea/catalog/SessionPinFilter;
+	public final fun component3 ()Lsaien/magrathea/catalog/SessionCatalogSort;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Lsaien/magrathea/catalog/SessionCatalogScope;Lsaien/magrathea/catalog/SessionPinFilter;Lsaien/magrathea/catalog/SessionCatalogSort;Ljava/lang/String;)Lsaien/magrathea/catalog/SessionCatalogQuery;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionCatalogQuery;Lsaien/magrathea/catalog/SessionCatalogScope;Lsaien/magrathea/catalog/SessionPinFilter;Lsaien/magrathea/catalog/SessionCatalogSort;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionCatalogQuery;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPin ()Lsaien/magrathea/catalog/SessionPinFilter;
+	public final fun getScope ()Lsaien/magrathea/catalog/SessionCatalogScope;
+	public final fun getSearch ()Ljava/lang/String;
+	public final fun getSort ()Lsaien/magrathea/catalog/SessionCatalogSort;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class saien/magrathea/catalog/SessionCatalogScope {
+}
+
+public final class saien/magrathea/catalog/SessionCatalogScope$All : saien/magrathea/catalog/SessionCatalogScope {
+	public static final field INSTANCE Lsaien/magrathea/catalog/SessionCatalogScope$All;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogScope$Collection : saien/magrathea/catalog/SessionCatalogScope {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lsaien/magrathea/catalog/SessionCatalogScope$Collection;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionCatalogScope$Collection;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionCatalogScope$Collection;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogScope$Unassigned : saien/magrathea/catalog/SessionCatalogScope {
+	public static final field INSTANCE Lsaien/magrathea/catalog/SessionCatalogScope$Unassigned;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogSemanticsKt {
+	public static final field MAX_CATALOG_PAGE_SIZE I
+	public static final fun extractBackgroundExecutionAttachmentUris (Lsaien/magrathea/core/BackgroundExecutionRecord;)Ljava/util/Set;
+	public static final fun extractBackgroundOriginAttachmentUris (Lsaien/magrathea/core/BackgroundOriginContext;)Ljava/util/Set;
+	public static final fun extractSessionAttachmentUris (Lsaien/magrathea/core/AgentSessionSnapshot;Lsaien/magrathea/core/AgentCheckpoint;)Ljava/util/Set;
+	public static synthetic fun extractSessionAttachmentUris$default (Lsaien/magrathea/core/AgentSessionSnapshot;Lsaien/magrathea/core/AgentCheckpoint;ILjava/lang/Object;)Ljava/util/Set;
+	public static final fun materializeCatalogEntry (Lsaien/magrathea/catalog/SessionIdentity;JLsaien/magrathea/core/AgentSessionSnapshot;Lsaien/magrathea/catalog/SessionCatalogProjection;Lsaien/magrathea/catalog/SessionOrganization;Lsaien/magrathea/catalog/SessionActivityFact;Lsaien/magrathea/catalog/SessionCatalogProjector;)Lsaien/magrathea/catalog/SessionCatalogEntry;
+	public static final fun normalizeCatalogQuery (Lsaien/magrathea/catalog/SessionCatalogProjector;Lsaien/magrathea/catalog/SessionCatalogQuery;)Lsaien/magrathea/catalog/SessionCatalogQuery;
+	public static final fun resolveSessionActivity (Lsaien/magrathea/catalog/SessionActivityMode;Lsaien/magrathea/catalog/SessionCatalogProjection;Lsaien/magrathea/catalog/SessionActivityFact;Lsaien/magrathea/catalog/PreparedActivityIntent;Z)Lsaien/magrathea/catalog/SessionActivityFact;
+	public static synthetic fun resolveSessionActivity$default (Lsaien/magrathea/catalog/SessionActivityMode;Lsaien/magrathea/catalog/SessionCatalogProjection;Lsaien/magrathea/catalog/SessionActivityFact;Lsaien/magrathea/catalog/PreparedActivityIntent;ZILjava/lang/Object;)Lsaien/magrathea/catalog/SessionActivityFact;
+	public static final fun sessionCatalogSortKey (Lsaien/magrathea/catalog/SessionCatalogHeader;Lsaien/magrathea/catalog/SessionCatalogSort;)Lsaien/magrathea/catalog/SessionCatalogSortKey;
+	public static final fun validateCatalogCursor (Lsaien/magrathea/catalog/SessionCatalogCursor;Lsaien/magrathea/catalog/SessionCatalogQuery;Lsaien/magrathea/catalog/SessionCatalogState;)V
+	public static final fun validateCatalogPageLimit (I)V
+}
+
+public final class saien/magrathea/catalog/SessionCatalogSort : java/lang/Enum {
+	public static final field ACTIVITY_DESC Lsaien/magrathea/catalog/SessionCatalogSort;
+	public static final field PIN_THEN_ACTIVITY Lsaien/magrathea/catalog/SessionCatalogSort;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/catalog/SessionCatalogSort;
+	public static fun values ()[Lsaien/magrathea/catalog/SessionCatalogSort;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogSortKey : java/lang/Comparable {
+	public fun <init> (ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lsaien/magrathea/catalog/SessionCatalogSortKey;)I
+	public final fun component1 ()I
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/catalog/SessionCatalogSortKey;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionCatalogSortKey;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionCatalogSortKey;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getActivityRank ()Ljava/lang/String;
+	public final fun getIdSortKey ()Ljava/lang/String;
+	public final fun getPinBucket ()I
+	public final fun getPinRank ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionCatalogState {
+	public fun <init> (Lsaien/magrathea/catalog/SessionCatalogPolicy;JJLsaien/magrathea/catalog/CatalogCoverage;)V
+	public final fun component1 ()Lsaien/magrathea/catalog/SessionCatalogPolicy;
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()Lsaien/magrathea/catalog/CatalogCoverage;
+	public final fun copy (Lsaien/magrathea/catalog/SessionCatalogPolicy;JJLsaien/magrathea/catalog/CatalogCoverage;)Lsaien/magrathea/catalog/SessionCatalogState;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionCatalogState;Lsaien/magrathea/catalog/SessionCatalogPolicy;JJLsaien/magrathea/catalog/CatalogCoverage;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionCatalogState;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCoverage ()Lsaien/magrathea/catalog/CatalogCoverage;
+	public final fun getGeneration ()J
+	public final fun getPolicy ()Lsaien/magrathea/catalog/SessionCatalogPolicy;
+	public final fun getRevision ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionCollection {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lsaien/magrathea/catalog/SessionCollection;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionCollection;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionCollection;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getId ()Ljava/lang/String;
+	public final fun getName ()Ljava/lang/String;
+	public final fun getNameSortKey ()Ljava/lang/String;
+	public final fun getNameUniqueKey ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionCollectionCursor {
+	public fun <init> (Lsaien/magrathea/catalog/SessionCollectionQuery;Lsaien/magrathea/catalog/SessionCatalogPolicy;JLjava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Lsaien/magrathea/catalog/SessionCollectionQuery;
+	public final fun component2 ()Lsaien/magrathea/catalog/SessionCatalogPolicy;
+	public final fun component3 ()J
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun copy (Lsaien/magrathea/catalog/SessionCollectionQuery;Lsaien/magrathea/catalog/SessionCatalogPolicy;JLjava/lang/String;Ljava/lang/String;)Lsaien/magrathea/catalog/SessionCollectionCursor;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionCollectionCursor;Lsaien/magrathea/catalog/SessionCollectionQuery;Lsaien/magrathea/catalog/SessionCatalogPolicy;JLjava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionCollectionCursor;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getGeneration ()J
+	public final fun getIdSortKey ()Ljava/lang/String;
+	public final fun getNameSortKey ()Ljava/lang/String;
+	public final fun getPolicy ()Lsaien/magrathea/catalog/SessionCatalogPolicy;
+	public final fun getQuery ()Lsaien/magrathea/catalog/SessionCollectionQuery;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionCollectionPage {
+	public fun <init> (Ljava/util/List;Lsaien/magrathea/catalog/SessionCollectionCursor;Lsaien/magrathea/catalog/SessionCollectionCursor;ZLsaien/magrathea/catalog/SessionCatalogState;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Lsaien/magrathea/catalog/SessionCollectionCursor;
+	public final fun component3 ()Lsaien/magrathea/catalog/SessionCollectionCursor;
+	public final fun component4 ()Z
+	public final fun component5 ()Lsaien/magrathea/catalog/SessionCatalogState;
+	public final fun copy (Ljava/util/List;Lsaien/magrathea/catalog/SessionCollectionCursor;Lsaien/magrathea/catalog/SessionCollectionCursor;ZLsaien/magrathea/catalog/SessionCatalogState;)Lsaien/magrathea/catalog/SessionCollectionPage;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionCollectionPage;Ljava/util/List;Lsaien/magrathea/catalog/SessionCollectionCursor;Lsaien/magrathea/catalog/SessionCollectionCursor;ZLsaien/magrathea/catalog/SessionCatalogState;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionCollectionPage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEntries ()Ljava/util/List;
+	public final fun getExhausted ()Z
+	public final fun getNextCursor ()Lsaien/magrathea/catalog/SessionCollectionCursor;
+	public final fun getPreviousCursor ()Lsaien/magrathea/catalog/SessionCollectionCursor;
+	public final fun getState ()Lsaien/magrathea/catalog/SessionCatalogState;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionCollectionQuery {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lsaien/magrathea/catalog/SessionCollectionQuery;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionCollectionQuery;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionCollectionQuery;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSearch ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionIdentity {
+	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;)V
+	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;)Lsaien/magrathea/catalog/SessionIdentity;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionIdentity;Lsaien/magrathea/core/AgentSessionId;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionIdentity;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getIncarnation ()Ljava/lang/String;
+	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionOrganization {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/Long;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/Long;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/Long;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/Long;)Lsaien/magrathea/catalog/SessionOrganization;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionOrganization;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Long;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionOrganization;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCollectionId ()Ljava/lang/String;
+	public final fun getPinnedAtEpochMs ()Ljava/lang/Long;
+	public final fun getTitle ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun isEmpty ()Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class saien/magrathea/catalog/SessionOrganizationMutation {
+}
+
+public final class saien/magrathea/catalog/SessionOrganizationMutation$Collection : saien/magrathea/catalog/SessionOrganizationMutation {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lsaien/magrathea/catalog/SessionOrganizationMutation$Collection;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionOrganizationMutation$Collection;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionOrganizationMutation$Collection;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionOrganizationMutation$Pin : saien/magrathea/catalog/SessionOrganizationMutation {
+	public fun <init> (Ljava/lang/Long;)V
+	public final fun component1 ()Ljava/lang/Long;
+	public final fun copy (Ljava/lang/Long;)Lsaien/magrathea/catalog/SessionOrganizationMutation$Pin;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionOrganizationMutation$Pin;Ljava/lang/Long;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionOrganizationMutation$Pin;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPinnedAtEpochMs ()Ljava/lang/Long;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionOrganizationMutation$Title : saien/magrathea/catalog/SessionOrganizationMutation {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lsaien/magrathea/catalog/SessionOrganizationMutation$Title;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionOrganizationMutation$Title;Ljava/lang/String;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionOrganizationMutation$Title;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionPinFilter : java/lang/Enum {
+	public static final field ANY Lsaien/magrathea/catalog/SessionPinFilter;
+	public static final field PINNED Lsaien/magrathea/catalog/SessionPinFilter;
+	public static final field UNPINNED Lsaien/magrathea/catalog/SessionPinFilter;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/catalog/SessionPinFilter;
+	public static fun values ()[Lsaien/magrathea/catalog/SessionPinFilter;
+}
+
+public final class saien/magrathea/catalog/SessionRecoveryCandidate {
+	public fun <init> (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/catalog/SessionIdentity;Ljava/util/Set;)V
+	public final fun component1 ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun component2 ()Lsaien/magrathea/catalog/SessionIdentity;
+	public final fun component3 ()Ljava/util/Set;
+	public final fun copy (Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/catalog/SessionIdentity;Ljava/util/Set;)Lsaien/magrathea/catalog/SessionRecoveryCandidate;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionRecoveryCandidate;Lsaien/magrathea/core/AgentSessionId;Lsaien/magrathea/catalog/SessionIdentity;Ljava/util/Set;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionRecoveryCandidate;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getIdentity ()Lsaien/magrathea/catalog/SessionIdentity;
+	public final fun getReasons ()Ljava/util/Set;
+	public final fun getSessionId ()Lsaien/magrathea/core/AgentSessionId;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionRecoveryCursor {
+	public fun <init> (Lsaien/magrathea/catalog/SessionCatalogPolicy;JLsaien/magrathea/core/AgentSessionId;)V
+	public final fun component1 ()Lsaien/magrathea/catalog/SessionCatalogPolicy;
+	public final fun component2 ()J
+	public final fun component3 ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun copy (Lsaien/magrathea/catalog/SessionCatalogPolicy;JLsaien/magrathea/core/AgentSessionId;)Lsaien/magrathea/catalog/SessionRecoveryCursor;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionRecoveryCursor;Lsaien/magrathea/catalog/SessionCatalogPolicy;JLsaien/magrathea/core/AgentSessionId;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionRecoveryCursor;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAfterSessionId ()Lsaien/magrathea/core/AgentSessionId;
+	public final fun getGeneration ()J
+	public final fun getPolicy ()Lsaien/magrathea/catalog/SessionCatalogPolicy;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionRecoveryKt {
+	public static final fun sessionRecoveryReasons (Lsaien/magrathea/core/AgentStatus;Z)Ljava/util/Set;
+}
+
+public final class saien/magrathea/catalog/SessionRecoveryPage {
+	public fun <init> (Ljava/util/List;Lsaien/magrathea/catalog/SessionRecoveryCursor;ZLsaien/magrathea/catalog/SessionCatalogState;Lsaien/magrathea/catalog/CatalogCoverage;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Lsaien/magrathea/catalog/SessionRecoveryCursor;
+	public final fun component3 ()Z
+	public final fun component4 ()Lsaien/magrathea/catalog/SessionCatalogState;
+	public final fun component5 ()Lsaien/magrathea/catalog/CatalogCoverage;
+	public final fun copy (Ljava/util/List;Lsaien/magrathea/catalog/SessionRecoveryCursor;ZLsaien/magrathea/catalog/SessionCatalogState;Lsaien/magrathea/catalog/CatalogCoverage;)Lsaien/magrathea/catalog/SessionRecoveryPage;
+	public static synthetic fun copy$default (Lsaien/magrathea/catalog/SessionRecoveryPage;Ljava/util/List;Lsaien/magrathea/catalog/SessionRecoveryCursor;ZLsaien/magrathea/catalog/SessionCatalogState;Lsaien/magrathea/catalog/CatalogCoverage;ILjava/lang/Object;)Lsaien/magrathea/catalog/SessionRecoveryPage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCoverage ()Lsaien/magrathea/catalog/CatalogCoverage;
+	public final fun getEntries ()Ljava/util/List;
+	public final fun getExhausted ()Z
+	public final fun getNextCursor ()Lsaien/magrathea/catalog/SessionRecoveryCursor;
+	public final fun getState ()Lsaien/magrathea/catalog/SessionCatalogState;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class saien/magrathea/catalog/SessionRecoveryReason : java/lang/Enum {
+	public static final field BACKGROUND_PENDING Lsaien/magrathea/catalog/SessionRecoveryReason;
+	public static final field BACKGROUND_UNACKNOWLEDGED Lsaien/magrathea/catalog/SessionRecoveryReason;
+	public static final field CHECKPOINT Lsaien/magrathea/catalog/SessionRecoveryReason;
+	public static final field RECOVERABLE_STATUS Lsaien/magrathea/catalog/SessionRecoveryReason;
+	public static final field UNKNOWN_SOURCE Lsaien/magrathea/catalog/SessionRecoveryReason;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lsaien/magrathea/catalog/SessionRecoveryReason;
+	public static fun values ()[Lsaien/magrathea/catalog/SessionRecoveryReason;
+}
+

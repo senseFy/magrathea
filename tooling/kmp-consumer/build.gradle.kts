@@ -33,6 +33,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation("saien.magrathea:magrathea-core:${magratheaVersion.get()}") { isChanging = true }
+            implementation("saien.magrathea:magrathea-session-catalog:${magratheaVersion.get()}") { isChanging = true }
             implementation("saien.magrathea:magrathea-provider-api:${magratheaVersion.get()}") { isChanging = true }
             implementation("saien.magrathea:magrathea-provider-openai:${magratheaVersion.get()}") { isChanging = true }
             implementation("saien.magrathea:magrathea-provider-gemini:${magratheaVersion.get()}") { isChanging = true }

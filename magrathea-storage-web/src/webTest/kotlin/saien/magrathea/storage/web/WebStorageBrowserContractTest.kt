@@ -793,7 +793,7 @@ private fun deleteDatabaseForTest(databaseName: String): Promise<JsString> = js(
 private fun createUnsupportedDatabaseForTest(databaseName: String): Promise<JsString> = js(
     """
     new Promise((resolve) => {
-      const request = globalThis.indexedDB.open(databaseName, 2);
+      const request = globalThis.indexedDB.open(databaseName, 3);
       request.onupgradeneeded = () => {
         const database = request.result;
         database.createObjectStore("sessions");

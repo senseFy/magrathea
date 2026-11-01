@@ -1,9 +1,11 @@
 package saien.magrathea.storage.room
 
+import androidx.room.ColumnInfo
 import androidx.room.ConstructedBy
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
@@ -12,11 +14,37 @@ import androidx.room.RoomDatabase
 import androidx.room.RoomDatabaseConstructor
 import androidx.room.migration.Migration
 
-@Entity(tableName = "agent_sessions")
+@Entity(tableName = "agent_sessions", indices = [Index(value = ["catalogRecoveryCandidate", "sessionId"])])
 internal data class AgentSessionEntity(
     @PrimaryKey val sessionId: String,
     val payload: String,
     val updatedAtEpochMs: Long,
+    @ColumnInfo(defaultValue = "'legacy'") val incarnation: String = "legacy",
+    @ColumnInfo(defaultValue = "0") val rowVersion: Long = 0L,
+    val catalogObservedActivityIdentity: String? = null,
+    val catalogActivityIdentity: String? = null,
+    val catalogActivityOrder: String? = null,
+    val catalogRecoveryStatus: String? = null,
+    @ColumnInfo(defaultValue = "1") val catalogRecoveryCandidate: Boolean = true,
+    val catalogAttachmentNameBackup: String? = null,
+)
+
+/** Recovery queries never select a canonical envelope. Null status means the source is unknown. */
+internal data class AgentSessionRecoveryEntity(
+    val sessionId: String,
+    val incarnation: String,
+    val rowVersion: Long,
+    val catalogRecoveryStatus: String?,
+)
+
+/** Canonical identity and activity authority, without loading its snapshot payload. */
+internal data class AgentSessionIdentityEntity(
+    val sessionId: String,
+    val incarnation: String,
+    val rowVersion: Long,
+    val catalogObservedActivityIdentity: String?,
+    val catalogActivityIdentity: String?,
+    val catalogActivityOrder: String?,
 )
 
 @Entity(tableName = "agent_checkpoints")
@@ -28,14 +56,88 @@ internal data class AgentCheckpointEntity(
 
 @Dao
 internal interface AgentSessionDao {
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsert(entity: AgentSessionEntity)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIgnoringExisting(entity: AgentSessionEntity): Long
+
+    @Query("UPDATE agent_sessions SET payload=:payload, updatedAtEpochMs=:updatedAtEpochMs, incarnation=:incarnation, " +
+        "rowVersion=:rowVersion, catalogObservedActivityIdentity=:observed, catalogActivityIdentity=:accepted, catalogActivityOrder=:activityOrder, " +
+        "catalogRecoveryStatus=:recoveryStatus, catalogRecoveryCandidate=:recoveryCandidate, " +
+        "catalogAttachmentNameBackup=COALESCE(catalogAttachmentNameBackup,:backup) WHERE sessionId=:id")
+    suspend fun updatePreservingMigrationBackup(
+        id: String,
+        payload: String,
+        updatedAtEpochMs: Long,
+        incarnation: String,
+        rowVersion: Long,
+        observed: String?,
+        accepted: String?,
+        activityOrder: String?,
+        recoveryStatus: String?,
+        recoveryCandidate: Boolean,
+        backup: String?,
+    )
+
+    @androidx.room.Transaction
+    suspend fun upsert(entity: AgentSessionEntity) {
+        if (insertIgnoringExisting(entity) == -1L) {
+            updatePreservingMigrationBackup(
+                id = entity.sessionId,
+                payload = entity.payload,
+                updatedAtEpochMs = entity.updatedAtEpochMs,
+                incarnation = entity.incarnation,
+                rowVersion = entity.rowVersion,
+                observed = entity.catalogObservedActivityIdentity,
+                accepted = entity.catalogActivityIdentity,
+                activityOrder = entity.catalogActivityOrder,
+                recoveryStatus = entity.catalogRecoveryStatus,
+                recoveryCandidate = entity.catalogRecoveryCandidate,
+                backup = entity.catalogAttachmentNameBackup,
+            )
+        }
+    }
+
+    @Query("SELECT catalogAttachmentNameBackup FROM agent_sessions WHERE sessionId=:sessionId")
+    suspend fun attachmentNameBackup(sessionId: String): String?
 
     @Query("SELECT * FROM agent_sessions WHERE sessionId = :sessionId")
     suspend fun findById(sessionId: String): AgentSessionEntity?
 
+    @Query("SELECT sessionId, incarnation, rowVersion, catalogObservedActivityIdentity, " +
+        "catalogActivityIdentity, catalogActivityOrder FROM agent_sessions WHERE sessionId = :sessionId")
+    suspend fun identity(sessionId: String): AgentSessionIdentityEntity?
+
+    @Query("SELECT sessionId, incarnation, rowVersion, catalogRecoveryStatus FROM agent_sessions WHERE sessionId = :sessionId")
+    suspend fun recovery(sessionId: String): AgentSessionRecoveryEntity?
+
+    @Query("UPDATE agent_sessions SET catalogRecoveryStatus = :status, catalogRecoveryCandidate = :candidate WHERE sessionId = :sessionId")
+    suspend fun updateRecoveryStatus(sessionId: String, status: String, candidate: Boolean)
+
+    @Query("SELECT EXISTS(SELECT 1 FROM agent_sessions WHERE catalogRecoveryCandidate = 1 AND (catalogRecoveryStatus IS NULL OR " +
+        "catalogRecoveryStatus NOT IN ('IDLE','RUNNING','WAITING_FOR_TOOLS','COMPLETED','FAILED','CANCELLED','INTERRUPTED')))")
+    suspend fun hasUnknownRecovery(): Boolean
+
+    @Query("SELECT sessionId FROM agent_sessions WHERE catalogRecoveryCandidate = 1 " +
+        "UNION SELECT sessionId FROM agent_checkpoints " +
+        "UNION SELECT sessionId FROM agent_background_executions WHERE catalogRecoveryCandidate = 1 ORDER BY sessionId LIMIT :limit")
+    suspend fun recoveryCandidateIds(limit: Int): List<String>
+
+    @Query("SELECT sessionId FROM agent_sessions WHERE catalogRecoveryCandidate = 1 AND sessionId > :afterSessionId " +
+        "UNION SELECT sessionId FROM agent_checkpoints WHERE sessionId > :afterSessionId " +
+        "UNION SELECT sessionId FROM agent_background_executions WHERE catalogRecoveryCandidate = 1 AND sessionId > :afterSessionId " +
+        "ORDER BY sessionId LIMIT :limit")
+    suspend fun recoveryCandidateIdsAfter(afterSessionId: String, limit: Int): List<String>
+
+    @Query("SELECT EXISTS(SELECT 1 FROM agent_sessions)")
+    suspend fun hasSessions(): Boolean
+
     @Query("SELECT * FROM agent_sessions ORDER BY updatedAtEpochMs DESC")
     suspend fun listAll(): List<AgentSessionEntity>
+
+    @Query("SELECT sessionId FROM agent_sessions WHERE sessionId > :afterId ORDER BY sessionId LIMIT :limit")
+    suspend fun pageIds(afterId: String, limit: Int): List<String>
+
+    @Query("SELECT EXISTS(SELECT 1 FROM agent_sessions WHERE sessionId = :sessionId)")
+    suspend fun exists(sessionId: String): Boolean
 
     @Query("DELETE FROM agent_sessions WHERE sessionId = :sessionId")
     suspend fun deleteById(sessionId: String)
@@ -52,6 +154,9 @@ internal interface AgentCheckpointDao {
     @Query("SELECT * FROM agent_checkpoints WHERE sessionId = :sessionId")
     suspend fun findById(sessionId: String): AgentCheckpointEntity?
 
+    @Query("SELECT EXISTS(SELECT 1 FROM agent_checkpoints WHERE sessionId = :sessionId)")
+    suspend fun exists(sessionId: String): Boolean
+
     @Query("DELETE FROM agent_checkpoints WHERE sessionId = :sessionId")
     suspend fun deleteById(sessionId: String)
 
@@ -60,12 +165,33 @@ internal interface AgentCheckpointDao {
 }
 
 /** One durable background execution envelope keyed by (session, execution) (ADR-019). */
-@Entity(tableName = "agent_background_executions", primaryKeys = ["sessionId", "executionId"])
+@Entity(
+    tableName = "agent_background_executions",
+    primaryKeys = ["sessionId", "executionId"],
+    indices = [Index(value = ["catalogRecoveryCandidate", "sessionId"])],
+)
 internal data class AgentBackgroundExecutionEntity(
     val sessionId: String,
     val executionId: String,
     val envelope: String,
     val updatedAtEpochMs: Long,
+    @ColumnInfo(defaultValue = "0") val rowVersion: Long = 0,
+    val catalogHandle: String? = null,
+    val catalogState: String? = null,
+    val catalogResultVersion: Int? = null,
+    val catalogAcknowledged: Boolean? = null,
+    @ColumnInfo(defaultValue = "1") val catalogRecoveryCandidate: Boolean = true,
+)
+
+internal data class AgentBackgroundRecoveryEntity(
+    val sessionId: String,
+    val executionId: String,
+    val rowVersion: Long,
+    val catalogHandle: String?,
+    val catalogState: String?,
+    val catalogResultVersion: Int?,
+    val catalogAcknowledged: Boolean?,
+    val catalogRecoveryCandidate: Boolean,
 )
 
 /** The originating request context of a handed-off Run, keyed by (session, run) (ADR-019). */
@@ -81,8 +207,47 @@ internal interface AgentBackgroundExecutionDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entity: AgentBackgroundExecutionEntity)
 
+    @Query("SELECT EXISTS(SELECT 1 FROM agent_background_executions)")
+    suspend fun hasRecords(): Boolean
+
     @Query("SELECT * FROM agent_background_executions WHERE sessionId = :sessionId")
     suspend fun listBySession(sessionId: String): List<AgentBackgroundExecutionEntity>
+
+    @Query("SELECT * FROM agent_background_executions WHERE sessionId = :sessionId AND executionId = :executionId")
+    suspend fun findById(sessionId: String, executionId: String): AgentBackgroundExecutionEntity?
+
+    @Query("SELECT sessionId, executionId, rowVersion, catalogHandle, catalogState, catalogResultVersion, " +
+        "catalogAcknowledged, catalogRecoveryCandidate FROM agent_background_executions WHERE sessionId = :sessionId")
+    suspend fun recoveryBySession(sessionId: String): List<AgentBackgroundRecoveryEntity>
+
+    @Query("UPDATE agent_background_executions SET catalogHandle = :handle, catalogState = :state, " +
+        "catalogResultVersion = :resultVersion, catalogAcknowledged = :acknowledged, catalogRecoveryCandidate = :candidate " +
+        "WHERE sessionId = :sessionId AND executionId = :executionId")
+    suspend fun updateRecovery(
+        sessionId: String,
+        executionId: String,
+        handle: String?,
+        state: String?,
+        resultVersion: Int?,
+        acknowledged: Boolean?,
+        candidate: Boolean,
+    )
+
+    @Query("SELECT EXISTS(SELECT 1 FROM agent_background_executions WHERE catalogRecoveryCandidate = 1 AND (catalogHandle IS NULL OR catalogState IS NULL OR " +
+        "catalogResultVersion IS NULL OR catalogState NOT IN ('QUEUED','RUNNING','TERMINAL')))")
+    suspend fun hasUnknownRecoverySource(): Boolean
+
+    @Query("SELECT EXISTS(SELECT 1 FROM agent_background_executions WHERE catalogRecoveryCandidate = 1 AND (catalogHandle IS NULL OR catalogState IS NULL OR " +
+        "catalogResultVersion IS NULL OR catalogState NOT IN ('QUEUED','RUNNING','TERMINAL') OR " +
+        "(catalogState = 'TERMINAL' AND catalogAcknowledged IS NULL)))")
+    suspend fun hasUnknownRecoveryFacts(): Boolean
+
+    @Query("SELECT * FROM agent_background_executions b WHERE ((catalogRecoveryCandidate = 1 AND " +
+        "(catalogHandle IS NULL OR catalogState IS NULL OR catalogResultVersion IS NULL OR catalogState NOT IN ('QUEUED','RUNNING','TERMINAL'))) " +
+        "OR NOT EXISTS(SELECT 1 FROM session_attachment_refs r WHERE r.sessionId=b.sessionId AND r.sourceKey='execution:' || b.executionId AND r.isCoverageMarker=1)) " +
+        "AND (:afterSessionId IS NULL OR sessionId > :afterSessionId OR (sessionId = :afterSessionId AND executionId > :afterExecutionId)) " +
+        "ORDER BY sessionId, executionId LIMIT :limit")
+    suspend fun recoveryBackfillPage(afterSessionId: String?, afterExecutionId: String?, limit: Int): List<AgentBackgroundExecutionEntity>
 
     @Query(
         "DELETE FROM agent_background_executions " +
@@ -102,8 +267,20 @@ internal interface AgentBackgroundOriginDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entity: AgentBackgroundOriginEntity)
 
+    @Query("SELECT EXISTS(SELECT 1 FROM agent_background_origins)")
+    suspend fun hasRecords(): Boolean
+
     @Query("SELECT * FROM agent_background_origins WHERE sessionId = :sessionId")
     suspend fun listBySession(sessionId: String): List<AgentBackgroundOriginEntity>
+
+    @Query("SELECT * FROM agent_background_origins WHERE sessionId=:sessionId AND runId=:runId")
+    suspend fun findById(sessionId: String, runId: String): AgentBackgroundOriginEntity?
+
+    @Query("SELECT * FROM agent_background_origins b WHERE NOT EXISTS(SELECT 1 FROM session_attachment_refs r " +
+        "WHERE r.sessionId=b.sessionId AND r.sourceKey='origin:' || b.runId AND r.isCoverageMarker=1) " +
+        "AND (:afterSessionId IS NULL OR sessionId > :afterSessionId OR (sessionId=:afterSessionId AND runId>:afterRunId)) " +
+        "ORDER BY sessionId,runId LIMIT :limit")
+    suspend fun referenceBackfillPage(afterSessionId: String?, afterRunId: String?, limit: Int): List<AgentBackgroundOriginEntity>
 
     @Query(
         "DELETE FROM agent_background_origins WHERE sessionId = :sessionId AND runId = :runId",
@@ -144,8 +321,14 @@ internal val MAGRATHEA_ROOM_MIGRATION_1_2 = object : Migration(1, 2) {
         AgentCheckpointEntity::class,
         AgentBackgroundExecutionEntity::class,
         AgentBackgroundOriginEntity::class,
+        SessionCatalogEntity::class,
+        SessionSearchEntity::class,
+        SessionAttachmentRefEntity::class,
+        SessionCollectionEntity::class,
+        SessionOrganizationEntity::class,
+        CatalogStateEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 @ConstructedBy(MagratheaDatabaseConstructor::class)
@@ -154,6 +337,7 @@ internal abstract class MagratheaDatabase : RoomDatabase() {
     abstract fun checkpointDao(): AgentCheckpointDao
     abstract fun backgroundExecutionDao(): AgentBackgroundExecutionDao
     abstract fun backgroundOriginDao(): AgentBackgroundOriginDao
+    abstract fun catalogDao(): SessionCatalogDao
 }
 
 @Suppress("KotlinNoActualForExpect")

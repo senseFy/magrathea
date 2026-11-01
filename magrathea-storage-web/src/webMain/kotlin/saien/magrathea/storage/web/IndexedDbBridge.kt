@@ -4,29 +4,32 @@
 package saien.magrathea.storage.web
 
 import kotlin.coroutines.cancellation.CancellationException
-import kotlin.js.JsString
-import kotlin.js.Promise
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.await
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
-internal data class WebRawRecord(
-    val key: String?,
-    val payload: String?,
-)
-
+internal data class WebRawRecord(val key: String?, val payload: String?)
 internal data class WebRawPersistenceRecord(
     val session: WebRawRecord,
     val checkpoint: WebRawRecord?,
+    val metadata: WebSessionMetadata? = null,
 )
 
-@Serializable
 internal data class WebPayloadRewriteExpectation(
     val store: String,
     val key: String,
@@ -34,15 +37,14 @@ internal data class WebPayloadRewriteExpectation(
     val rewritePayload: String?,
 ) {
     init {
-        require(store == WEB_SESSION_STORE || store == WEB_CHECKPOINT_STORE) {
-            "Unknown web persistence store"
-        }
+        require(store == WEB_SESSION_STORE || store == WEB_CHECKPOINT_STORE)
     }
 }
 
 internal const val WEB_SESSION_STORE = "sessions"
 internal const val WEB_CHECKPOINT_STORE = "checkpoints"
 
+/** Raw injection seam retained for codec/corruption tests; public stores use catalog mutations. */
 internal interface WebRecordDatabase {
     suspend fun commit(key: String, sessionPayload: String, checkpointPayload: String?)
     suspend fun get(key: String): WebRawPersistenceRecord?
@@ -52,350 +54,122 @@ internal interface WebRecordDatabase {
     suspend fun clear()
 }
 
-internal class IndexedDbRecordDatabase(
-    private val databaseName: String,
-) : WebRecordDatabase {
-    private val json = Json { ignoreUnknownKeys = false }
+internal class IndexedDbRecordDatabase(private val databaseName: String) : WebRecordDatabase {
+    internal suspend fun executeCatalog(operation: String, payload: JsonObject): JsonElement {
+        currentCoroutineContext().ensureActive()
+        val response = try {
+            val promise = runCatalogIndexedDbOperation(databaseName, operation, payload.toString())
+            val raw = withContext(NonCancellable) { promise.await().toString() }
+            // Successful writes must reach the caller's transient-context cleanup before cancellation.
+            if (operation != "atomicWrite") currentCoroutineContext().ensureActive()
+            Json.parseToJsonElement(raw).jsonObject
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            throw WebStorageException(WebStorageFailure.OPERATION_FAILED)
+        }
+        if (!response.boolean("ok")) {
+            throw WebStorageException(
+                when (response.optionalString("code")) {
+                    "unavailable" -> WebStorageFailure.UNAVAILABLE
+                    "blocked" -> WebStorageFailure.BLOCKED
+                    "quota_exceeded" -> WebStorageFailure.QUOTA_EXCEEDED
+                    "unsupported_database_version" -> WebStorageFailure.UNSUPPORTED_DATABASE_VERSION
+                    else -> WebStorageFailure.OPERATION_FAILED
+                },
+            )
+        }
+        return response.optionalString("payload")?.let(Json::parseToJsonElement) ?: JsonNull
+    }
 
-    override suspend fun commit(
-        key: String,
-        sessionPayload: String,
-        checkpointPayload: String?,
-    ) {
-        execute(
-            operation = if (checkpointPayload == null) "commit" else "commit_with_checkpoint",
-            key = key,
-            value = sessionPayload,
-            secondaryValue = checkpointPayload.orEmpty(),
+    override suspend fun commit(key: String, sessionPayload: String, checkpointPayload: String?) {
+        rawWrite(
+            puts = listOf(putRecord(WEB_SESSION_STORE, key, JsonPrimitive(sessionPayload))) +
+                listOfNotNull(checkpointPayload?.let { putRecord(WEB_CHECKPOINT_STORE, key, JsonPrimitive(it)) }),
+            deletes = if (checkpointPayload == null) listOf(lookup(WEB_CHECKPOINT_STORE, key)) else emptyList(),
         )
     }
 
     override suspend fun get(key: String): WebRawPersistenceRecord? {
-        val payload = execute(operation = "get", key = key, value = "")
-            ?: throw WebStorageException(WebStorageFailure.OPERATION_FAILED)
-        val result = decodeBridgePayload<BridgePersistenceLookup>(payload)
-        if (!result.found) return null
+        val result = executeCatalog("read", wireObject {
+            put("lookups", JsonArray(listOf(lookup(WEB_SESSION_STORE, key), lookup(WEB_CHECKPOINT_STORE, key))))
+            put("metadataIds", buildJsonArray { add(key) })
+        }).jsonObject
+        val rows = result.array("values").map { it.jsonObject }
+        val session = rows.first { it.string("store") == WEB_SESSION_STORE }
+        if (!session.boolean("found")) return null
+        val checkpoint = rows.first { it.string("store") == WEB_CHECKPOINT_STORE }
         return WebRawPersistenceRecord(
-            session = WebRawRecord(key, result.sessionValue),
-            checkpoint = if (result.checkpointFound) {
-                WebRawRecord(key, result.checkpointValue)
-            } else {
-                null
-            },
+            WebRawRecord(key, session.getValue("value").rawPayload()),
+            checkpoint.takeIf { it.boolean("found") }?.let { WebRawRecord(key, it.getValue("value").rawPayload()) },
+            result.array("metadata").firstOrNull()?.jsonObject?.let(WebSessionMetadata::fromLookup),
         )
     }
 
     override suspend fun getAllSessions(): List<WebRawRecord> {
-        val payload = execute(operation = "get_all_sessions", key = "", value = "")
-            ?: throw WebStorageException(WebStorageFailure.OPERATION_FAILED)
-        return decodeBridgePayload<List<BridgeRecord>>(payload).map { WebRawRecord(it.key, it.value) }
+        // Explicit legacy bulk API only. Ordinary catalog reads always use a bounded index page.
+        val result = executeCatalog("keys", wireObject {
+            put("store", WEB_SESSION_STORE)
+            put("direction", "next")
+            put("limit", Int.MAX_VALUE)
+        }).jsonObject
+        return result.array("keys").map { item ->
+            val key = item.jsonObject.stringPrimaryKey()
+            if (key == null) WebRawRecord(null, null) else get(key)?.session ?: WebRawRecord(key, null)
+        }
     }
 
-    override suspend fun rewriteIfUnchanged(
-        expectations: List<WebPayloadRewriteExpectation>,
-    ): Boolean {
+    override suspend fun rewriteIfUnchanged(expectations: List<WebPayloadRewriteExpectation>): Boolean {
         if (expectations.isEmpty()) return true
-        require(expectations.map { it.store to it.key }.distinct().size == expectations.size) {
-            "Web rewrite expectations must identify unique records"
-        }
-        val payload = execute(
-            operation = "rewrite_if_unchanged",
-            key = "",
-            value = json.encodeToString(expectations),
-        ) ?: throw WebStorageException(WebStorageFailure.OPERATION_FAILED)
-        return decodeBridgePayload(payload)
+        require(expectations.map { it.store to it.key }.distinct().size == expectations.size)
+        return rawWrite(
+            checks = expectations.map { expected ->
+                wireObject {
+                    put("store", expected.store)
+                    put("key", expected.key)
+                    put("expectedPayload", expected.expectedPayload)
+                }
+            },
+            puts = expectations.mapNotNull { expected ->
+                expected.rewritePayload?.let {
+                    putRecord(expected.store, expected.key, JsonPrimitive(it))
+                }
+            },
+        )
     }
 
     override suspend fun delete(key: String) {
-        execute(operation = "delete", key = key, value = "")
+        rawWrite(deletes = listOf(lookup(WEB_SESSION_STORE, key), lookup(WEB_CHECKPOINT_STORE, key)))
     }
 
     override suspend fun clear() {
-        execute(operation = "clear", key = "", value = "")
+        rawWrite(clears = listOf(WEB_SESSION_STORE, WEB_CHECKPOINT_STORE))
     }
 
-    private suspend fun execute(
-        operation: String,
-        key: String,
-        value: String,
-        secondaryValue: String = "",
-    ): String? {
-        val rawResponse = try {
-            val operationPromise = runIndexedDbOperation(
-                databaseName = databaseName,
-                operation = operation,
-                key = key,
-                value = value,
-                secondaryValue = secondaryValue,
-            )
-            val response = withContext(NonCancellable) { operationPromise.await().toString() }
-            currentCoroutineContext().ensureActive()
-            response
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Throwable) {
-            throw WebStorageException(WebStorageFailure.OPERATION_FAILED)
+    private suspend fun rawWrite(
+        puts: List<JsonObject> = emptyList(),
+        deletes: List<JsonObject> = emptyList(),
+        clears: List<String> = emptyList(),
+        checks: List<JsonObject> = emptyList(),
+    ): Boolean {
+        repeat(5) {
+            val read = executeCatalog("read", wireObject { }).jsonObject
+            val result = executeCatalog("atomicWrite", wireObject {
+                put("expectedState", read["state"] ?: JsonNull)
+                put("puts", JsonArray(puts))
+                put("deletes", JsonArray(deletes))
+                put("checks", JsonArray(checks))
+                put("clears", JsonArray(clears.map(::JsonPrimitive)))
+            }).jsonPrimitive.boolean
+            if (result) return true
+            if (checks.isNotEmpty()) return false
         }
-        val response = try {
-            json.decodeFromString<BridgeResponse>(rawResponse)
-        } catch (_: Throwable) {
-            throw WebStorageException(WebStorageFailure.OPERATION_FAILED)
-        }
-        if (!response.ok) throw WebStorageException(response.code.toStorageFailure())
-        return response.payload
-    }
-
-    private inline fun <reified T> decodeBridgePayload(payload: String): T = try {
-        json.decodeFromString(payload)
-    } catch (_: Throwable) {
         throw WebStorageException(WebStorageFailure.OPERATION_FAILED)
     }
 }
 
-private fun String?.toStorageFailure(): WebStorageFailure = when (this) {
-    "unavailable" -> WebStorageFailure.UNAVAILABLE
-    "blocked" -> WebStorageFailure.BLOCKED
-    "quota_exceeded" -> WebStorageFailure.QUOTA_EXCEEDED
-    "unsupported_database_version" -> WebStorageFailure.UNSUPPORTED_DATABASE_VERSION
-    else -> WebStorageFailure.OPERATION_FAILED
+internal fun JsonElement.rawPayload(): String? = when (this) {
+    is JsonPrimitive -> contentOrNull.takeIf { isString }
+    is JsonObject -> (this["payload"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+    else -> null
 }
-
-@Serializable
-private data class BridgeResponse(
-    val ok: Boolean,
-    val code: String? = null,
-    val payload: String? = null,
-)
-
-@Serializable
-private data class BridgePersistenceLookup(
-    val found: Boolean,
-    val sessionValue: String? = null,
-    val checkpointFound: Boolean = false,
-    val checkpointValue: String? = null,
-)
-
-@Serializable
-private data class BridgeRecord(
-    val key: String? = null,
-    val value: String? = null,
-)
-
-private fun runIndexedDbOperation(
-    databaseName: String,
-    operation: String,
-    key: String,
-    value: String,
-    secondaryValue: String,
-): Promise<JsString> = js(
-    """
-    new Promise((resolve) => {
-      let settled = false;
-      const finish = (ok, code, payload) => {
-        if (settled) return;
-        settled = true;
-        resolve(JSON.stringify({
-          ok: ok,
-          code: code === undefined ? null : code,
-          payload: payload === undefined ? null : payload
-        }));
-      };
-      const classifyError = (error) => {
-        const name = error && typeof error.name === "string" ? error.name : "";
-        if (name === "QuotaExceededError") return "quota_exceeded";
-        if (name === "VersionError") return "unsupported_database_version";
-        if (name === "NotFoundError") return "unsupported_database_version";
-        if (name === "SecurityError" || name === "InvalidStateError" || name === "NotSupportedError") {
-          return "unavailable";
-        }
-        return "operation_failed";
-      };
-      if (!globalThis.indexedDB) {
-        finish(false, "unavailable", null);
-        return;
-      }
-      let openRequest;
-      try {
-        openRequest = globalThis.indexedDB.open(databaseName, 1);
-      } catch (error) {
-        finish(false, classifyError(error), null);
-        return;
-      }
-      openRequest.onblocked = () => finish(false, "blocked", null);
-      openRequest.onerror = () => finish(false, classifyError(openRequest.error), null);
-      openRequest.onupgradeneeded = (event) => {
-        if (event.oldVersion !== 0) {
-          try { openRequest.transaction.abort(); } catch (_) {}
-          finish(false, "unsupported_database_version", null);
-          return;
-        }
-        try {
-          const database = openRequest.result;
-          database.createObjectStore("sessions");
-          database.createObjectStore("checkpoints");
-        } catch (error) {
-          try { openRequest.transaction.abort(); } catch (_) {}
-          finish(false, classifyError(error), null);
-        }
-      };
-      openRequest.onsuccess = () => {
-        const database = openRequest.result;
-        database.onversionchange = () => database.close();
-        if (settled) {
-          database.close();
-          return;
-        }
-        if (database.version !== 1) {
-          database.close();
-          finish(false, "unsupported_database_version", null);
-          return;
-        }
-        let transaction;
-        let resultPayload = null;
-        try {
-          if (operation === "commit" || operation === "commit_with_checkpoint") {
-            transaction = database.transaction(
-              ["sessions", "checkpoints"],
-              "readwrite",
-              { durability: "strict" }
-            );
-            transaction.objectStore("sessions").put(value, key);
-            if (operation === "commit_with_checkpoint") {
-              transaction.objectStore("checkpoints").put(secondaryValue, key);
-            } else {
-              transaction.objectStore("checkpoints").delete(key);
-            }
-          } else if (operation === "delete") {
-            transaction = database.transaction(
-              ["sessions", "checkpoints"],
-              "readwrite",
-              { durability: "strict" }
-            );
-            transaction.objectStore("sessions").delete(key);
-            transaction.objectStore("checkpoints").delete(key);
-          } else if (operation === "clear") {
-            transaction = database.transaction(
-              ["sessions", "checkpoints"],
-              "readwrite",
-              { durability: "strict" }
-            );
-            transaction.objectStore("sessions").clear();
-            transaction.objectStore("checkpoints").clear();
-          } else if (operation === "get") {
-            transaction = database.transaction(["sessions", "checkpoints"], "readonly");
-            let sessionResult;
-            let checkpointResult;
-            const sessionRequest = transaction.objectStore("sessions").get(key);
-            const checkpointRequest = transaction.objectStore("checkpoints").get(key);
-            sessionRequest.onsuccess = () => { sessionResult = sessionRequest.result; };
-            checkpointRequest.onsuccess = () => { checkpointResult = checkpointRequest.result; };
-            transaction.oncomplete = () => {
-              database.close();
-              const found = sessionResult !== undefined;
-              finish(true, null, JSON.stringify({
-                found: found,
-                sessionValue:
-                  found && typeof sessionResult === "string" ? sessionResult : null,
-                checkpointFound: checkpointResult !== undefined,
-                checkpointValue:
-                  checkpointResult !== undefined && typeof checkpointResult === "string"
-                    ? checkpointResult
-                    : null
-              }));
-            };
-          } else if (operation === "get_all_sessions") {
-            transaction = database.transaction(["sessions"], "readonly");
-            const records = [];
-            const request = transaction.objectStore("sessions").openCursor();
-            request.onsuccess = () => {
-              const cursor = request.result;
-              if (cursor) {
-                records.push({
-                  key: typeof cursor.key === "string" ? cursor.key : null,
-                  value: typeof cursor.value === "string" ? cursor.value : null
-                });
-                cursor.continue();
-              } else {
-                resultPayload = JSON.stringify(records);
-              }
-            };
-          } else if (operation === "rewrite_if_unchanged") {
-            const expectations = JSON.parse(value);
-            if (!Array.isArray(expectations) || expectations.length === 0) {
-              throw new Error("Invalid rewrite expectations");
-            }
-            const identities = new Set();
-            for (const item of expectations) {
-              if (
-                !item ||
-                (item.store !== "sessions" && item.store !== "checkpoints") ||
-                typeof item.key !== "string" ||
-                (item.expectedPayload !== null && typeof item.expectedPayload !== "string") ||
-                (item.rewritePayload !== null && typeof item.rewritePayload !== "string")
-              ) {
-                throw new Error("Invalid rewrite expectation");
-              }
-              const identity = JSON.stringify([item.store, item.key]);
-              if (identities.has(identity)) throw new Error("Duplicate rewrite expectation");
-              identities.add(identity);
-            }
-            transaction = database.transaction(
-              ["sessions", "checkpoints"],
-              "readwrite",
-              { durability: "strict" }
-            );
-            let remaining = expectations.length;
-            let unchanged = true;
-            for (const item of expectations) {
-              const request = transaction.objectStore(item.store).get(item.key);
-              request.onsuccess = () => {
-                const found = request.result !== undefined;
-                if (
-                  (item.expectedPayload === null && found) ||
-                  (item.expectedPayload !== null &&
-                    (!found || request.result !== item.expectedPayload))
-                ) {
-                  unchanged = false;
-                }
-                remaining -= 1;
-                if (remaining === 0) {
-                  if (unchanged) {
-                    for (const rewrite of expectations) {
-                      if (rewrite.rewritePayload !== null) {
-                        transaction.objectStore(rewrite.store)
-                          .put(rewrite.rewritePayload, rewrite.key);
-                      }
-                    }
-                  }
-                  resultPayload = JSON.stringify(unchanged);
-                }
-              };
-            }
-          } else {
-            database.close();
-            finish(false, "operation_failed", null);
-            return;
-          }
-        } catch (error) {
-          database.close();
-          finish(false, classifyError(error), null);
-          return;
-        }
-        if (operation !== "get") {
-          transaction.oncomplete = () => {
-            database.close();
-            finish(true, null, resultPayload);
-          };
-        }
-        transaction.onerror = () => {
-          database.close();
-          finish(false, classifyError(transaction.error), null);
-        };
-        transaction.onabort = () => {
-          database.close();
-          finish(false, classifyError(transaction.error), null);
-        };
-      };
-    })
-    """,
-)

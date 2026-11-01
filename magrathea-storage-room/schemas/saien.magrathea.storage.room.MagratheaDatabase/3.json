@@ -1,0 +1,708 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 3,
+    "identityHash": "b2c164b042542be98f859da9184b3c05",
+    "entities": [
+      {
+        "tableName": "agent_sessions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sessionId` TEXT NOT NULL, `payload` TEXT NOT NULL, `updatedAtEpochMs` INTEGER NOT NULL, `incarnation` TEXT NOT NULL DEFAULT 'legacy', `rowVersion` INTEGER NOT NULL DEFAULT 0, `catalogObservedActivityIdentity` TEXT, `catalogActivityIdentity` TEXT, `catalogActivityOrder` TEXT, `catalogRecoveryStatus` TEXT, `catalogRecoveryCandidate` INTEGER NOT NULL DEFAULT 1, `catalogAttachmentNameBackup` TEXT, PRIMARY KEY(`sessionId`))",
+        "fields": [
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payload",
+            "columnName": "payload",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtEpochMs",
+            "columnName": "updatedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "incarnation",
+            "columnName": "incarnation",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'legacy'"
+          },
+          {
+            "fieldPath": "rowVersion",
+            "columnName": "rowVersion",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "catalogObservedActivityIdentity",
+            "columnName": "catalogObservedActivityIdentity",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "catalogActivityIdentity",
+            "columnName": "catalogActivityIdentity",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "catalogActivityOrder",
+            "columnName": "catalogActivityOrder",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "catalogRecoveryStatus",
+            "columnName": "catalogRecoveryStatus",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "catalogRecoveryCandidate",
+            "columnName": "catalogRecoveryCandidate",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "1"
+          },
+          {
+            "fieldPath": "catalogAttachmentNameBackup",
+            "columnName": "catalogAttachmentNameBackup",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "sessionId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_agent_sessions_catalogRecoveryCandidate_sessionId",
+            "unique": false,
+            "columnNames": [
+              "catalogRecoveryCandidate",
+              "sessionId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_agent_sessions_catalogRecoveryCandidate_sessionId` ON `${TABLE_NAME}` (`catalogRecoveryCandidate`, `sessionId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "agent_checkpoints",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sessionId` TEXT NOT NULL, `payload` TEXT NOT NULL, `turn` INTEGER NOT NULL, PRIMARY KEY(`sessionId`))",
+        "fields": [
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payload",
+            "columnName": "payload",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "turn",
+            "columnName": "turn",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "sessionId"
+          ]
+        }
+      },
+      {
+        "tableName": "agent_background_executions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sessionId` TEXT NOT NULL, `executionId` TEXT NOT NULL, `envelope` TEXT NOT NULL, `updatedAtEpochMs` INTEGER NOT NULL, `rowVersion` INTEGER NOT NULL DEFAULT 0, `catalogHandle` TEXT, `catalogState` TEXT, `catalogResultVersion` INTEGER, `catalogAcknowledged` INTEGER, `catalogRecoveryCandidate` INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(`sessionId`, `executionId`))",
+        "fields": [
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "executionId",
+            "columnName": "executionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "envelope",
+            "columnName": "envelope",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtEpochMs",
+            "columnName": "updatedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rowVersion",
+            "columnName": "rowVersion",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "catalogHandle",
+            "columnName": "catalogHandle",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "catalogState",
+            "columnName": "catalogState",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "catalogResultVersion",
+            "columnName": "catalogResultVersion",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "catalogAcknowledged",
+            "columnName": "catalogAcknowledged",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "catalogRecoveryCandidate",
+            "columnName": "catalogRecoveryCandidate",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "1"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "sessionId",
+            "executionId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_agent_background_executions_catalogRecoveryCandidate_sessionId",
+            "unique": false,
+            "columnNames": [
+              "catalogRecoveryCandidate",
+              "sessionId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_agent_background_executions_catalogRecoveryCandidate_sessionId` ON `${TABLE_NAME}` (`catalogRecoveryCandidate`, `sessionId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "agent_background_origins",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sessionId` TEXT NOT NULL, `runId` TEXT NOT NULL, `envelope` TEXT NOT NULL, PRIMARY KEY(`sessionId`, `runId`))",
+        "fields": [
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "runId",
+            "columnName": "runId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "envelope",
+            "columnName": "envelope",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "sessionId",
+            "runId"
+          ]
+        }
+      },
+      {
+        "tableName": "session_catalog",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sessionId` TEXT NOT NULL, `incarnation` TEXT NOT NULL, `rowVersion` INTEGER NOT NULL, `policyId` TEXT NOT NULL, `policyVersion` INTEGER NOT NULL, `fallbackLabel` TEXT NOT NULL, `effectiveLabel` TEXT NOT NULL, `previewExcerpt` TEXT NOT NULL, `provider` TEXT NOT NULL, `modelId` TEXT NOT NULL, `modelDisplayName` TEXT NOT NULL, `persistedStatus` TEXT NOT NULL, `activityAt` INTEGER NOT NULL, `activityOrder` TEXT NOT NULL, `observedActivityIdentity` TEXT, `lastAcceptedActivityIdentity` TEXT, `collectionId` TEXT, `pinnedAt` INTEGER, `collectionKey` TEXT NOT NULL, `pinBucket` INTEGER NOT NULL, `pinRank` TEXT NOT NULL, `activityRank` TEXT NOT NULL, `idSortKey` TEXT NOT NULL, PRIMARY KEY(`sessionId`))",
+        "fields": [
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "incarnation",
+            "columnName": "incarnation",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rowVersion",
+            "columnName": "rowVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "policyId",
+            "columnName": "policyId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "policyVersion",
+            "columnName": "policyVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fallbackLabel",
+            "columnName": "fallbackLabel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "effectiveLabel",
+            "columnName": "effectiveLabel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "previewExcerpt",
+            "columnName": "previewExcerpt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "provider",
+            "columnName": "provider",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "modelId",
+            "columnName": "modelId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "modelDisplayName",
+            "columnName": "modelDisplayName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "persistedStatus",
+            "columnName": "persistedStatus",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "activityAt",
+            "columnName": "activityAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "activityOrder",
+            "columnName": "activityOrder",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "observedActivityIdentity",
+            "columnName": "observedActivityIdentity",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastAcceptedActivityIdentity",
+            "columnName": "lastAcceptedActivityIdentity",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "collectionId",
+            "columnName": "collectionId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pinnedAt",
+            "columnName": "pinnedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "collectionKey",
+            "columnName": "collectionKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pinBucket",
+            "columnName": "pinBucket",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pinRank",
+            "columnName": "pinRank",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "activityRank",
+            "columnName": "activityRank",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "idSortKey",
+            "columnName": "idSortKey",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "sessionId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_session_catalog_pinBucket_pinRank_activityRank_idSortKey",
+            "unique": false,
+            "columnNames": [
+              "pinBucket",
+              "pinRank",
+              "activityRank",
+              "idSortKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_session_catalog_pinBucket_pinRank_activityRank_idSortKey` ON `${TABLE_NAME}` (`pinBucket`, `pinRank`, `activityRank`, `idSortKey`)"
+          },
+          {
+            "name": "index_session_catalog_pinBucket_activityRank_idSortKey",
+            "unique": false,
+            "columnNames": [
+              "pinBucket",
+              "activityRank",
+              "idSortKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_session_catalog_pinBucket_activityRank_idSortKey` ON `${TABLE_NAME}` (`pinBucket`, `activityRank`, `idSortKey`)"
+          },
+          {
+            "name": "index_session_catalog_collectionKey_pinBucket_pinRank_activityRank_idSortKey",
+            "unique": false,
+            "columnNames": [
+              "collectionKey",
+              "pinBucket",
+              "pinRank",
+              "activityRank",
+              "idSortKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_session_catalog_collectionKey_pinBucket_pinRank_activityRank_idSortKey` ON `${TABLE_NAME}` (`collectionKey`, `pinBucket`, `pinRank`, `activityRank`, `idSortKey`)"
+          },
+          {
+            "name": "index_session_catalog_collectionKey_pinBucket_activityRank_idSortKey",
+            "unique": false,
+            "columnNames": [
+              "collectionKey",
+              "pinBucket",
+              "activityRank",
+              "idSortKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_session_catalog_collectionKey_pinBucket_activityRank_idSortKey` ON `${TABLE_NAME}` (`collectionKey`, `pinBucket`, `activityRank`, `idSortKey`)"
+          }
+        ]
+      },
+      {
+        "tableName": "session_search",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sessionId` TEXT NOT NULL, `incarnation` TEXT NOT NULL, `rowVersion` INTEGER NOT NULL, `policyId` TEXT NOT NULL, `policyVersion` INTEGER NOT NULL, `effectiveLabel` TEXT NOT NULL, `fallbackLabel` TEXT NOT NULL, `preview` TEXT NOT NULL, `modelName` TEXT NOT NULL, PRIMARY KEY(`sessionId`))",
+        "fields": [
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "incarnation",
+            "columnName": "incarnation",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rowVersion",
+            "columnName": "rowVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "policyId",
+            "columnName": "policyId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "policyVersion",
+            "columnName": "policyVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "effectiveLabel",
+            "columnName": "effectiveLabel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fallbackLabel",
+            "columnName": "fallbackLabel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "preview",
+            "columnName": "preview",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "modelName",
+            "columnName": "modelName",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "sessionId"
+          ]
+        }
+      },
+      {
+        "tableName": "session_attachment_refs",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`uri` TEXT NOT NULL, `sessionId` TEXT NOT NULL, `sourceKey` TEXT NOT NULL, `isCoverageMarker` INTEGER NOT NULL, PRIMARY KEY(`uri`, `sessionId`, `sourceKey`, `isCoverageMarker`))",
+        "fields": [
+          {
+            "fieldPath": "uri",
+            "columnName": "uri",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceKey",
+            "columnName": "sourceKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isCoverageMarker",
+            "columnName": "isCoverageMarker",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "uri",
+            "sessionId",
+            "sourceKey",
+            "isCoverageMarker"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_session_attachment_refs_sessionId_sourceKey_isCoverageMarker",
+            "unique": false,
+            "columnNames": [
+              "sessionId",
+              "sourceKey",
+              "isCoverageMarker"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_session_attachment_refs_sessionId_sourceKey_isCoverageMarker` ON `${TABLE_NAME}` (`sessionId`, `sourceKey`, `isCoverageMarker`)"
+          }
+        ]
+      },
+      {
+        "tableName": "session_collections",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`collectionId` TEXT NOT NULL, `name` TEXT NOT NULL, `nameSortKey` TEXT NOT NULL, `idSortKey` TEXT NOT NULL, `normalizedName` TEXT NOT NULL, `uniqueKey` TEXT NOT NULL, `revision` INTEGER NOT NULL, PRIMARY KEY(`collectionId`))",
+        "fields": [
+          {
+            "fieldPath": "collectionId",
+            "columnName": "collectionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nameSortKey",
+            "columnName": "nameSortKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "idSortKey",
+            "columnName": "idSortKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "normalizedName",
+            "columnName": "normalizedName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "uniqueKey",
+            "columnName": "uniqueKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "collectionId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_session_collections_nameSortKey_idSortKey",
+            "unique": false,
+            "columnNames": [
+              "nameSortKey",
+              "idSortKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_session_collections_nameSortKey_idSortKey` ON `${TABLE_NAME}` (`nameSortKey`, `idSortKey`)"
+          },
+          {
+            "name": "index_session_collections_uniqueKey",
+            "unique": true,
+            "columnNames": [
+              "uniqueKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_session_collections_uniqueKey` ON `${TABLE_NAME}` (`uniqueKey`)"
+          }
+        ]
+      },
+      {
+        "tableName": "session_organization",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sessionId` TEXT NOT NULL, `incarnation` TEXT NOT NULL, `title` TEXT, `collectionId` TEXT, `pinnedAt` INTEGER, PRIMARY KEY(`sessionId`))",
+        "fields": [
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "incarnation",
+            "columnName": "incarnation",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "collectionId",
+            "columnName": "collectionId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pinnedAt",
+            "columnName": "pinnedAt",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "sessionId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_session_organization_collectionId",
+            "unique": false,
+            "columnNames": [
+              "collectionId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_session_organization_collectionId` ON `${TABLE_NAME}` (`collectionId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "catalog_state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`key` TEXT NOT NULL, `value` TEXT NOT NULL, PRIMARY KEY(`key`))",
+        "fields": [
+          {
+            "fieldPath": "key",
+            "columnName": "key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "value",
+            "columnName": "value",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "key"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'b2c164b042542be98f859da9184b3c05')"
+    ]
+  }
+}

@@ -7,6 +7,7 @@ REPOSITORY="$ROOT_DIR/build/sdk-verification-repository/saien/magrathea"
 
 MOBILE_KMP_MODULES=(
   magrathea-core
+  magrathea-session-catalog
   magrathea-provider-api
   magrathea-provider-openai
   magrathea-provider-gemini
@@ -22,6 +23,7 @@ MOBILE_KMP_MODULES=(
 )
 WEB_ENABLED_KMP_MODULES=(
   magrathea-core
+  magrathea-session-catalog
   magrathea-provider-api
   magrathea-runtime
   magrathea-mcp
@@ -110,11 +112,14 @@ for module in "${JVM_MODULES[@]}"; do
 done
 
 actual_coordinates="$(find "$REPOSITORY" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
-[[ "$actual_coordinates" == "88" ]] || fail "expected 88 coordinates, found $actual_coordinates"
+expected_coordinates=$((5 * ${#MOBILE_KMP_MODULES[@]} + 2 * ${#WEB_ENABLED_KMP_MODULES[@]} + 3 * ${#WEB_ONLY_KMP_MODULES[@]} + ${#JVM_MODULES[@]}))
+expected_klibs=$((2 * (${#MOBILE_KMP_MODULES[@]} + ${#WEB_ENABLED_KMP_MODULES[@]} + ${#WEB_ONLY_KMP_MODULES[@]})))
+[[ "$actual_coordinates" == "$expected_coordinates" ]] ||
+  fail "expected $expected_coordinates coordinates, found $actual_coordinates"
 python3 "$ROOT_DIR/scripts/verify_archive_licenses.py" "$ROOT_DIR/LICENSE" "$REPOSITORY"
 python3 "$ROOT_DIR/scripts/verify_klib_paths.py" \
   "$REPOSITORY" \
   --forbid-root "$ROOT_DIR" \
-  --expected-count 46
+  --expected-count "$expected_klibs"
 
-printf 'MAGRATHEA_DISTRIBUTION_PASS coordinates=88\n'
+printf 'MAGRATHEA_DISTRIBUTION_PASS coordinates=%s\n' "$expected_coordinates"

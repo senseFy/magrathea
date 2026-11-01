@@ -193,6 +193,7 @@ fi
   fail "direct remote publication had an unexpected rejection: $remote_guard_output"
 
 for module in \
+  magrathea-session-catalog \
   magrathea-gateway-protocol \
   magrathea-gateway-server \
   magrathea-provider-gateway \

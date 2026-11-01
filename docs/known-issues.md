@@ -13,9 +13,13 @@ Magrathea is Alpha. Its APIs and persisted formats may change before the stable 
 - The minified browser entry point exceeds Webpack's default performance recommendation. During
   Alpha, the package gate reports its measured size and enforces a 2,000,000-byte ceiling. Browser
   hosts should load the client on demand, and the budget should be reviewed before a stable release.
-- Thirteen mobile KMP modules publish Android, JVM, `iosArm64`, and `iosSimulatorArm64`; eight also
+- Fourteen mobile KMP modules publish Android, JVM, `iosArm64`, and `iosSimulatorArm64`; nine also
   publish JS/Wasm, and two additional modules are Web-only. Wasm is experimental. macOS Native,
   watchOS, and tvOS are not published targets.
+- The optional Session Catalog has Room and IndexedDB implementations with bounded backfill,
+  typed organization import, canonical attachment-name migration and recovery-fact queries. Hosts own
+  Worker scheduling and runtime fence/drain barriers. Unreadable persisted sources keep reference
+  coverage incomplete; file deletion additionally requires the host's live/draft/submission protection.
 - Desktop means the JVM artifact, not a Kotlin/Native desktop target or an official UI/application
   shell. Recorded evidence includes a macOS-hosted JVM run and a defined Ubuntu CI gate, but no
   Windows host gate; Linux/Windows remain JVM-compatible rather than equally validated environments.
@@ -71,7 +75,7 @@ Magrathea is Alpha. Its APIs and persisted formats may change before the stable 
 - Signed Maven artifacts are published to GitHub Packages. GitHub requires authenticated package
   reads, including for public repositories; anonymous Maven consumption remains a Maven Central
   release concern.
-- The 88-coordinate rollback contract is a loopback rehearsal. An actual rollback still requires a
+- The 95-coordinate rollback contract is a loopback rehearsal. An actual rollback still requires a
   release owner and a verified previous application pin.
 - The JS/TypeScript Web archive is build-local and no task publishes it to npm.
 - An annotated version tag triggers signed GitHub Packages publication and a GitHub Release only

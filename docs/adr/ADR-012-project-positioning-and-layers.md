@@ -12,8 +12,8 @@ The repository uses these layers:
 
 1. Kernel contracts: Core models, stores, credentials, Provider events, and transport ports.
 2. Runtime: turns, tools, retry, cancellation, checkpoints, resume, limits, and tracing.
-3. Optional capabilities: reference Provider adapters, the MCP Tool adapter, and reusable Policy
-   behavior.
+3. Optional capabilities: reference Provider adapters, the MCP Tool adapter, reusable Policy
+   behavior, and the Core-only Session Catalog.
 4. Platform adapters: Room, IndexedDB, Keystore, and Keychain integrations.
 5. Product facades: Provider-neutral Chatbot lifecycle and browser composition.
 6. Gateway: browser-safe protocol, Provider bridge, and server ports.
@@ -32,6 +32,18 @@ boundary.
 Magrathea owns the portable runtime contracts and reusable integrations. Host applications own
 product UI and packaging, product-specific orchestration, JVM credential storage, browser
 deployment topology, and production qualification.
+
+The optional `magrathea-session-catalog` module depends on Core, never Runtime, Chatbot, a Provider,
+or host UI. It defines session identities, lightweight queries, flat collections, organization,
+pure projections, and optional activity ordering. Core/Runtime and `AgentPersistence` do not depend
+on these contracts. A storage adapter can expose persistence and catalog from one handle and commit
+their changes in one database transaction without adding organization fields to canonical envelopes.
+
+Hosts choose labels, search normalization, and which input counts as activity. The catalog stores
+opaque activity identities and sequence facts; it does not interpret chat roles or control Agent
+execution. Headless consumers can commit using the default canonical-time policy without preparing
+activity tickets. Prepared inputs in the Chatbot facade are independently useful and introduce no
+catalog dependency.
 
 ## Consequences
 
