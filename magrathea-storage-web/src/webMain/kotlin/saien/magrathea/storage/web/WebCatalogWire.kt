@@ -268,6 +268,7 @@ internal data class WebCatalogView(val stateWire: JsonObject, val control: WebCa
 }
 
 internal class WebCatalogMutation(val expected: WebCatalogView, val control: WebCatalogControl) {
+    var rebaseRevision = false
     val checks = mutableListOf<JsonObject>()
     val puts = mutableListOf<JsonObject>()
     val deletes = mutableListOf<JsonObject>()
@@ -277,6 +278,7 @@ internal class WebCatalogMutation(val expected: WebCatalogView, val control: Web
     fun wire() = wireObject {
         put("expectedState", expected.stateWire)
         put("state", control.wire())
+        if (rebaseRevision) put("rebaseRevision", true)
         put("checks", JsonArray(checks))
         put("puts", JsonArray(puts))
         put("deletes", JsonArray(deletes))

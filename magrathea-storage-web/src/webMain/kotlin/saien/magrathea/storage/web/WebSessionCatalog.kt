@@ -333,14 +333,25 @@ internal class WebSessionCatalog(
             var organization = source.value(CATALOG_ORGANIZATION, id).organizationFor(identity)
                 ?: if (metadata == null) initialization?.initialOrganization ?: SessionOrganization() else SessionOrganization()
             val collectionId = organization.collectionId
+            var collectionValue: JsonElement? = null
             if (collectionId != null) {
                 val collection = read(listOf(lookup(CATALOG_COLLECTIONS, collectionId)))
-                if (collection.stateWire != source.stateWire) return@repeat
-                if (collection.value(CATALOG_COLLECTIONS, collectionId) == null) organization = organization.copy(collectionId = null)
+                collectionValue = collection.value(CATALOG_COLLECTIONS, collectionId)
+                if (collectionValue == null) organization = organization.copy(collectionId = null)
             }
             val version = nextCatalogLong(metadata?.rowVersion ?: 0)
             val entry = materializeCatalogEntry(identity, version, snapshot, projection, organization, activity, projector)
             val plan = mutation(source)
+            // Only the target's authority participates in canonical CAS. The transaction merges
+            // its revision increment into the latest control so unrelated commits cannot starve it.
+            plan.rebaseRevision = true
+            plan.checks += wireObject {
+                put("store", WEB_SESSION_STORE)
+                put("key", id)
+                put("expectedMetadata", source.result.array("metadata").single())
+            }
+            plan.checks += exactCheck(CATALOG_ORGANIZATION, id, source.value(CATALOG_ORGANIZATION, id))
+            if (collectionId != null) plan.checks += exactCheck(CATALOG_COLLECTIONS, collectionId, collectionValue)
             val expected = rewriteExpected ?: legacyExpected
             if (expected != null) addPayloadChecks(plan, id, expected)
             plan.puts += putRecord(
@@ -605,27 +616,13 @@ internal class WebSessionCatalog(
     override suspend fun referencedUris(
         candidates: Set<String>,
     ): SessionAttachmentReferences = lifecycle.withCatalogOperation {
-        repeat(ATTEMPTS) {
-            val initial = read()
-            val found = mutableSetOf<String>()
-            var stable = true
-            for (uri in candidates) {
-                val result = view("keys", wireObject {
-                    put("store", CATALOG_REFS)
-                    put("index", "uri")
-                    put("range", onlyRange(JsonPrimitive(uri)))
-                    put("direction", "next")
-                    put("limit", 1)
-                })
-                if (result.stateWire != initial.stateWire) {
-                    stable = false
-                    break
-                }
-                if (result.result.array("keys").isNotEmpty()) found += uri
-            }
-            if (stable) return@withCatalogOperation SessionAttachmentReferences(found, initial.control.coverage)
-        }
-        storageFailure()
+        val result = view("referenceLookup", wireObject {
+            put("candidates", JsonArray(candidates.map(::JsonPrimitive)))
+        })
+        SessionAttachmentReferences(
+            result.result.array("found").map { it.jsonPrimitive.content }.toSet(),
+            result.control.coverage,
+        )
     }
 
     override suspend fun pageSessions(

@@ -9,7 +9,8 @@ internal const val WEB_CATALOG_SEARCH_SCAN_LIMIT = 128
 
 /**
  * Internal IndexedDB mechanics only. Kotlin owns projection, activity, identity and maintenance
- * policy. Long values cross this boundary as strings; this bridge never performs their arithmetic.
+ * policy. Long values cross this boundary as strings. Only revision increment is performed here,
+ * using decimal digits so concurrent commits can retain unrelated control fields without precision loss.
  * All success responses wait for transaction completion. An exception after writes were queued
  * aborts the transaction before a failure is returned.
  */
@@ -40,6 +41,7 @@ internal fun runCatalogIndexedDbOperation(
       };
       const classify = (error) => {
         const name = error && typeof error.name === "string" ? error.name : "";
+        if (name === "CatalogCounterExhaustedError") return "catalog_counter_exhausted";
         if (name === "QuotaExceededError") return "quota_exceeded";
         if (name === "VersionError" || name === "NotFoundError") return "unsupported_database_version";
         if (name === "SecurityError" || name === "InvalidStateError" || name === "NotSupportedError") return "unavailable";
@@ -52,6 +54,26 @@ internal fun runCatalogIndexedDbOperation(
         const left = Object.keys(first);
         const right = Object.keys(second);
         return left.length === right.length && left.every((key) => owns(second, key) && same(first[key], second[key]));
+      };
+      const nextRevision = (value) => {
+        if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value) ||
+            value.length > 19 || (value.length === 19 && value > "9223372036854775807")) {
+          throw new Error("Invalid internal revision");
+        }
+        if (value === "9223372036854775807") {
+          const error = new Error("Catalog counter exhausted");
+          error.name = "CatalogCounterExhaustedError";
+          throw error;
+        }
+        const digits = value.split("");
+        for (let position = digits.length - 1; position >= 0; position -= 1) {
+          if (digits[position] !== "9") {
+            digits[position] = String(Number(digits[position]) + 1);
+            return digits.join("");
+          }
+          digits[position] = "0";
+        }
+        return "1" + digits.join("");
       };
       const validStore = (name) => {
         if (!stores.includes(name)) throw new Error("Invalid internal store");
@@ -106,7 +128,7 @@ internal fun runCatalogIndexedDbOperation(
       let openFailureCode = null;
       try {
         input = JSON.parse(payload);
-        if (!isObject(input) || !["read", "keys", "page", "atomicWrite"].includes(operation)) {
+        if (!isObject(input) || !["read", "keys", "page", "bulkSessions", "referenceLookup", "atomicWrite"].includes(operation)) {
           throw new Error("Invalid internal operation");
         }
         open = globalThis.indexedDB.open(databaseName, 2);
@@ -153,6 +175,7 @@ internal fun runCatalogIndexedDbOperation(
         let transaction;
         let result;
         let failureCode = null;
+        let nextState;
         const abort = (error) => {
           if (!failureCode) failureCode = classify(error);
           if (transaction) {
@@ -180,6 +203,29 @@ internal fun runCatalogIndexedDbOperation(
           for (const key of Object.keys(value)) updated[key] = value[key];
           for (const key of Object.keys(fields)) updated[key] = fields[key];
           return updated;
+        };
+        const readMetadata = (id, accept) => {
+          if (typeof id !== "string") throw new Error("Invalid internal metadata identity");
+          const store = transaction.objectStore("sessions");
+          const request = store.index("metadata").openKeyCursor(IDBKeyRange.bound([id], [id, []], false, true));
+          request.onsuccess = guarded(() => {
+            const cursor = request.result;
+            if (cursor) {
+              if (cursor.primaryKey !== id) throw new Error("Invalid internal metadata identity");
+              accept({ id: id, found: true, key: cursor.key, checkpointFound: cursor.key[7] === 1 });
+            } else {
+              const existing = store.getKey(id);
+              existing.onsuccess = guarded(() => {
+                if (existing.result === undefined) accept({ id: id, found: false, key: null, checkpointFound: false });
+                else {
+                  const checkpoint = transaction.objectStore("checkpoints").getKey(id);
+                  checkpoint.onsuccess = guarded(() => {
+                    accept({ id: id, found: true, key: null, checkpointFound: checkpoint.result !== undefined });
+                  });
+                }
+              });
+            }
+          });
         };
         const putAndPatch = () => {
           for (const item of list(input.puts)) {
@@ -214,7 +260,7 @@ internal fun runCatalogIndexedDbOperation(
           }
           if (owns(input, "state")) {
             if (!isObject(input.state)) throw new Error("Invalid internal state");
-            transaction.objectStore("catalog_state").put(input.state, "state");
+            transaction.objectStore("catalog_state").put(nextState, "state");
           }
           result = true;
         };
@@ -248,13 +294,37 @@ internal fun runCatalogIndexedDbOperation(
           const state = stateValue === undefined ? null : stateValue;
           if (operation === "atomicWrite") {
             if (!owns(input, "expectedState")) throw new Error("Missing internal state expectation");
-            const unchanged = input.expectedState === null ? stateValue === undefined : same(input.expectedState, stateValue);
-            if (!unchanged) { result = false; return; }
+            if (input.rebaseRevision === true) {
+              if (!isObject(input.expectedState) || !isObject(input.state)) throw new Error("Invalid internal revision plan");
+              const fences = ["policyId", "policyVersion", "activityMode", "generation", "migrationLifecycle"];
+              if (!isObject(stateValue) || !fences.every((key) => same(input.expectedState[key], stateValue[key]))) {
+                result = false;
+                return;
+              }
+              // This opt-in is only for canonical commits. All authority/progress writes retain
+              // strict CAS, and a caller cannot smuggle control changes through this merge.
+              const planned = patchValue(input.expectedState, { revision: nextRevision(input.expectedState.revision) });
+              if (!same(planned, input.state)) throw new Error("Invalid internal revision-only plan");
+              nextState = patchValue(stateValue, { revision: nextRevision(stateValue.revision) });
+            } else {
+              const unchanged = input.expectedState === null ? stateValue === undefined : same(input.expectedState, stateValue);
+              if (!unchanged) { result = false; return; }
+              nextState = input.state;
+            }
             const checks = list(input.checks);
             if (checks.length === 0) { mutations(); return; }
             let remaining = checks.length;
             let matches = true;
             for (const item of checks) {
+              if (owns(item, "expectedMetadata")) {
+                if (item.store !== "sessions") throw new Error("Invalid metadata expectation store");
+                readMetadata(item.key, (actual) => {
+                  matches = matches && same(item.expectedMetadata, actual);
+                  remaining -= 1;
+                  if (remaining === 0) { if (matches) mutations(); else result = false; }
+                });
+                continue;
+              }
               if (owns(item, "expectedNextKeyToken")) {
                 const after = item.afterKeyToken === undefined || item.afterKeyToken === null ? undefined : tokenKey(item.afterKeyToken);
                 const expected = item.expectedNextKeyToken === null ? undefined : tokenKey(item.expectedNextKeyToken);
@@ -309,31 +379,35 @@ internal fun runCatalogIndexedDbOperation(
                   value: request.result === undefined ? null : request.result };
               });
             });
-            ids.forEach((id, position) => {
-              if (typeof id !== "string") throw new Error("Invalid internal metadata identity");
-              const store = transaction.objectStore("sessions");
-              const request = store.index("metadata").openKeyCursor(IDBKeyRange.bound([id], [id, []], false, true));
-              request.onsuccess = guarded(() => {
-                const cursor = request.result;
-                if (cursor) {
-                  if (cursor.primaryKey !== id) throw new Error("Invalid internal metadata identity");
-                  metadata[position] = { id: id, found: true, key: cursor.key, checkpointFound: cursor.key[7] === 1 };
-                }
-                else {
-                  const existing = store.getKey(id);
-                  existing.onsuccess = guarded(() => {
-                    const found = existing.result !== undefined;
-                    if (!found) metadata[position] = { id: id, found: false, key: null, checkpointFound: false };
-                    else {
-                      const checkpoint = transaction.objectStore("checkpoints").getKey(id);
-                      checkpoint.onsuccess = guarded(() => {
-                        metadata[position] = { id: id, found: true, key: null, checkpointFound: checkpoint.result !== undefined };
-                      });
-                    }
-                  });
-                }
-              });
+            ids.forEach((id, position) => readMetadata(id, (value) => { metadata[position] = value; }));
+            return;
+          }
+          if (operation === "bulkSessions") {
+            // Explicit legacy bulk API: one cursor owns the full snapshot. Return only the raw
+            // payload shape consumed by Kotlin, even for structured-clone corruption sources.
+            const rows = [];
+            result = { state: state, rows: rows };
+            const request = transaction.objectStore("sessions").openCursor();
+            request.onsuccess = guarded(() => {
+              const cursor = request.result;
+              if (!cursor) return;
+              const value = cursor.value;
+              const payload = typeof value === "string" ? value : isObject(value) && typeof value.payload === "string" ? value.payload : null;
+              rows.push({ key: typeof cursor.primaryKey === "string" ? cursor.primaryKey : null, payload: payload });
+              cursor.continue();
             });
+            return;
+          }
+          if (operation === "referenceLookup") {
+            const candidates = list(input.candidates);
+            const found = [];
+            result = { state: state, found: found };
+            const index = transaction.objectStore("session_attachment_refs").index("uri");
+            for (const uri of candidates) {
+              if (typeof uri !== "string") throw new Error("Invalid internal reference candidate");
+              const request = index.getKey(uri);
+              request.onsuccess = guarded(() => { if (request.result !== undefined) found.push(uri); });
+            }
             return;
           }
           if (!Number.isSafeInteger(input.limit) || input.limit < 1) throw new Error("Invalid internal page limit");
@@ -374,9 +448,11 @@ internal fun runCatalogIndexedDbOperation(
           });
         };
         try {
+          const readStores = operation === "bulkSessions" ? ["sessions", "catalog_state"]
+            : operation === "referenceLookup" ? ["session_attachment_refs", "catalog_state"] : stores;
           transaction = operation === "atomicWrite"
             ? database.transaction(stores, "readwrite", { durability: "strict" })
-            : database.transaction(stores, "readonly");
+            : database.transaction(readStores, "readonly");
           transaction.oncomplete = () => { database.close(); finish(true, null, result); };
           transaction.onerror = () => { if (!failureCode) failureCode = classify(transaction.error); };
           transaction.onabort = () => { database.close(); finish(false, failureCode || classify(transaction.error)); };

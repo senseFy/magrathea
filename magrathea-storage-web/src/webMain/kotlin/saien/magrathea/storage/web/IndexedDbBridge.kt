@@ -22,6 +22,8 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import saien.magrathea.catalog.SessionCatalogException
+import saien.magrathea.catalog.SessionCatalogFailure
 
 internal data class WebRawRecord(val key: String?, val payload: String?)
 internal data class WebRawPersistenceRecord(
@@ -69,6 +71,9 @@ internal class IndexedDbRecordDatabase(private val databaseName: String) : WebRe
             throw WebStorageException(WebStorageFailure.OPERATION_FAILED)
         }
         if (!response.boolean("ok")) {
+            if (response.optionalString("code") == "catalog_counter_exhausted") {
+                throw SessionCatalogException(SessionCatalogFailure.COUNTER_EXHAUSTED)
+            }
             throw WebStorageException(
                 when (response.optionalString("code")) {
                     "unavailable" -> WebStorageFailure.UNAVAILABLE
@@ -108,14 +113,10 @@ internal class IndexedDbRecordDatabase(private val databaseName: String) : WebRe
 
     override suspend fun getAllSessions(): List<WebRawRecord> {
         // Explicit legacy bulk API only. Ordinary catalog reads always use a bounded index page.
-        val result = executeCatalog("keys", wireObject {
-            put("store", WEB_SESSION_STORE)
-            put("direction", "next")
-            put("limit", Int.MAX_VALUE)
-        }).jsonObject
-        return result.array("keys").map { item ->
-            val key = item.jsonObject.stringPrimaryKey()
-            if (key == null) WebRawRecord(null, null) else get(key)?.session ?: WebRawRecord(key, null)
+        val result = executeCatalog("bulkSessions", wireObject { }).jsonObject
+        return result.array("rows").map { item ->
+            val row = item.jsonObject
+            WebRawRecord(row.optionalString("key"), row.optionalString("payload"))
         }
     }
 
