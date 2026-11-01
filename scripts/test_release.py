@@ -7,6 +7,7 @@ import json
 import io
 import os
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -80,6 +81,8 @@ class ReleaseTests(unittest.TestCase):
         (self.root / 'gradle.properties').write_text(f'magrathea.version={VERSION}\n')
         (self.root / '.release-please-manifest.json').write_text(json.dumps({'.': VERSION}))
         (self.root / 'CHANGELOG.md').write_text(f'# Changelog\n\n## [{VERSION}](https://example.invalid/compare) (2026-09-06)\n\n### Fixed\n\n- Keep reviewed changes.\n\n## 0.1.0-alpha.9 — 2026-09-04\n\nOld release.\n')
+        (self.root / 'scripts').mkdir()
+        (self.root / 'scripts/publish-sdk').write_text('SDK_MODULES=(\n  "magrathea-core"\n  "magrathea-runtime"\n)\n')
         self.gh = FakeGitHub()
         self.output = self.root / 'outputs'
         self.env = patch.dict(release.os.environ, {'GITHUB_OUTPUT': str(self.output), 'GITHUB_EVENT_NAME': 'push'})
@@ -101,9 +104,15 @@ class ReleaseTests(unittest.TestCase):
         notes = render(self.root, VERSION)
         self.assertIn('Keep reviewed changes.', notes)
         self.assertNotIn('Old release.', notes)
+        self.assertIn('The 2 logical SDK modules', notes)
         (self.root / '.release-please-manifest.json').write_text('{".":"0.1.0-alpha.9"}')
         with self.assertRaisesRegex(ValueError, 'manifest and Gradle'):
             check_metadata(self.root)
+
+    def test_release_notes_count_every_included_sdk_module(self):
+        modules = re.findall(r'^include\(":magrathea-[a-z-]+"\)$', (ROOT / 'settings.gradle.kts').read_text(), re.M)
+        version = check_metadata(ROOT)[0]
+        self.assertIn(f'The {len(modules)} logical SDK modules', render(ROOT, version))
 
     def test_empty_or_unpublished_notes_are_rejected(self):
         for body in ('', 'Not published. Failed verification.'):

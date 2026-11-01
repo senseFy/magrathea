@@ -48,6 +48,14 @@ def check_metadata(root, version=None):
     return configured, release_entry(root, configured)
 
 
+def sdk_module_count(root):
+    script = (root / "scripts" / "publish-sdk").read_text()
+    inventory = re.search(r"^SDK_MODULES=\(\n(.*?)^\)", script, re.M | re.S)
+    if not inventory or not inventory[1].split():
+        raise ValueError("scripts/publish-sdk has no SDK module inventory")
+    return len(inventory[1].split())
+
+
 def render(root, version):
     body = release_entry(root, version)
     return f"""# Magrathea {version}
@@ -56,7 +64,7 @@ def render(root, version):
 
 ## Distribution
 
-The 17 logical SDK modules and their Kotlin Multiplatform variants are available from
+The {sdk_module_count(root)} logical SDK modules and their Kotlin Multiplatform variants are available from
 GitHub Packages under `saien.magrathea`. See the
 [consumer setup](https://github.com/senseFy/magrathea/blob/v{version}/docs/publishing.md#consume).
 
