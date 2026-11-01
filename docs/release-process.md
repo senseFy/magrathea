@@ -40,9 +40,11 @@ The persistence schema baseline is checked against the merge's parent even when 
 
 Gradle task outputs are shared through optional per-platform snapshots from successful Verify jobs.
 A PR restores snapshots from the verified PR merged at its base commit; candidate preparation uses
-the pinned release CI run. Each snapshot keeps up to 256 MiB of recent task outputs for seven days,
-excluding dependency caches, configuration state, and locks. Restores check the source job/attempt
-and file checksums; Gradle decides reuse from task inputs, including version-dependent inputs.
+the pinned release CI run. Each snapshot keeps up to 256 MiB for seven days: only the newest entry for
+each task, preferring execution time saved per byte, so reused compilation outlives entries for
+superseded inputs and large, cheap outputs such as linked test binaries. Snapshots exclude dependency
+caches, configuration state, and locks. Restores check the source job/attempt and file checksums;
+Gradle decides reuse from task inputs, including version-dependent inputs.
 Missing, expired, or invalid snapshots fall back to ordinary builds and never authorize publication.
 Dependency downloads continue to use `setup-gradle` caching. Platform gates produce new snapshots
 even when compilation hits the cache, so subsequent PRs do not need a main build to refresh them.

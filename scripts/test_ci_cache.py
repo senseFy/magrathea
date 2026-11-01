@@ -1,9 +1,11 @@
 """Task cache provenance, partial retries and filesystem round trips."""
 
 import copy
+import io
 import json
 import os
 from pathlib import Path
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -86,6 +88,17 @@ class CacheTransferTests(unittest.TestCase):
         path.write_bytes(contents)
         return path
 
+    def gradle_entry(self, name, task, execution_time, payload, created=1, project='module'):
+        identity = f'\\:{project}\\:{task}' if project else f'\\:{task}'
+        metadata = f'creationTime={created}\nexecutionTime={execution_time}\nidentity={identity}\n'
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode='w:gz') as archive:
+            for member, data in (('METADATA', metadata.encode()), ('tree-output', payload)):
+                info = tarfile.TarInfo(member)
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+        return self.write(name, buffer.getvalue())
+
     def export(self):
         return ci_cache.export(self.home, self.snapshot, self.metadata)
 
@@ -114,16 +127,36 @@ class CacheTransferTests(unittest.TestCase):
         with patch.object(ci_cache, 'MAX_BYTES', 10):
             self.assertFalse(self.export())
 
-    def test_snapshot_budget_prefers_recent_outputs(self):
-        older = self.write(self.key, b'older')
-        newer_key = f'build-cache-1/{"b" * 32}'
-        self.write(newer_key, b'newer')
-        os.utime(older, (1, 1))
-        with patch.object(ci_cache, 'MAX_BYTES', 5):
+    def test_snapshot_budget_prefers_execution_time_saved_per_byte(self):
+        compile_key = f'build-cache-1/{"b" * 32}'
+        compiled = self.gradle_entry(compile_key, 'compileKotlinJvm', 30_000, b'klib')
+        linked = self.gradle_entry(self.key, 'linkDebugTestIosArm64', 60_000, os.urandom(4096))
+        os.utime(compiled, (1, 1))
+        with patch.object(ci_cache, 'MAX_BYTES', linked.stat().st_size):
             self.assertTrue(self.export())
         self.assertEqual(self.restore(), 1)
         self.assertFalse((self.target / 'caches' / self.key).exists())
-        self.assertEqual((self.target / 'caches' / newer_key).read_bytes(), b'newer')
+        self.assertEqual((self.target / 'caches' / compile_key).read_bytes(), compiled.read_bytes())
+
+    def test_snapshot_keeps_only_the_newest_entry_for_each_task(self):
+        superseded = self.gradle_entry(self.key, 'compileKotlinJvm', 90_000, b'old inputs', created=1)
+        current_key = f'build-cache-1/{"b" * 32}'
+        self.gradle_entry(current_key, 'compileKotlinJvm', 10, b'current inputs', created=2)
+        other_key = f'build-cache-1/{"c" * 32}'
+        self.gradle_entry(other_key, 'compileKotlinJs', 10, b'other task', created=0)
+        os.utime(superseded, (9, 9))
+        self.assertTrue(self.export())
+        self.assertEqual(self.restore(), 2)
+        self.assertFalse((self.target / 'caches' / self.key).exists())
+        self.assertTrue((self.target / 'caches' / current_key).exists())
+        self.assertTrue((self.target / 'caches' / other_key).exists())
+
+    def test_root_project_tasks_of_different_builds_are_not_deduplicated(self):
+        self.gradle_entry(self.key, 'compileKotlin', 10, b'build logic', created=1, project=None)
+        sample_key = f'build-cache-1/{"b" * 32}'
+        self.gradle_entry(sample_key, 'compileKotlin', 10, b'nested sample', created=2, project=None)
+        self.assertTrue(self.export())
+        self.assertEqual(self.restore(), 2)
 
     def test_damaged_snapshot_is_rejected_before_any_entries_are_installed(self):
         self.write(self.key)

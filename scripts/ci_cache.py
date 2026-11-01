@@ -6,8 +6,10 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import zipfile
+import zlib
 
 import ci_evidence
 
@@ -20,6 +22,8 @@ GATE_KEYS = {
 }
 ENTRY = re.compile(r'build-cache-[0-9]+/[0-9a-f]{32}')
 MAX_BYTES = 256 * 1024 * 1024
+METADATA_BYTES = 16 * 1024
+METADATA_FIELD = re.compile(r'^(identity|creationTime|executionTime)=(.*)$', re.MULTILINE)
 
 
 def source(gh, root, commit):
@@ -75,8 +79,30 @@ def digest(path):
     return checksum.hexdigest()
 
 
+def entry_metadata(entry):
+    """Task identity, creation time and execution time (ms) recorded by Gradle for a cache entry."""
+    try:
+        with tarfile.open(entry, 'r|gz') as archive:
+            member = archive.next()
+            if member is None or member.name != 'METADATA' or not member.isfile():
+                return None, 0, 0
+            text = archive.extractfile(member).read(METADATA_BYTES).decode('utf-8', 'replace')
+    except (OSError, EOFError, tarfile.TarError, zlib.error):
+        return None, 0, 0
+    fields = dict(METADATA_FIELD.findall(text))
+    try:
+        return fields.get('identity'), int(fields.get('creationTime', 0)), int(fields.get('executionTime', 0))
+    except ValueError:
+        return None, 0, 0
+
+
 def export(home, output, metadata):
-    """Bound snapshot size; exclude dependency caches, configuration state and locks."""
+    """Keep each project task's newest entry, preferring execution time saved per stored byte.
+
+    Older entries for the same project task describe superseded inputs. Root-project tasks of
+    nested builds share identities across builds, so each of their entries stays distinct. The
+    snapshot is size-bounded and excludes dependency caches, configuration state and locks.
+    """
     if output.exists():
         raise ValueError('task cache export directory already exists')
     output.mkdir(parents=True)
@@ -84,10 +110,18 @@ def export(home, output, metadata):
     candidates = [p for p in cache.glob('build-cache-*/*')
                   if ENTRY.fullmatch(p.relative_to(cache).as_posix())
                   and p.is_file() and not p.is_symlink() and not p.parent.is_symlink()]
-    files, size = {}, 0
-    for entry in sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True):
+    newest = {}
+    for entry in candidates:
         length = entry.stat().st_size
-        if length == 0 or size + length > MAX_BYTES:
+        if not length:
+            continue
+        identity, created, execution = entry_metadata(entry)
+        task = identity if identity and identity.count(':') > 1 else entry.name
+        if task not in newest or created > newest[task][1]:
+            newest[task] = (execution / length, created, entry, length)
+    files, size = {}, 0
+    for _, _, entry, length in sorted(newest.values(), key=lambda item: (item[0], item[1]), reverse=True):
+        if size + length > MAX_BYTES:
             continue
         name = entry.relative_to(cache).as_posix()
         target = output / name
