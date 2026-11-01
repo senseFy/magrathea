@@ -88,8 +88,9 @@ class CacheTransferTests(unittest.TestCase):
         path.write_bytes(contents)
         return path
 
-    def gradle_entry(self, name, task, execution_time, payload, created=1):
-        metadata = f'creationTime={created}\nexecutionTime={execution_time}\nidentity=\\:module\\:{task}\n'
+    def gradle_entry(self, name, task, execution_time, payload, created=1, project='module'):
+        identity = f'\\:{project}\\:{task}' if project else f'\\:{task}'
+        metadata = f'creationTime={created}\nexecutionTime={execution_time}\nidentity={identity}\n'
         buffer = io.BytesIO()
         with tarfile.open(fileobj=buffer, mode='w:gz') as archive:
             for member, data in (('METADATA', metadata.encode()), ('tree-output', payload)):
@@ -149,6 +150,13 @@ class CacheTransferTests(unittest.TestCase):
         self.assertFalse((self.target / 'caches' / self.key).exists())
         self.assertTrue((self.target / 'caches' / current_key).exists())
         self.assertTrue((self.target / 'caches' / other_key).exists())
+
+    def test_root_project_tasks_of_different_builds_are_not_deduplicated(self):
+        self.gradle_entry(self.key, 'compileKotlin', 10, b'build logic', created=1, project=None)
+        sample_key = f'build-cache-1/{"b" * 32}'
+        self.gradle_entry(sample_key, 'compileKotlin', 10, b'nested sample', created=2, project=None)
+        self.assertTrue(self.export())
+        self.assertEqual(self.restore(), 2)
 
     def test_damaged_snapshot_is_rejected_before_any_entries_are_installed(self):
         self.write(self.key)

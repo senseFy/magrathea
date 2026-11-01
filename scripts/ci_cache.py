@@ -97,10 +97,11 @@ def entry_metadata(entry):
 
 
 def export(home, output, metadata):
-    """Keep each task's newest entry, preferring execution time saved per stored byte.
+    """Keep each project task's newest entry, preferring execution time saved per stored byte.
 
-    Older entries for the same task describe superseded inputs. The snapshot is size-bounded and
-    excludes dependency caches, configuration state and locks.
+    Older entries for the same project task describe superseded inputs. Root-project tasks of
+    nested builds share identities across builds, so each of their entries stays distinct. The
+    snapshot is size-bounded and excludes dependency caches, configuration state and locks.
     """
     if output.exists():
         raise ValueError('task cache export directory already exists')
@@ -115,7 +116,7 @@ def export(home, output, metadata):
         if not length:
             continue
         identity, created, execution = entry_metadata(entry)
-        task = identity or entry.name
+        task = identity if identity and identity.count(':') > 1 else entry.name
         if task not in newest or created > newest[task][1]:
             newest[task] = (execution / length, created, entry, length)
     files, size = {}, 0
