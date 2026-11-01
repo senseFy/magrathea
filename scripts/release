@@ -231,7 +231,6 @@ def main():
     p = sub.add_parser('cache-export')
     p.add_argument('--gate', required=True, choices=ci_cache.GATE_KEYS)
     p.add_argument('--output', required=True, type=Path)
-    p.add_argument('--since', type=Path)
     p = sub.add_parser('cache-restore')
     p.add_argument('--selection', required=True, type=Path)
     p.add_argument('--directory', required=True, type=Path)
@@ -273,7 +272,7 @@ def main():
             attempt = int(os.environ['GITHUB_RUN_ATTEMPT'])
             metadata = {'repository': gh.repo, 'run_id': int(os.environ['GITHUB_RUN_ID']),
                         'run_attempt': attempt, 'platform': platform, 'gate': args.gate}
-            available = ci_cache.export(home, args.output, metadata, since=args.since)
+            available = ci_cache.export(home, args.output, metadata)
             with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
                 output.write(f'available={str(available).lower()}\n')
                 output.write(f'name={ci_cache.artifact_name(platform, args.gate, attempt)}\n')

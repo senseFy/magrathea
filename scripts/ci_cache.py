@@ -23,7 +23,7 @@ GATE_KEYS = {
 ENTRY = re.compile(r'build-cache-[0-9]+/[0-9a-f]{32}')
 MAX_BYTES = 256 * 1024 * 1024
 METADATA_BYTES = 16 * 1024
-EXECUTION_TIME = re.compile(r'^executionTime=([0-9]+)$', re.MULTILINE)
+METADATA_FIELD = re.compile(r'^(identity|creationTime|executionTime)=(.*)$', re.MULTILINE)
 
 
 def source(gh, root, commit):
@@ -79,24 +79,28 @@ def digest(path):
     return checksum.hexdigest()
 
 
-def execution_density(entry, length):
-    """Milliseconds of task execution that one stored byte of a Gradle cache entry saves."""
+def entry_metadata(entry):
+    """Task identity, creation time and execution time (ms) recorded by Gradle for a cache entry."""
     try:
         with tarfile.open(entry, 'r|gz') as archive:
             member = archive.next()
             if member is None or member.name != 'METADATA' or not member.isfile():
-                return 0.0
+                return None, 0, 0
             text = archive.extractfile(member).read(METADATA_BYTES).decode('utf-8', 'replace')
     except (OSError, EOFError, tarfile.TarError, zlib.error):
-        return 0.0
-    match = EXECUTION_TIME.search(text)
-    return int(match.group(1)) / length if match else 0.0
+        return None, 0, 0
+    fields = dict(METADATA_FIELD.findall(text))
+    try:
+        return fields.get('identity'), int(fields.get('creationTime', 0)), int(fields.get('executionTime', 0))
+    except ValueError:
+        return None, 0, 0
 
 
-def export(home, output, metadata, since=None):
-    """Keep entries restored or produced since the job epoch, preferring time saved per byte.
+def export(home, output, metadata):
+    """Keep each task's newest entry, preferring execution time saved per stored byte.
 
-    The snapshot is size-bounded and excludes dependency caches, configuration state and locks.
+    Older entries for the same task describe superseded inputs. The snapshot is size-bounded and
+    excludes dependency caches, configuration state and locks.
     """
     if output.exists():
         raise ValueError('task cache export directory already exists')
@@ -105,14 +109,17 @@ def export(home, output, metadata, since=None):
     candidates = [p for p in cache.glob('build-cache-*/*')
                   if ENTRY.fullmatch(p.relative_to(cache).as_posix())
                   and p.is_file() and not p.is_symlink() and not p.parent.is_symlink()]
-    epoch = since.stat().st_mtime if since is not None and since.is_file() else None
-    eligible = []
+    newest = {}
     for entry in candidates:
-        status = entry.stat()
-        if status.st_size and (epoch is None or status.st_mtime >= epoch):
-            eligible.append((execution_density(entry, status.st_size), status.st_mtime, entry, status.st_size))
+        length = entry.stat().st_size
+        if not length:
+            continue
+        identity, created, execution = entry_metadata(entry)
+        task = identity or entry.name
+        if task not in newest or created > newest[task][1]:
+            newest[task] = (execution / length, created, entry, length)
     files, size = {}, 0
-    for _, _, entry, length in sorted(eligible, key=lambda item: (item[0], item[1]), reverse=True):
+    for _, _, entry, length in sorted(newest.values(), key=lambda item: (item[0], item[1]), reverse=True):
         if size + length > MAX_BYTES:
             continue
         name = entry.relative_to(cache).as_posix()

@@ -88,18 +88,18 @@ class CacheTransferTests(unittest.TestCase):
         path.write_bytes(contents)
         return path
 
-    def gradle_entry(self, name, execution_time, payload):
+    def gradle_entry(self, name, task, execution_time, payload, created=1):
+        metadata = f'creationTime={created}\nexecutionTime={execution_time}\nidentity=\\:module\\:{task}\n'
         buffer = io.BytesIO()
         with tarfile.open(fileobj=buffer, mode='w:gz') as archive:
-            for member, data in (('METADATA', f'executionTime={execution_time}\n'.encode()),
-                                 ('tree-output', payload)):
+            for member, data in (('METADATA', metadata.encode()), ('tree-output', payload)):
                 info = tarfile.TarInfo(member)
                 info.size = len(data)
                 archive.addfile(info, io.BytesIO(data))
         return self.write(name, buffer.getvalue())
 
-    def export(self, since=None):
-        return ci_cache.export(self.home, self.snapshot, self.metadata, since=since)
+    def export(self):
+        return ci_cache.export(self.home, self.snapshot, self.metadata)
 
     def restore(self):
         return ci_cache.restore(self.target, self.snapshot.parent, self.selected)
@@ -128,8 +128,8 @@ class CacheTransferTests(unittest.TestCase):
 
     def test_snapshot_budget_prefers_execution_time_saved_per_byte(self):
         compile_key = f'build-cache-1/{"b" * 32}'
-        compiled = self.gradle_entry(compile_key, 30_000, b'klib')
-        linked = self.gradle_entry(self.key, 60_000, os.urandom(4096))
+        compiled = self.gradle_entry(compile_key, 'compileKotlinJvm', 30_000, b'klib')
+        linked = self.gradle_entry(self.key, 'linkDebugTestIosArm64', 60_000, os.urandom(4096))
         os.utime(compiled, (1, 1))
         with patch.object(ci_cache, 'MAX_BYTES', linked.stat().st_size):
             self.assertTrue(self.export())
@@ -137,18 +137,18 @@ class CacheTransferTests(unittest.TestCase):
         self.assertFalse((self.target / 'caches' / self.key).exists())
         self.assertEqual((self.target / 'caches' / compile_key).read_bytes(), compiled.read_bytes())
 
-    def test_snapshot_skips_entries_restored_before_the_job_epoch(self):
-        stale = self.gradle_entry(self.key, 90_000, b'stale')
-        fresh_key = f'build-cache-1/{"b" * 32}'
-        self.gradle_entry(fresh_key, 10, b'fresh')
-        epoch = self.root / 'epoch'
-        epoch.touch()
-        os.utime(stale, (1, 1))
-        os.utime(epoch, (2, 2))
-        self.assertTrue(self.export(since=epoch))
-        self.assertEqual(self.restore(), 1)
+    def test_snapshot_keeps_only_the_newest_entry_for_each_task(self):
+        superseded = self.gradle_entry(self.key, 'compileKotlinJvm', 90_000, b'old inputs', created=1)
+        current_key = f'build-cache-1/{"b" * 32}'
+        self.gradle_entry(current_key, 'compileKotlinJvm', 10, b'current inputs', created=2)
+        other_key = f'build-cache-1/{"c" * 32}'
+        self.gradle_entry(other_key, 'compileKotlinJs', 10, b'other task', created=0)
+        os.utime(superseded, (9, 9))
+        self.assertTrue(self.export())
+        self.assertEqual(self.restore(), 2)
         self.assertFalse((self.target / 'caches' / self.key).exists())
-        self.assertTrue((self.target / 'caches' / fresh_key).exists())
+        self.assertTrue((self.target / 'caches' / current_key).exists())
+        self.assertTrue((self.target / 'caches' / other_key).exists())
 
     def test_damaged_snapshot_is_rejected_before_any_entries_are_installed(self):
         self.write(self.key)
