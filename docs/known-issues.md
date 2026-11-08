@@ -13,8 +13,8 @@ Magrathea is Alpha. Its APIs and persisted formats may change before the stable 
 - The minified browser entry point exceeds Webpack's default performance recommendation. During
   Alpha, the package gate reports its measured size and enforces a 2,000,000-byte ceiling. Browser
   hosts should load the client on demand, and the budget should be reviewed before a stable release.
-- Fourteen mobile KMP modules publish Android, JVM, `iosArm64`, and `iosSimulatorArm64`; nine also
-  publish JS/Wasm, and two additional modules are Web-only. Wasm is experimental. macOS Native,
+- 15 mobile KMP modules publish Android, JVM, `iosArm64`, and `iosSimulatorArm64`; 10 also
+  publish JS/Wasm, and 2 additional modules are Web-only. Wasm is experimental. macOS Native,
   watchOS, and tvOS are not published targets.
 - The optional Session Catalog has Room and IndexedDB implementations with bounded backfill,
   typed organization import, canonical attachment-name migration and recovery-fact queries. Hosts own

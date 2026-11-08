@@ -114,6 +114,16 @@ class ReleaseTests(unittest.TestCase):
         version = check_metadata(ROOT)[0]
         self.assertIn(f'The {len(modules)} logical SDK modules', render(ROOT, version))
 
+    def test_known_issues_count_the_published_kmp_targets(self):
+        build = (ROOT / 'build.gradle.kts').read_text()
+        def projects(name):
+            return re.findall(r'"(:[^"]+)"', re.search(rf'^val {name} = setOf\((.*?)^\)', build, re.M | re.S)[1])
+        mobile, web, web_only = (len(projects(name)) for name in (
+            'sdkKmpMobilePublishProjects', 'sdkKmpWebPublishProjects', 'sdkKmpWebOnlyPublishProjects'))
+        known_issues = ' '.join((ROOT / 'docs/known-issues.md').read_text().split())
+        self.assertIn(f'{mobile} mobile KMP modules publish Android, JVM, `iosArm64`, and `iosSimulatorArm64`; '
+                      f'{web} also publish JS/Wasm, and {web_only} additional modules are Web-only.', known_issues)
+
     def test_empty_or_unpublished_notes_are_rejected(self):
         for body in ('', 'Not published. Failed verification.'):
             (self.root / 'CHANGELOG.md').write_text(f'## {VERSION} — 2026-09-06\n\n{body}\n')
