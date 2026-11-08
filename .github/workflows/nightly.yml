@@ -135,10 +135,8 @@ jobs:
         include:
           - name: published-consumer
             gradle_task: verifyKmpPublishedConsumerApple
-            boot_simulator: false
           - name: simulator-tests
             gradle_task: verifyKmpAppleTests
-            boot_simulator: true
     name: apple-nightly (${{ matrix.name }})
     steps:
       - name: Check out source
@@ -155,16 +153,6 @@ jobs:
 
       - name: Set up Gradle build cache
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
-
-      - name: Boot an available iOS Simulator
-        if: matrix.boot_simulator
-        run: |
-          SIMULATOR_UDID=$(xcrun simctl list devices available -j | ruby -rjson -e 'devices = JSON.parse(STDIN.read).fetch("devices").values.flatten; device = devices.find { |item| item["name"].start_with?("iPhone") }; abort("No available iPhone simulator") unless device; puts device.fetch("udid")')
-          SIMULATOR_STATE=$(xcrun simctl list devices available -j | ruby -rjson -e 'udid = ARGV.fetch(0); devices = JSON.parse(STDIN.read).fetch("devices").values.flatten; puts devices.find { |item| item["udid"] == udid }.fetch("state")' "$SIMULATOR_UDID")
-          if [ "$SIMULATOR_STATE" != "Booted" ]; then
-            xcrun simctl boot "$SIMULATOR_UDID"
-          fi
-          xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
       - name: Run ${{ matrix.name }} Apple gate
         run: ./gradlew ${{ matrix.gradle_task }} --no-daemon --stacktrace

@@ -317,6 +317,8 @@ fail_contract("release.yml must attest the outer candidate exactly once") unless
   }
 fail_contract("release.yml must not boot a simulator after verified CI") if
   release_runs.include?("simctl")
+fail_contract("Simulator tests run standalone; Apple gates must not boot a simulator") if
+  [verify, nightly].any? { |workflow| run_commands(workflow).include?("simctl boot") }
 fail_contract("release.yml must not promote a candidate from another workflow run") if
   release_runs.include?("CANDIDATE_RUN_ID") || release.to_s.include?("promoted-candidate")
 
