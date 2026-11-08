@@ -52,6 +52,8 @@ Only `magrathea-build-info` compiles the SDK version. Core uses it as an impleme
 and other modules keep it off Kotlin/Native compile classpaths, so a version-only Release PR
 recompiles those two modules, relinks, and reruns tests while downstream compilation stays
 reusable. The distribution gate rejects any other compiled artifact that embeds the version.
+Dokka likewise renders a version placeholder that each javadoc jar replaces with the SDK version,
+so API documentation is reused across versions; the distribution gate rejects unstamped documentation.
 
 Publication pins the source CI run and attempt. Its receipt retains the tested commit and tree
 alongside the final release commit. Partial reruns can retain successful jobs and checkout records

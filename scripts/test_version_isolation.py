@@ -45,6 +45,20 @@ class VerifyVersionIsolationTest(unittest.TestCase):
 
             self.assertEqual(self.run_main(root), (0, ""))
 
+    def test_rejects_documentation_without_the_stamped_version(self) -> None:
+        for page in (b"MAGRATHEA_DOCS_VERSION", b"no version"):
+            with self.subTest(page=page), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.write_owner(root)
+                self.write(root, "magrathea-core", "-javadoc.jar", self.archive({"index.html": VERSION.encode() + b" " + page}))
+                self.write(root, "magrathea-runtime", "-javadoc.jar", self.archive({"index.html": page}))
+
+                exit_code, diagnostic = self.run_main(root)
+
+                self.assertEqual(exit_code, 1)
+                self.assertIn("magrathea-runtime", diagnostic)
+                self.assertIn("does not carry the stamped SDK version", diagnostic)
+
     def test_rejects_version_in_another_module_klib(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

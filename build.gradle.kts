@@ -16,6 +16,7 @@ import org.cyclonedx.gradle.CyclonedxDirectTask
 import org.cyclonedx.model.License
 import org.cyclonedx.model.LicenseChoice
 import org.cyclonedx.parsers.JsonParser
+import org.jetbrains.dokka.gradle.DokkaExtension
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.targets.js.nodejs.NodeJsRootExtension
@@ -1751,21 +1752,38 @@ gradle.taskGraph.whenReady {
     }
 }
 
+val sdkDocsVersionPlaceholder = "MAGRATHEA_DOCS_VERSION"
+
+fun Project.registerSdkVersionedDocs() =
+    tasks.register<Copy>("sdkVersionedDocs") {
+        group = "documentation"
+        description = "Stamp the SDK version into version-independent Dokka HTML."
+        val docsVersion = version.toString()
+        inputs.property("version", docsVersion)
+        dependsOn("dokkaGeneratePublicationHtml")
+        from(layout.buildDirectory.dir("dokka/html"))
+        into(layout.buildDirectory.dir("dokka/versioned-html"))
+        filteringCharset = "UTF-8"
+        filesMatching(listOf("**/*.html", "**/*.js", "**/*.json")) {
+            filter { line -> line.replace(sdkDocsVersionPlaceholder, docsVersion) }
+        }
+    }
+
 fun Project.registerSdkJavadocJar(publication: MavenPublication) =
     tasks.register<Jar>("sdk${publication.name.replaceFirstChar { it.uppercase() }}JavadocJar") {
         group = "documentation"
         description = "Package Dokka HTML for the ${publication.name} publication."
-        dependsOn("dokkaGeneratePublicationHtml")
         archiveBaseName.set(provider { publication.artifactId })
         archiveVersion.set(provider { publication.version })
         archiveClassifier.set("javadoc")
         destinationDirectory.set(layout.buildDirectory.dir("publication-docs/${publication.name}"))
-        from(layout.buildDirectory.dir("dokka/html"))
+        from(tasks.named("sdkVersionedDocs"))
     }
 
 fun Project.configureSdkPublishing() {
     val sdkProject = this
     pluginManager.apply("maven-publish")
+    registerSdkVersionedDocs()
     tasks.withType<AbstractArchiveTask>().configureEach {
         from(rootProject.layout.projectDirectory.file("LICENSE")) {
             into("META-INF")
@@ -1775,6 +1793,9 @@ fun Project.configureSdkPublishing() {
     // root project is still configuring subprojects leaves AGP 9 source sets empty.
     afterEvaluate {
         pluginManager.apply("org.jetbrains.dokka")
+        extensions.configure<DokkaExtension> {
+            moduleVersion.set(sdkDocsVersionPlaceholder)
+        }
     }
 
     plugins.withId("org.jetbrains.kotlin.jvm") {
