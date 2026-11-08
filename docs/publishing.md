@@ -56,9 +56,9 @@ repositories {
 }
 
 dependencies {
-    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.24") // x-release-please-version
-    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.24") // x-release-please-version
-    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.24") // x-release-please-version
+    implementation("saien.magrathea:magrathea-runtime:0.1.0-alpha.25") // x-release-please-version
+    implementation("saien.magrathea:magrathea-chatbot:0.1.0-alpha.25") // x-release-please-version
+    implementation("saien.magrathea:magrathea-provider-openai:0.1.0-alpha.25") // x-release-please-version
 }
 ```
 
