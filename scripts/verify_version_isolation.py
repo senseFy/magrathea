@@ -12,6 +12,7 @@ from typing import Sequence
 
 _COMPILED_SUFFIXES = (".klib", ".jar", ".aar")
 _DOCUMENTATION_SUFFIXES = ("-sources.jar", "-javadoc.jar")
+_DOCS_VERSION_PLACEHOLDER = b"MAGRATHEA_DOCS_VERSION"
 
 
 def compiled_artifacts(repository: Path, version: str) -> list[Path]:
@@ -24,6 +25,10 @@ def compiled_artifacts(repository: Path, version: str) -> list[Path]:
         and path.name.endswith(_COMPILED_SUFFIXES)
         and not path.name.endswith(_DOCUMENTATION_SUFFIXES)
     )
+
+
+def documentation_artifacts(repository: Path, version: str) -> list[Path]:
+    return sorted(path for path in repository.glob(f"*/{version}/*-javadoc.jar") if path.is_file())
 
 
 def archive_mentions(payload: bytes, needle: bytes) -> bool:
@@ -58,10 +63,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not artifacts:
             raise ValueError("no compiled artifacts found")
         mentions = {artifact: archive_mentions(artifact.read_bytes(), needle) for artifact in artifacts}
+        documentation = documentation_artifacts(args.repository, args.version)
+        unstamped = [
+            path for path in documentation
+            if archive_mentions(path.read_bytes(), _DOCS_VERSION_PLACEHOLDER)
+            or not archive_mentions(path.read_bytes(), needle)
+        ]
     except (OSError, ValueError, zipfile.BadZipFile) as error:
         print(f"version isolation verification failed: {error}", file=sys.stderr)
         return 1
 
+    for path in unstamped:
+        print(
+            f"version isolation verification failed: {path.relative_to(args.repository).as_posix()} "
+            "does not carry the stamped SDK version",
+            file=sys.stderr,
+        )
     leaks = [artifact for artifact, found in mentions.items() if found and not is_owned(artifact, args.owner)]
     for artifact in leaks:
         print(
@@ -72,9 +89,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not any(found for artifact, found in mentions.items() if is_owned(artifact, args.owner)):
         print(f"version isolation verification failed: no {args.owner} artifact embeds the SDK version", file=sys.stderr)
         return 1
-    if leaks:
+    if leaks or unstamped:
         return 1
-    print(f"MAGRATHEA_VERSION_ISOLATION_PASS artifacts={len(artifacts)}")
+    print(f"MAGRATHEA_VERSION_ISOLATION_PASS artifacts={len(artifacts)} docs={len(documentation)}")
     return 0
 
 
