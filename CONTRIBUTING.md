@@ -46,9 +46,10 @@ Useful gates:
 ./gradlew clean verifySdkRelease
 ```
 
-`verifySdkApple` requires an appropriate macOS/Xcode environment, and its Simulator app consumer
-requires a booted iOS Simulator. The complete local release gate is intentionally expensive; use
-focused module tests during normal edit/compile cycles.
+`verifySdkApple` requires an appropriate macOS/Xcode environment with an available iOS Simulator.
+The Kotlin Gradle plugin runs Simulator tests standalone, so the Simulator does not need to be
+booted. The complete local release gate is intentionally expensive; use focused module tests during
+normal edit/compile cycles.
 
 ## Public contracts
 
