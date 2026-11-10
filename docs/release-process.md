@@ -50,8 +50,11 @@ Dependency downloads continue to use `setup-gradle` caching. Platform gates prod
 even when compilation hits the cache, so subsequent PRs do not need a main build to refresh them.
 Only `magrathea-build-info` compiles the SDK version. Core uses it as an implementation dependency
 and other modules keep it off Kotlin/Native compile classpaths, so a version-only Release PR
-recompiles those two modules, relinks, and reruns tests while downstream compilation stays
-reusable. The distribution gate rejects any other compiled artifact that embeds the version.
+recompiles those two modules and reruns tests while downstream compilation stays reusable. The
+distribution gate rejects any other compiled artifact that embeds the version. JS, Wasm and iOS
+test programs link the unpublished `tooling/build-info-test-fixture`, which carries the fixed
+version `0.0.0-test`, so their links are reused as well. JVM tests, published-consumer gates and
+release artifacts use the real version.
 Dokka likewise renders a version placeholder that each javadoc jar replaces with the SDK version,
 so API documentation is reused across versions; the distribution gate rejects unstamped documentation.
 
