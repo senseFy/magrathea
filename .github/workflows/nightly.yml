@@ -34,14 +34,8 @@ jobs:
       - name: Set up Gradle build cache
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
 
-      - name: Install pinned browser matrix
-        working-directory: tooling/web-browser-e2e
-        run: |
-          npm ci --ignore-scripts
-          npx playwright install --with-deps --only-shell chromium firefox webkit
-
       - name: Run deterministic Linux, distribution, and sample gates
-        run: ./gradlew verifySdkLinux verifySdkWeb --no-daemon --stacktrace
+        run: ./gradlew verifySdkLinux verifySdkWeb -Pmagrathea.webBrowserE2e.installSystemDependencies=true --no-daemon --stacktrace
 
       - name: Report resolved Runtime dependencies
         run: ./gradlew :magrathea-runtime:dependencies --configuration jvmRuntimeClasspath --no-daemon
