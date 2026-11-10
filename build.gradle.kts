@@ -871,7 +871,11 @@ val webSamplePublishProjects = listOf(
 val verifyWebChatSample = tasks.register<GradleBuild>("verifyWebChatSample") {
     group = "verification"
     description = "Consume published JS/Wasm artifacts and run the authenticated real-HTTP Gateway browser E2E."
-    dependsOn(webSamplePublishProjects.map { "$it:publishAllPublicationsToSdkVerificationRepository" })
+    dependsOn(
+        webSamplePublishProjects.flatMap { project ->
+            listOf("KotlinMultiplatform", "Js", "WasmJs").map { "$project:publish${it}PublicationToSdkVerificationRepository" }
+        },
+    )
     dependsOn(":tooling-gateway-e2e-server:installDist")
     finalizedBy(stopWebGatewayE2eServer)
     buildName = "web-chat-sample"
@@ -908,12 +912,20 @@ val installWebBrowserE2eDependencies = tasks.register<Exec>("installWebBrowserE2
     outputs.file(webBrowserE2eDirectory.resolve("node_modules/.package-lock.json"))
 }
 
+val installWebBrowserE2eSystemDependencies = providers
+    .gradleProperty("magrathea.webBrowserE2e.installSystemDependencies")
+    .map(String::toBoolean)
+    .getOrElse(false)
 val installWebBrowserE2eBrowsers = tasks.register<Exec>("installWebBrowserE2eBrowsers") {
     group = "build setup"
     description = "Install the exact Chromium, Firefox, and WebKit builds required by pinned Playwright."
     dependsOn(installWebBrowserE2eDependencies)
     workingDir(webBrowserE2eDirectory)
-    commandLine("npx", "playwright", "install", "--only-shell", "chromium", "firefox", "webkit")
+    commandLine(
+        listOf("npx", "playwright", "install") +
+            listOfNotNull("--with-deps".takeIf { installWebBrowserE2eSystemDependencies }) +
+            listOf("--only-shell", "chromium", "firefox", "webkit"),
+    )
 }
 
 val stopWebCrossBrowserGatewayE2eServer = tasks.register("stopWebCrossBrowserGatewayE2eServer") {
@@ -1305,7 +1317,8 @@ val assembleWebSdkPackage = tasks.register<Zip>("assembleWebSdkPackage") {
 val verifyWebSdkPackage = tasks.register("verifyWebSdkPackage") {
     group = "verification"
     description = "Validate Web package API, size, metadata, and absence of secrets/direct providers."
-    dependsOn(stageWebSdkPackage, assembleWebSdkPackage, verifySdkSupplyChain)
+    dependsOn(stageWebSdkPackage, assembleWebSdkPackage)
+    mustRunAfter(verifySdkSupplyChain)
 
     doLast {
         val licenseLedger = groovy.json.JsonSlurper().parse(webRuntimeLicenseLedger.asFile) as Map<*, *>

@@ -46,7 +46,10 @@ Useful gates:
 ./gradlew clean verifySdkRelease
 ```
 
-`verifySdkApple` requires an appropriate macOS/Xcode environment with an available iOS Simulator.
+`verifySdkWeb` installs the pinned Playwright browsers; add
+`-Pmagrathea.webBrowserE2e.installSystemDependencies=true` to also install their Linux system
+packages, as CI does. `verifySdkApple` requires an appropriate macOS/Xcode environment with an
+available iOS Simulator.
 The Kotlin Gradle plugin runs Simulator tests standalone, so the Simulator does not need to be
 booted. The complete local release gate is intentionally expensive; use focused module tests during
 normal edit/compile cycles.

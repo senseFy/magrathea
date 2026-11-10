@@ -222,14 +222,8 @@ jobs:
           attempt: ${{ needs.ci-plan.outputs.cache_attempt }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install pinned browser matrix
-        working-directory: tooling/web-browser-e2e
-        run: |
-          npm ci --ignore-scripts
-          npx playwright install --with-deps --only-shell chromium firefox webkit
-
       - name: Run JS, Wasm, Gateway, and package gates
-        run: ./gradlew verifySdkWeb --no-daemon --stacktrace
+        run: ./gradlew verifySdkWeb -Pmagrathea.webBrowserE2e.installSystemDependencies=true --no-daemon --stacktrace
 
       - name: Save successful Gradle task outputs
         uses: ./.github/actions/gradle-cache
