@@ -19,6 +19,7 @@ import org.cyclonedx.parsers.JsonParser
 import org.jetbrains.dokka.gradle.DokkaExtension
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
+import org.jetbrains.kotlin.gradle.plugin.mpp.TestExecutable
 import org.jetbrains.kotlin.gradle.targets.js.nodejs.NodeJsRootExtension
 import org.jetbrains.kotlin.gradle.targets.js.yarn.YarnRootExtension
 import org.jetbrains.kotlin.gradle.targets.wasm.yarn.WasmYarnRootExtension
@@ -54,6 +55,7 @@ apiValidation {
             "provider-live-harness",
             "tooling-gateway-e2e-server",
             "mcp-conformance-client",
+            "build-info-test-fixture",
         ),
     )
 }
@@ -152,6 +154,7 @@ val explicitlyNonPublishedProjects = setOf(
     ":provider-live-harness",
     ":tooling-gateway-e2e-server",
     ":mcp-conformance-client",
+    ":build-info-test-fixture",
 )
 
 val sdkGroup = providers.gradleProperty("magrathea.group").get()
@@ -159,6 +162,9 @@ val sdkVersion = providers.gradleProperty("magrathea.version").get()
 val pomProjectUrl = providers.gradleProperty("magrathea.pom.url").get()
 val sdkBuildInfoModule = "magrathea-build-info"
 val sdkBuildInfoCompileProjects = setOf(":$sdkBuildInfoModule", ":magrathea-core")
+val sdkBuildInfoTestFixture = ":build-info-test-fixture"
+val sdkWebTestProgramConfiguration = Regex("^(js|wasmJs)Test(Compile|Runtime)Classpath$")
+val sdkNativeTestProgramConfiguration = Regex("^ios(Arm64|SimulatorArm64)TestCompileKlibraries$")
 
 group = sdkGroup
 version = sdkVersion
@@ -219,19 +225,34 @@ subprojects {
     if (path in sdkPublishProjects) {
         configureSdkPublishing()
     }
-    if (path !in sdkBuildInfoCompileProjects) {
+    if (path in sdkPublishProjects && path != ":$sdkBuildInfoModule") {
+        configurations.matching {
+            it.name.matches(sdkWebTestProgramConfiguration) ||
+                (path in sdkBuildInfoCompileProjects && it.name.matches(sdkNativeTestProgramConfiguration))
+        }.configureEach {
+            resolutionStrategy.dependencySubstitution {
+                substitute(project(":$sdkBuildInfoModule")).using(project(sdkBuildInfoTestFixture))
+            }
+        }
+    }
+    if (path !in sdkBuildInfoCompileProjects && path != sdkBuildInfoTestFixture) {
         configurations.matching { it.name.endsWith("CompileKlibraries") }.configureEach {
             exclude(group = sdkGroup, module = sdkBuildInfoModule)
         }
         plugins.withId("org.jetbrains.kotlin.multiplatform") {
             extensions.configure<KotlinMultiplatformExtension> {
                 targets.withType<KotlinNativeTarget>().configureEach {
-                    val buildInfoCompile = ":$sdkBuildInfoModule:compileKotlin${targetName.replaceFirstChar { it.uppercase() }}"
-                    val buildInfoKlib = files(
-                        provider { (rootProject.tasks.getByPath(buildInfoCompile) as KotlinNativeCompile).outputFile.get() },
-                    ).builtBy(buildInfoCompile)
+                    fun klib(projectPath: String): FileCollection {
+                        val compile = "$projectPath:compileKotlin${targetName.replaceFirstChar { it.uppercase() }}"
+                        return files(
+                            provider { (rootProject.tasks.getByPath(compile) as KotlinNativeCompile).outputFile.get() },
+                        ).builtBy(compile)
+                    }
+                    val buildInfoKlib = klib(":$sdkBuildInfoModule")
+                    val testBuildInfoKlib = klib(sdkBuildInfoTestFixture)
                     binaries.configureEach {
-                        linkTaskProvider.configure { libraries.from(buildInfoKlib) }
+                        val linkedBuildInfo = if (this is TestExecutable) testBuildInfoKlib else buildInfoKlib
+                        linkTaskProvider.configure { libraries.from(linkedBuildInfo) }
                     }
                 }
             }
