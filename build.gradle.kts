@@ -1317,8 +1317,7 @@ val assembleWebSdkPackage = tasks.register<Zip>("assembleWebSdkPackage") {
 val verifyWebSdkPackage = tasks.register("verifyWebSdkPackage") {
     group = "verification"
     description = "Validate Web package API, size, metadata, and absence of secrets/direct providers."
-    dependsOn(stageWebSdkPackage, assembleWebSdkPackage)
-    mustRunAfter(verifySdkSupplyChain)
+    dependsOn(stageWebSdkPackage, assembleWebSdkPackage, verifySdkSupplyChain)
 
     doLast {
         val licenseLedger = groovy.json.JsonSlurper().parse(webRuntimeLicenseLedger.asFile) as Map<*, *>
