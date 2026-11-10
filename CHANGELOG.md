@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.0-alpha.26](https://github.com/senseFy/magrathea/compare/v0.1.0-alpha.25...v0.1.0-alpha.26) (2026-11-10)
+
+### Bug Fixes
+
+* measure a version-only Release PR; this pull request is closed without merging
+
 Notable changes to Magrathea are documented here. The project follows
 [Semantic Versioning](https://semver.org/) for published releases.
 
